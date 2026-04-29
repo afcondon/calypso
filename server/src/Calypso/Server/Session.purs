@@ -54,10 +54,9 @@ import Node.FS.Aff as FSA
 import Node.FS.Sync as FSS
 
 import Calypso.Server.Adapter (Adapter)
+import Calypso.Server.Adapter.PurerlTidalWS (purerlTidalWs)
 import Calypso.Server.Compile as Compile
 import Calypso.Server.Synthesize (synthesize)
-import Effect.Aff (throwError) as Aff
-import Effect.Exception (error) as Exn
 import Calypso.Session
   ( Cell(..)
   , CellEmit(..)
@@ -259,20 +258,13 @@ emptyResponse s = CompileResponse
   , cells: s.cells
   }
 
--- | Adapter selection is in transition — the three Atelier compile
--- | adapters (browser worker / node child / purerl BEAM) have been
--- | removed; the WebSocket adapter that proxies into a running
--- | purerl-tidal lands in the next commit. Until then any path that
--- | reaches the adapter throws at evaluation time. Compile pipeline
--- | code is intact in tree but disconnected from the eval path.
+-- | Calypso has a single adapter: every cell evaluation goes through
+-- | a one-shot WebSocket round-trip into the running purerl-tidal.
+-- | The `runtime` string from the session's CompileRequest is
+-- | currently ignored — kept in the type so persisted Atelier-shape
+-- | sessions continue to deserialise during the migration.
 pickAdapter :: String -> Adapter
-pickAdapter _ =
-  { name: "stub"
-  , bundle: \_ _ _ _ ->
-      Aff.throwError
-        (Exn.error
-          "no adapter wired yet — Adapter/PurerlTidalWS lands in the next commit")
-  }
+pickAdapter _ = purerlTidalWs
 
 -- | Apply a state update under the lock, then recompile against the
 -- | new state, cache + return the snapshot. `finally` guarantees the
