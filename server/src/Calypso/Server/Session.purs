@@ -54,13 +54,14 @@ import Node.FS.Aff as FSA
 import Node.FS.Sync as FSS
 
 import Calypso.Server.Adapter (Adapter)
-import Calypso.Server.Adapter.PurerlTidalWS (purerlTidalWs)
+import Calypso.Server.Adapter.PurerlTidalWS (purerlTidalWs, sendCell)
 import Calypso.Server.Compile as Compile
 import Calypso.Server.Synthesize (synthesize)
+import Data.Argonaut.Core (fromString) as AJ
 import Calypso.Session
   ( Cell(..)
   , CellEmit(..)
-  , CompileError
+  , CompileError(..)
   , CompileRequest(..)
   , CompileResponse(..)
   , UserModule(..)
@@ -586,39 +587,27 @@ evalResponseCodec = CAR.object "EvalResponse"
   , warnings: CA.array compileErrorCodec
   }
 
--- | Synthesise a one-cell throwaway session from `EvalRequest`, run it
--- | through the preview pipeline (no state mutation, no broadcast,
--- | lock-serialised), and strip down the result. The caller's store
--- | is used purely as a compile sandbox — its in-memory state is
--- | unchanged afterwards. Runtime is forced to `"node"` so emits
--- | come back to the server instead of being shipped to the browser.
+-- | Tidal eval is direct: cell text → PurerlTidalWS adapter → daemon
+-- | reply. No synthesis, no compile, no preview lock — purerl-tidal
+-- | already serialises commands internally, and the cell doesn't
+-- | mutate any Calypso-side state. The store argument is ignored
+-- | (kept for signature compatibility during the migration); the
+-- | imports field of EvalRequest is also a no-op for Tidal — Tidal
+-- | sources don't carry import declarations.
 evaluate :: SessionStore -> EvalRequest -> Aff EvalResponse
-evaluate store { source, imports } = do
-  resp <- withPreview store \s -> s
-    { runtime = "node"
-    , "module" = UserModule { source: renderEvalModule imports }
-    , cells = [ Cell { id: "eval", kind: "expr", source, form: false } ]
-    , nextCellId = 2
+evaluate _ { source } = do
+  reply <- sendCell source
+  pure
+    { value: Just (AJ.fromString reply.reply)
+    , errors:
+        if reply.ok then []
+        else
+          [ CompileError
+              { code: "TidalError"
+              , filename: Nothing
+              , position: Nothing
+              , message: reply.reply
+              }
+          ]
+    , warnings: []
     }
-  pure (extractEval resp)
-
--- | Build the Calypso.User module source an /eval call compiles
--- | against. Always includes `import Prelude`; subsequent imports are
--- | spliced verbatim — the caller chooses whether to write bare
--- | names, aliases, or explicit lists.
-renderEvalModule :: Array String -> String
-renderEvalModule imports =
-  "module Calypso.User where\n\nimport Prelude\n"
-    <> Str.joinWith "" (map (\i -> "import " <> i <> "\n") imports)
-
-extractEval :: CompileResponse -> EvalResponse
-extractEval (CompileResponse r) =
-  { value: do
-      CellEmit e <- Array.find (\(CellEmit em) -> em.id == "eval") r.emits
-      -- Node adapter forwards emit values as pre-stringified JSON.
-      -- Parse back to structured Json; if parsing fails for any
-      -- reason, drop the value (errors/warnings still carry signal).
-      hush (jsonParser e.value)
-  , errors: r.errors
-  , warnings: r.warnings
-  }

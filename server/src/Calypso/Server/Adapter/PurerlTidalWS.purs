@@ -14,17 +14,28 @@
 -- | something Tidal-native.
 module Calypso.Server.Adapter.PurerlTidalWS
   ( purerlTidalWs
+  , sendCell
+  , TidalReply
   ) where
 
 import Prelude
 
+import Data.Argonaut.Core (Json, toBoolean, toObject, toString) as AJ
 import Data.Argonaut.Core (Json)
 import Data.Either (Either(..))
+import Data.Maybe (Maybe(..))
 import Effect (Effect)
 import Effect.Aff (Aff, makeAff, nonCanceler)
+import Effect.Exception (Error, error) as Exn
 import Effect.Exception (Error)
+import Foreign.Object as Object
 
 import Calypso.Server.Adapter (Adapter)
+
+-- | Tidal-shaped reply from the daemon. `ok` reflects the heuristic in
+-- | the FFI (text starting with "ERR"/"ERROR" → ok=false). `reply` is
+-- | the daemon's full reply line, verbatim.
+type TidalReply = { ok :: Boolean, reply :: String }
 
 foreign import sendCellImpl
   :: String
@@ -32,20 +43,41 @@ foreign import sendCellImpl
   -> (Json -> Effect Unit)
   -> Effect Unit
 
-sendCell :: String -> Aff Json
+-- | Send a cell to purerl-tidal, get back a typed reply. Preferred over
+-- | the Adapter wrapper for new code — no BundleOutcome shape-fitting.
+sendCell :: String -> Aff TidalReply
 sendCell cellText = makeAff \resolve -> do
   sendCellImpl cellText
     (\err -> resolve (Left err))
-    (\json -> resolve (Right json))
+    (\json -> case decodeReply json of
+        Nothing ->
+          resolve (Left (Exn.error "PurerlTidalWS FFI returned malformed JSON"))
+        Just r ->
+          resolve (Right r))
   pure nonCanceler
+  where
+  decodeReply :: Json -> Maybe TidalReply
+  decodeReply json = do
+    obj <- AJ.toObject json
+    okJson <- Object.lookup "ok" obj
+    replyJson <- Object.lookup "reply" obj
+    ok <- AJ.toBoolean okJson
+    reply <- AJ.toString replyJson
+    pure { ok, reply }
 
+-- | Legacy Adapter-shaped wrapper. Returns the FFI's raw Json so
+-- | `Compile.compile`'s BuildResult decoder can handle it. Kept while
+-- | the old compile pipeline is still in tree; once step 4 strips
+-- | Compile.purs, this can go away and only `sendCell` remains.
 purerlTidalWs :: Adapter
 purerlTidalWs =
   { name: "purerl-tidal-ws"
-  -- The Adapter contract is `workspaceDir -> packageName -> userSrc -> mainSrc`.
-  -- For Tidal we ignore the workspace/package args (no compile workspace)
-  -- and treat `userSrc` as the cell text to forward verbatim. `mainSrc`
-  -- is unused. Step 4 will introduce a Tidal-native contract that
-  -- doesn't carry these compile-shaped arguments.
-  , bundle: \_ _ userSrc _ -> sendCell userSrc
+  , bundle: \_ _ userSrc _ -> sendCellRaw userSrc
   }
+  where
+  sendCellRaw :: String -> Aff Json
+  sendCellRaw cellText = makeAff \resolve -> do
+    sendCellImpl cellText
+      (\err -> resolve (Left err))
+      (\json -> resolve (Right json))
+    pure nonCanceler
