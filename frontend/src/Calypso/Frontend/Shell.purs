@@ -43,6 +43,13 @@ import Calypso.Frontend.Editor as Editor
 import Calypso.Frontend.Favorite as Favorite
 import Calypso.Frontend.WsClient as WsClient
 import Calypso.Favorite (Favorite(..))
+import Calypso.Proposal
+  ( Hunk(..)
+  , Proposal(..)
+  , ProposalId(..)
+  , ProposalTarget(..)
+  , unProposalId
+  )
 import Calypso.Pen
   ( Broadcast(..)
   , ClientMsg(..)
@@ -147,15 +154,16 @@ hideFromVisibility v =
         ]
   in Str.joinWith "," hidden
 
--- | Grid-template-columns string listing only the visible columns'
--- | fractions. With three visible columns we want roughly equal width
--- | with a slightly narrower hylograph (visualization breathes less).
+-- | Grid-template-columns string for the visible panes.  Equal-share
+-- | columns: 50/50 with two visible, 33/33/33 with three.  Long
+-- | proposal hunks fit by horizontal-scrolling within their pane,
+-- | not by stretching the column.
 gridTemplateForVisibility :: ColumnVisibility -> String
 gridTemplateForVisibility v =
   let parts = Array.catMaybes
-        [ if v.showComposition then Just "1.1fr" else Nothing
-        , if v.showCells then Just "1.1fr" else Nothing
-        , if v.showHylograph then Just "0.9fr" else Nothing
+        [ if v.showComposition then Just "1fr" else Nothing
+        , if v.showCells then Just "1fr" else Nothing
+        , if v.showHylograph then Just "1fr" else Nothing
         ]
   in case Array.length parts of
        0 -> "1fr"
@@ -202,6 +210,11 @@ type State =
   , ws :: Maybe WsClient.WebSocket
   , wsSub :: Maybe H.SubscriptionId
   , penBanner :: Maybe String
+  -- Pending edit proposals.  Populated by the Welcome WS frame and
+  -- updated incrementally by ProposalAdded / ProposalUpdated /
+  -- ProposalRetired.  Filtered per-target before being pushed down
+  -- to each editor instance.
+  , proposals :: Array Proposal
   , lastSyncedModule :: String
   , lastSyncedCells :: Map String { source :: String, kind :: String }
   , lastSyncedRuntime :: String
@@ -229,6 +242,8 @@ data Action
   | ToggleCellKind String
   | FireCell String String        -- cell id, current source
   | FireComposition String        -- current composition source
+  | AcceptHunk ProposalId Int     -- POST /proposals/:id/hunks/:idx/accept
+  | RejectHunk ProposalId Int     -- POST .../reject
   | ToggleFavoriteMenu
   | LoadFavorite String
   | FavoritesLoaded (Array Favorite)
@@ -275,6 +290,7 @@ initialState _ =
   , ws: Nothing
   , wsSub: Nothing
   , penBanner: Nothing
+  , proposals: []
   , lastSyncedModule: ""
   , lastSyncedCells: Map.empty
   , lastSyncedRuntime: ""
@@ -354,6 +370,8 @@ handleAction = case _ of
     if Array.null stmts
       then H.modify_ _ { compositionStatus = Just "(no statements to fire)" }
       else fireStatements stmts
+  AcceptHunk pid idx -> proposalAction "accept" pid idx
+  RejectHunk pid idx -> proposalAction "reject" pid idx
   ToggleFavoriteMenu -> H.modify_ \s -> s { favoriteMenuOpen = not s.favoriteMenuOpen }
   LoadFavorite k -> do
     s0 <- H.get
@@ -702,6 +720,46 @@ evalSource src = do
                  Nothing, Nothing -> Left "eval: empty response"
       | otherwise -> Left ("HTTP " <> show r.status)
 
+-- | POST /proposals/:id/hunks/:idx/{accept,reject}.  On 2xx we let
+-- | the server's broadcast tell the UI what changed (Snapshot for
+-- | accept, ProposalUpdated/Retired for both).  On 409 (RebaseNeeded
+-- | or Pen-held), surface via transportError; the existing
+-- | ConchUpdate-handler logic clears it once the user has the Pen.
+proposalAction
+  :: forall o m
+   . MonadAff m
+  => String  -- "accept" or "reject"
+  -> ProposalId
+  -> Int
+  -> H.HalogenM State Action Slots o m Unit
+proposalAction verb pid idx = do
+  s <- H.get
+  let
+    authHeaders = case s.myId of
+      Nothing -> []
+      Just sid -> [ AX.RequestHeader "X-Atelier-Subscriber-Id" (unSubscriberId sid) ]
+    url = backendUrl <> "/proposals/" <> unProposalId pid
+            <> "/hunks/" <> show idx <> "/" <> verb
+  result <- H.liftAff $ AX.request $ AX.defaultRequest
+    { method = Left POST
+    , url = url
+    , responseFormat = RF.json
+    , content = Nothing
+    , headers = authHeaders
+    }
+  case result of
+    Left err -> H.modify_ _ { transportError = Just (AX.printError err) }
+    Right r -> case r.status of
+      AX.StatusCode 409 -> do
+        let banner = case AJ.toObject r.body >>= Object.lookup "message" >>= AJ.toString of
+              Just msg -> msg
+              Nothing -> "proposal " <> verb <> " rejected"
+        H.modify_ _ { transportError = Just ("pen-held: " <> banner) }
+      AX.StatusCode code
+        | code >= 200 && code < 300 -> pure unit  -- broadcast handles UI
+        | otherwise -> H.modify_ _
+            { transportError = Just ("proposal " <> verb <> " failed: HTTP " <> show code) }
+
 hydrateFromServer
   :: forall o m
    . MonadAff m
@@ -751,10 +809,11 @@ handleIncomingBroadcast raw = case jsonParser raw of
     Left _ -> pure unit
     Right bc -> case bc of
       Welcome r -> do
-        H.modify_ _ { myId = Just r.yourId, pen = r.pen }
+        H.modify_ _ { myId = Just r.yourId, pen = r.pen, proposals = r.proposals }
         let CompileResponse snap = r.snapshot
         applyRemote snap
         syncEditorsEditable
+        dispatchProposals
         -- Auto-claim the pen if nobody holds it.  Algorave-shaped
         -- live coding is usually one-person-one-rig; the click-to-
         -- take friction is pure tax.  If somebody else already
@@ -788,12 +847,20 @@ handleIncomingBroadcast raw = case jsonParser raw of
           , runtimeError = if iHoldNow then Nothing else s.runtimeError
           }
         syncEditorsEditable
-      -- Proposal frames: stage 3 wires the inline ghost-text view.
-      -- For now we acknowledge them silently so the frame decoder
-      -- doesn't fall through.
-      ProposalAdded _ -> pure unit
-      ProposalUpdated _ -> pure unit
-      ProposalRetired _ -> pure unit
+      ProposalAdded r -> do
+        H.modify_ \s -> s { proposals = Array.snoc s.proposals r.proposal }
+        dispatchProposals
+      ProposalUpdated r -> do
+        H.modify_ \s -> s
+          { proposals = map (replaceWith r.proposal) s.proposals }
+        dispatchProposals
+        where
+        replaceWith new@(Proposal np) old@(Proposal op) =
+          if op.id == np.id then new else old
+      ProposalRetired r -> do
+        H.modify_ \s -> s
+          { proposals = Array.filter (\(Proposal p) -> p.id /= r.id) s.proposals }
+        dispatchProposals
       where
       isPenHeldError = case _ of
         Just msg -> Str.take 9 msg == "pen-held:"
@@ -809,6 +876,24 @@ syncEditorsEditable = do
   _ <- H.tell _moduleEditor unit (Editor.SetEditable editable)
   for_ s.cells \c ->
     H.tell _cellEditor c.id (Editor.SetEditable editable)
+
+-- | Push the per-target slice of the proposals array down to each
+-- | live editor.  Called after any state.proposals mutation.
+dispatchProposals
+  :: forall o m
+   . MonadAff m
+  => H.HalogenM State Action Slots o m Unit
+dispatchProposals = do
+  s <- H.get
+  let modProps = Array.filter (\(Proposal p) -> p.target == TgtModule) s.proposals
+  _ <- H.tell _moduleEditor unit (Editor.SetProposals modProps)
+  for_ s.cells \c -> do
+    let cellProps = Array.filter (forCell c.id) s.proposals
+    H.tell _cellEditor c.id (Editor.SetProposals cellProps)
+  where
+  forCell cid (Proposal p) = case p.target of
+    TgtCell pid -> pid == cid
+    _ -> false
 
 iHoldPen :: State -> Boolean
 iHoldPen s = case s.pen.holder, s.myId of
@@ -854,7 +939,7 @@ remoteDiffers s r =
       && local.source == remote.source
 
 applyRemote
-  :: forall o m
+  :: forall o m r
    . MonadAff m
   => { js :: Maybe String
      , "module" :: UserModule
@@ -865,6 +950,7 @@ applyRemote
      , errors :: Array CompileError
      , warnings :: Array CompileError
      , emits :: Array CellEmit
+     | r
      }
   -> H.HalogenM State Action Slots o m Unit
 applyRemote r = do
@@ -1150,6 +1236,8 @@ renderCompositionColumn state =
   compositionOutput = case _ of
     Editor.Changed src -> ModuleChanged src
     Editor.Submitted src -> FireComposition src
+    Editor.AcceptHunkO pid idx -> AcceptHunk pid idx
+    Editor.RejectHunkO pid idx -> RejectHunk pid idx
 
 renderCellsColumn :: forall m. MonadAff m => State -> H.ComponentHTML Action Slots m
 renderCellsColumn state =
@@ -1211,6 +1299,8 @@ renderCellRow _state idx c =
   cellOutput cid = case _ of
     Editor.Changed src -> CellChanged cid src
     Editor.Submitted src -> FireCell cid src
+    Editor.AcceptHunkO pid idx -> AcceptHunk pid idx
+    Editor.RejectHunkO pid idx -> RejectHunk pid idx
 
 -- | Hylograph pane (placeholder).  Until the mini-notation parser and
 -- | pattern-visualisation primitives land, we mirror the cells column

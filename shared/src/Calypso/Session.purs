@@ -103,6 +103,11 @@ newtype CompileResponse = CompileResponse
   , runtime :: String
   , "module" :: UserModule
   , cells :: Array Cell
+  -- SHA-1 hex digest of the module's `source` field at the moment
+  -- this snapshot was produced.  Authoring tools (Claude Code, scripts)
+  -- read this and use it as a Proposal's `basedOn` so the server's
+  -- acceptance check passes deterministically.
+  , sourceHash :: String
   }
 
 -- | A single (cellId, JSON-encoded CalypsoValue) pair emitted by a
@@ -199,6 +204,7 @@ compileResponseCodec = CA.prismaticCodec "CompileResponse" (Just <<< CompileResp
     , runtime: CA.string
     , "module": userModuleCodec
     , cells: CA.array cellCodec
+    , sourceHash: CA.string
     }
   where un (CompileResponse r) = r
 

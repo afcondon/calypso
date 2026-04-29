@@ -1,4 +1,4 @@
-import { EditorView, keymap, lineNumbers, drawSelection, Decoration } from '@codemirror/view';
+import { EditorView, keymap, lineNumbers, drawSelection, Decoration, WidgetType } from '@codemirror/view';
 import { EditorState, StateField, StateEffect, Annotation, Compartment } from '@codemirror/state';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import {
@@ -98,16 +98,201 @@ export const _setErrors = (view) => (errors) => () => {
   view.dispatch({ effects: setErrorsEffect.of(buildErrorDecos(view, errors)) });
 };
 
+// --- Pending proposals: ghost-line block widgets -----------------
+// One block widget per hunk, rendered above the line where the hunk
+// would land.  The widget shows author/prompt header, struck-through
+// `-` lines for what would be removed, bright `+` lines for what
+// would be added, and ✓/✗ buttons.  Buttons fire the host-supplied
+// onAccept/onReject callbacks with (proposalId, hunkIdx).
+//
+// Buttons live inside the widget DOM, so we have to thread the
+// host callbacks all the way through to the widget constructor.
+// The createEditor closure captures them and reuses them on every
+// _setProposals call via a small mutable host record.
+
+class HunkWidget extends WidgetType {
+  constructor(hv, host) {
+    super();
+    this.hv = hv;       // HunkView from PS
+    this.host = host;   // { onAccept, onReject }
+  }
+
+  // Equality keyed on the proposal+hunk identity and the rendered
+  // content — CM uses this to avoid rebuilding DOM unnecessarily.
+  eq(other) {
+    if (!(other instanceof HunkWidget)) return false;
+    const a = this.hv;
+    const b = other.hv;
+    if (a.proposalId !== b.proposalId) return false;
+    if (a.hunkIdx !== b.hunkIdx) return false;
+    if (a.startLine !== b.startLine) return false;
+    if (a.author !== b.author) return false;
+    if (a.prompt !== b.prompt) return false;
+    if (!sameStrings(a.removed, b.removed)) return false;
+    if (!sameStrings(a.added, b.added)) return false;
+    return true;
+  }
+
+  toDOM() {
+    const root = document.createElement('div');
+    root.className = 'cm-ghost-hunk';
+
+    // Left sidebar: ✓ / ✗ buttons.  Always visible regardless of
+    // body width — the body is the part that scrolls horizontally
+    // when content is wider than the column.
+    const buttons = document.createElement('div');
+    buttons.className = 'cm-ghost-buttons';
+    const accept = document.createElement('button');
+    accept.className = 'cm-ghost-btn cm-ghost-btn-accept';
+    accept.textContent = '✓';
+    accept.title = 'Accept this hunk';
+    accept.onclick = (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.host.onAccept(this.hv.proposalId, this.hv.hunkIdx);
+    };
+    const reject = document.createElement('button');
+    reject.className = 'cm-ghost-btn cm-ghost-btn-reject';
+    reject.textContent = '✗';
+    reject.title = 'Reject this hunk';
+    reject.onclick = (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.host.onReject(this.hv.proposalId, this.hv.hunkIdx);
+    };
+    buttons.appendChild(accept);
+    buttons.appendChild(reject);
+    root.appendChild(buttons);
+
+    const body = document.createElement('div');
+    body.className = 'cm-ghost-body';
+
+    const header = document.createElement('div');
+    header.className = 'cm-ghost-header';
+
+    const author = document.createElement('span');
+    author.className = 'cm-ghost-author';
+    author.textContent = '[' + this.hv.author + ']';
+    header.appendChild(author);
+
+    if (this.hv.prompt && this.hv.prompt.length > 0) {
+      const prompt = document.createElement('span');
+      prompt.className = 'cm-ghost-prompt';
+      prompt.textContent = ' ' + this.hv.prompt;
+      header.appendChild(prompt);
+    }
+
+    const at = document.createElement('span');
+    at.className = 'cm-ghost-at';
+    at.textContent = '@line ' + this.hv.startLine;
+    header.appendChild(at);
+
+    body.appendChild(header);
+
+    for (const line of this.hv.removed) {
+      const row = document.createElement('div');
+      row.className = 'cm-ghost-row cm-ghost-row-remove';
+      const sigil = document.createElement('span');
+      sigil.className = 'cm-ghost-sigil';
+      sigil.textContent = '- ';
+      const txt = document.createElement('span');
+      txt.className = 'cm-ghost-text';
+      txt.textContent = line;
+      row.appendChild(sigil);
+      row.appendChild(txt);
+      body.appendChild(row);
+    }
+
+    for (const line of this.hv.added) {
+      const row = document.createElement('div');
+      row.className = 'cm-ghost-row cm-ghost-row-add';
+      const sigil = document.createElement('span');
+      sigil.className = 'cm-ghost-sigil';
+      sigil.textContent = '+ ';
+      const txt = document.createElement('span');
+      txt.className = 'cm-ghost-text';
+      txt.textContent = line;
+      row.appendChild(sigil);
+      row.appendChild(txt);
+      body.appendChild(row);
+    }
+
+    root.appendChild(body);
+
+    return root;
+  }
+
+  // Block widgets are non-atomic by default; the host doc isn't
+  // affected by clicks/edits inside them.
+  ignoreEvent() { return false; }
+}
+
+function sameStrings(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+const setProposalsEffect = StateEffect.define();
+
+const proposalsField = StateField.define({
+  create: () => Decoration.none,
+  update: (decos, tr) => {
+    for (const e of tr.effects) {
+      if (e.is(setProposalsEffect)) return e.value;
+    }
+    return decos.map(tr.changes);
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+
+function buildProposalDecos(view, hunkViews, host) {
+  const doc = view.state.doc;
+  const decos = [];
+  for (const hv of hunkViews) {
+    try {
+      // Clamp startLine into the doc's range so a stale hunk against
+      // a freshly-shrunk doc doesn't blow up doc.line().
+      const ln = Math.max(1, Math.min(hv.startLine, doc.lines));
+      const line = doc.line(ln);
+      decos.push(
+        Decoration.widget({
+          widget: new HunkWidget(hv, host),
+          block: true,
+          side: -1,
+        }).range(line.from)
+      );
+    } catch (_) { /* skip malformed entry */ }
+  }
+  // Decoration.set requires sorted-by-from; ranges() does that for us.
+  return Decoration.set(decos, true);
+}
+
+// _setProposals reuses the host callbacks captured at createEditor
+// time.  We stash them in a per-view WeakMap keyed by the EditorView
+// so this FFI surface stays signature-stable.
+const proposalHosts = new WeakMap();
+
+export const _setProposals = (view) => (hunkViews) => () => {
+  const host = proposalHosts.get(view) || { onAccept: () => {}, onReject: () => {} };
+  view.dispatch({
+    effects: setProposalsEffect.of(buildProposalDecos(view, hunkViews, host)),
+  });
+};
+
 // Creates a CodeMirror 6 view mounted into `parent`.
-//   onChange  fires on every edit with the full doc content
-//   onSubmit  fires on the explicit fire gesture (Mod-Enter on Mac;
-//             Ctrl-Enter on others) with the full doc content
+//   onChange   fires on every edit with the full doc content
+//   onSubmit   fires on Mod-Enter with the full doc content
+//   onAccept   fires on a ghost-hunk accept click with (id, idx)
+//   onReject   fires on a ghost-hunk reject click with (id, idx)
 //
 // `_renderType` is unused — Calypso has no types to render in hover
 // tooltips.  Kept on the FFI surface so the PureScript signature
 // stays stable while we settle on what tooltip content (if any) the
 // composition pane wants.
-export const _createEditor = (parent) => (initialDoc) => (onChange) => (onSubmit) => (_renderType) => () => {
+export const _createEditor =
+  (parent) => (initialDoc) => (onChange) => (onSubmit) =>
+  (onAccept) => (onReject) => (_renderType) => () => {
   // Tidal-style fire gesture: Cmd-Enter (Mac) / Ctrl-Enter (others)
   // sends the current document up to the parent component, which
   // POSTs to /eval.  Returns true so CM swallows the keystroke
@@ -140,6 +325,7 @@ export const _createEditor = (parent) => (initialDoc) => (onChange) => (onSubmit
         StreamLanguage.define(haskell),
         syntaxHighlighting(playgroundHighlightStyle),
         errorsField,
+        proposalsField,
         editableCompartment.of(EditorView.editable.of(true)),
         EditorView.updateListener.of((update) => {
           // onChange is an EffectFn1 — call once, no trailing thunk.
@@ -161,6 +347,14 @@ export const _createEditor = (parent) => (initialDoc) => (onChange) => (onSubmit
         }),
       ],
     }),
+  });
+  // Stash the accept/reject callbacks so _setProposals (called later
+  // with no callbacks of its own) can wire ghost-hunk buttons through
+  // to them.  EffectFn2's JS shape is (a, b) -> undefined; calling
+  // it triggers the effect immediately, no trailing thunk.
+  proposalHosts.set(view, {
+    onAccept: (proposalId, hunkIdx) => onAccept(proposalId, hunkIdx),
+    onReject: (proposalId, hunkIdx) => onReject(proposalId, hunkIdx),
   });
   return view;
 };

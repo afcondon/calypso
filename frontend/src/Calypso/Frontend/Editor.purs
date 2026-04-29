@@ -8,6 +8,7 @@ module Calypso.Frontend.Editor
 import Prelude
 
 import Data.Maybe (Maybe(..))
+import Data.Tuple (Tuple(..))
 import Effect.Aff.Class (class MonadAff)
 import Effect.Class (liftEffect)
 import Halogen as H
@@ -18,24 +19,32 @@ import Web.HTML.HTMLElement (toElement)
 
 import Calypso.Frontend.CodeMirror (EditorView)
 import Calypso.Frontend.CodeMirror as CM
+import Calypso.Proposal (Proposal, ProposalId)
 
 type Input = { initialDoc :: String, tag :: String }
 
 -- | Editor outputs.  `Changed` fires on every document edit (parent
 -- | typically debounces and persists).  `Submitted` fires on the
 -- | explicit fire gesture (Mod-Enter): the cell or composition body
--- | should be sent to the daemon.
+-- | should be sent to the daemon.  `AcceptHunkO` / `RejectHunkO`
+-- | fire when the user clicks the corresponding ghost-line button
+-- | inside the editor; the parent translates them into HTTP calls
+-- | against /proposals/:id/hunks/:idx/{accept,reject}.
 data Output
   = Changed String
   | Submitted String
+  | AcceptHunkO ProposalId Int
+  | RejectHunkO ProposalId Int
 
 -- | External queries: replace content (unused now), push a list of
--- | inline error spans to be decorated on the editor, toggle
--- | whether the view accepts user input.
+-- | inline error spans to be decorated on the editor, toggle whether
+-- | the view accepts user input, push the current pending-proposals
+-- | list (this editor only renders the slice for its own target).
 data Query a
   = ReplaceContent String a
   | SetErrors (Array CM.ErrorSpan) a
   | SetEditable Boolean a
+  | SetProposals (Array Proposal) a
 
 data Action
   = Initialise
@@ -43,6 +52,8 @@ data Action
   | UpdateInput Input
   | HandleChange String
   | HandleSubmit String
+  | HandleAccept ProposalId Int
+  | HandleReject ProposalId Int
 
 -- `currentDoc` tracks what we believe is presently in the CM6 view so
 -- we can distinguish 'parent re-rendered with the source we already
@@ -95,10 +106,16 @@ handleAction = case _ of
         _ <- H.subscribe (HandleChange <$> changeEmitter)
         { emitter: submitEmitter, listener: submitListener } <- liftEffect HS.create
         _ <- H.subscribe (HandleSubmit <$> submitEmitter)
+        { emitter: acceptEmitter, listener: acceptListener } <- liftEffect HS.create
+        _ <- H.subscribe ((\(Tuple pid idx) -> HandleAccept pid idx) <$> acceptEmitter)
+        { emitter: rejectEmitter, listener: rejectListener } <- liftEffect HS.create
+        _ <- H.subscribe ((\(Tuple pid idx) -> HandleReject pid idx) <$> rejectEmitter)
         view <- liftEffect $
           CM.createEditor el state.input.initialDoc
             (HS.notify changeListener)
             (HS.notify submitListener)
+            (\pid idx -> HS.notify acceptListener (Tuple pid idx))
+            (\pid idx -> HS.notify rejectListener (Tuple pid idx))
         H.modify_ _ { view = Just view }
   Finalise -> do
     state <- H.get
@@ -128,6 +145,8 @@ handleAction = case _ of
     H.raise (Changed content)
   HandleSubmit content ->
     H.raise (Submitted content)
+  HandleAccept pid idx -> H.raise (AcceptHunkO pid idx)
+  HandleReject pid idx -> H.raise (RejectHunkO pid idx)
 
 handleQuery
   :: forall m a
@@ -154,5 +173,12 @@ handleQuery = case _ of
     case state.view of
       Just view -> do
         liftEffect (CM.setEditable view editable)
+        pure (Just next)
+      Nothing -> pure (Just next)
+  SetProposals proposals next -> do
+    state <- H.get
+    case state.view of
+      Just view -> do
+        liftEffect (CM.setProposals view proposals)
         pure (Just next)
       Nothing -> pure (Just next)

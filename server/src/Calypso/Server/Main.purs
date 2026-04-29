@@ -255,6 +255,9 @@ errorSnapshotJson code msg =
       , runtime: "browser"
       , "module": UserModule { source: "" }
       , cells: []
+      -- empty source → SHA-1 of "" (well-known); proposers won't post
+      -- against an error response anyway.
+      , sourceHash: "da39a3ee5e6b4b0d3255bfef95601890afd80709"
       }
 
 parseBody

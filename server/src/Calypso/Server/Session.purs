@@ -54,6 +54,7 @@ import Node.FS.Aff as FSA
 import Node.FS.Sync as FSS
 
 import Calypso.Server.Adapter.PurerlTidalWS (sendCell)
+import Calypso.Server.Hash (sha1Hex)
 import Data.Argonaut.Core (fromString) as AJ
 import Calypso.Session
   ( Cell(..)
@@ -267,16 +268,19 @@ persist workspaceDir s = do
 get :: SessionStore -> Effect CompileResponse
 get (SessionStore { state }) = do
   s <- Ref.read state
+  let UserModule m = s."module"
+  hash <- sha1Hex m.source
   pure $ case s.lastResponse of
     Just (CompileResponse r) -> CompileResponse r
       { runtime = s.runtime
       , "module" = s."module"
       , cells = s.cells
+      , sourceHash = hash
       }
-    Nothing -> emptyResponse s
+    Nothing -> emptyResponse s hash
 
-emptyResponse :: SessionState -> CompileResponse
-emptyResponse s = CompileResponse
+emptyResponse :: SessionState -> String -> CompileResponse
+emptyResponse s hash = CompileResponse
   { js: Nothing
   , warnings: []
   , errors: []
@@ -286,6 +290,7 @@ emptyResponse s = CompileResponse
   , runtime: s.runtime
   , "module": s."module"
   , cells: s.cells
+  , sourceHash: hash
   }
 
 -- | Apply a state update under the lock, persist, broadcast, and
@@ -319,17 +324,21 @@ withUpdate (SessionStore { lock, state, broadcast, workspaceDir, packageName }) 
 -- | pass we'll trim the surrounding machinery and the CompileResponse
 -- | shape itself.
 compileNow :: String -> String -> SessionState -> Aff CompileResponse
-compileNow _ _ s = pure $ CompileResponse
-  { js: Nothing
-  , warnings: []
-  , errors: []
-  , types: []
-  , cellLines: []
-  , emits: []
-  , runtime: "purerl-tidal-ws"
-  , "module": s."module"
-  , cells: s.cells
-  }
+compileNow _ _ s = do
+  let UserModule m = s."module"
+  hash <- liftEffect $ sha1Hex m.source
+  pure $ CompileResponse
+    { js: Nothing
+    , warnings: []
+    , errors: []
+    , types: []
+    , cellLines: []
+    , emits: []
+    , runtime: "purerl-tidal-ws"
+    , "module": s."module"
+    , cells: s.cells
+    , sourceHash: hash
+    }
 
 -- | Public: force a recompile with the current state.
 compileAndStore :: SessionStore -> Aff CompileResponse

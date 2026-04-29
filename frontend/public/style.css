@@ -565,6 +565,127 @@ body::before {
   text-decoration-thickness: 1px;
 }
 
+/* Pending proposals — ghost-line block widgets ---------------------- */
+.cm-ghost-hunk {
+  display: flex;
+  align-items: stretch;
+  margin: 0.3rem 0;
+  border: 1px dashed var(--fg-dim);
+  border-left: 3px solid var(--cyan);
+  background: rgba(74, 255, 240, 0.04);
+  font-family: var(--mono-code);
+  font-size: 14px;
+  line-height: 1.35;
+  color: var(--fg);
+}
+
+/* Buttons live in a fixed-width sidebar on the left so they're always
+   visible regardless of how wide the proposal's content is.  The
+   body scrolls horizontally when the content exceeds column width. */
+.cm-ghost-buttons {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.3rem 0.4rem;
+  border-right: 1px solid var(--fg-rule);
+  background: rgba(74, 255, 240, 0.06);
+}
+
+.cm-ghost-body {
+  flex: 1 1 auto;
+  min-width: 0;              /* let overflow scroll, not push the column */
+  overflow-x: auto;
+  padding: 0.3rem 0.6rem;
+}
+
+.cm-ghost-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.2rem;
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+}
+
+.cm-ghost-author {
+  color: var(--cyan);
+  text-shadow: 0 0 4px rgba(74, 255, 240, 0.6);
+  font-weight: bold;
+  flex-shrink: 0;
+}
+
+.cm-ghost-prompt {
+  color: var(--fg);
+  font-style: italic;
+  flex: 1 1 auto;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.cm-ghost-at {
+  color: var(--fg-dim);
+  flex-shrink: 0;
+}
+
+.cm-ghost-btn {
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  width: 1.5rem;
+  height: 1.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--fg-dim);
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+.cm-ghost-btn-accept { color: var(--fg); }
+.cm-ghost-btn-accept:hover {
+  color: var(--fg-bright);
+  border-color: var(--fg-bright);
+  background: rgba(65, 255, 124, 0.1);
+}
+.cm-ghost-btn-reject { color: var(--fg-dim); }
+.cm-ghost-btn-reject:hover {
+  color: var(--red);
+  border-color: var(--red);
+  background: rgba(255, 90, 77, 0.1);
+}
+
+.cm-ghost-row {
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 0 0.2rem;
+}
+
+.cm-ghost-row-remove {
+  color: var(--red);
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.cm-ghost-row-add {
+  color: var(--fg-bright);
+  text-shadow: var(--glow-bright);
+}
+
+.cm-ghost-sigil {
+  display: inline-block;
+  width: 1.2rem;
+  color: var(--fg-dim);
+}
+.cm-ghost-row-remove .cm-ghost-sigil { color: var(--red); }
+.cm-ghost-row-add    .cm-ghost-sigil { color: var(--fg); }
+
+.cm-ghost-text {
+  display: inline;
+}
+
 .cm-tooltip {
   background: var(--bg-deep) !important;
   color: var(--fg) !important;
