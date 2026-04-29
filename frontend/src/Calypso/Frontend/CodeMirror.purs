@@ -8,6 +8,7 @@ module Calypso.Frontend.CodeMirror
   , setErrors
   , setEditable
   , setProposals
+  , setVocabulary
   ) where
 
 import Prelude
@@ -19,6 +20,7 @@ import Effect (Effect)
 import Effect.Uncurried (EffectFn1, EffectFn2, mkEffectFn1, mkEffectFn2)
 import Web.DOM (Element)
 
+import Calypso.Frontend.Completion (Completion)
 import Calypso.Proposal (Hunk(..), Proposal(..), ProposalId(..), unProposalId)
 
 foreign import data EditorView :: Type
@@ -66,6 +68,11 @@ foreign import _setErrors :: EditorView -> Array ErrorSpan -> Effect Unit
 foreign import _setEditable :: EditorView -> Boolean -> Effect Unit
 
 foreign import _setProposals :: EditorView -> Array HunkView -> Effect Unit
+
+foreign import _setVocabulary :: EditorView -> Array Completion -> Effect Unit
+
+setVocabulary :: EditorView -> Array Completion -> Effect Unit
+setVocabulary = _setVocabulary
 
 createEditor
   :: Element

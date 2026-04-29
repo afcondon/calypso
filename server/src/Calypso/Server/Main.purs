@@ -54,6 +54,7 @@ import Calypso.Server.Favorites as Favorites
 import Calypso.Server.Hash (sha1Hex)
 import Calypso.Server.Proposals (ProposalStore)
 import Calypso.Server.Proposals as Proposals
+import Calypso.Server.Vocabulary as Vocabulary
 import Calypso.Server.Session (EvalRequest, EvalResponse, ModulePatch(..), SessionStore, evalResponseCodec)
 import Calypso.Server.Session as Session
 import Calypso.Server.Subscribers (Subscribers)
@@ -68,6 +69,7 @@ import Calypso.Pen
   )
 import Calypso.Pen as PPen
 import Calypso.Favorite (favoritesCodec)
+import Calypso.Vocabulary (vocabularyCodec)
 import Calypso.Proposal
   ( Hunk(..)
   , Proposal(..)
@@ -100,6 +102,10 @@ data Route
   -- GET-only listing of `~/.calypso/favorites/*.tidal` — composition-pane
   -- templates the user keeps cross-machine.  Loaded into the dropdown.
   | FavoritesRoute
+  -- GET-only listing of bindings + devices parsed from the
+  -- purerl-tidal setup directory.  Drives autocomplete + the
+  -- reference panel.
+  | VocabularyRoute
   -- Proposals: anyone (humans, AI agents) can POST; the Pen holder
   -- accepts/rejects per-hunk; the proposer can withdraw.
   | ProposalsRoute
@@ -120,6 +126,7 @@ route = root $ sum
   , "SessionCellAt": "session" / "cells" / segment ? { preview: flag }
   , "Eval": "eval" / noArgs
   , "FavoritesRoute": "favorites" / noArgs
+  , "VocabularyRoute": "vocabulary" / noArgs
   , "ProposalsRoute": "proposals" / noArgs
   , "ProposalOne": "proposals" / segment
   , "ProposalHunkAccept": "proposals" / segment / "hunks" / segment / "accept"
@@ -748,6 +755,14 @@ mkRouter ctx req@{ route: r, method, body } =
           ok' jsonCors (stringify (CA.encode favoritesCodec favs))
         _ -> response' Status.methodNotAllowed jsonCors
           (errorJson "MethodNotAllowed" "/favorites accepts GET")
+
+      VocabularyRoute -> case method of
+        Get -> do
+          dir <- liftEffect Vocabulary.vocabularyDir
+          vocab <- liftAff (Vocabulary.listVocabulary dir)
+          ok' jsonCors (stringify (CA.encode vocabularyCodec vocab))
+        _ -> response' Status.methodNotAllowed jsonCors
+          (errorJson "MethodNotAllowed" "/vocabulary accepts GET")
 
       Eval -> case method of
         Post -> do

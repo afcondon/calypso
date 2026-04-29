@@ -19,9 +19,14 @@ import Web.HTML.HTMLElement (toElement)
 
 import Calypso.Frontend.CodeMirror (EditorView)
 import Calypso.Frontend.CodeMirror as CM
+import Calypso.Frontend.Completion (Completion)
 import Calypso.Proposal (Proposal, ProposalId)
 
-type Input = { initialDoc :: String, tag :: String }
+type Input =
+  { initialDoc :: String
+  , tag :: String
+  , vocabulary :: Array Completion
+  }
 
 -- | Editor outputs.  `Changed` fires on every document edit (parent
 -- | typically debounces and persists).  `Submitted` fires on the
@@ -45,6 +50,7 @@ data Query a
   | SetErrors (Array CM.ErrorSpan) a
   | SetEditable Boolean a
   | SetProposals (Array Proposal) a
+  | SetVocabulary (Array Completion) a
 
 data Action
   = Initialise
@@ -116,6 +122,7 @@ handleAction = case _ of
             (HS.notify submitListener)
             (\pid idx -> HS.notify acceptListener (Tuple pid idx))
             (\pid idx -> HS.notify rejectListener (Tuple pid idx))
+        liftEffect (CM.setVocabulary view state.input.vocabulary)
         H.modify_ _ { view = Just view }
   Finalise -> do
     state <- H.get
@@ -139,6 +146,15 @@ handleAction = case _ of
     -- every parent render; if we blindly stored it, Editor would
     -- re-render on every keystroke even when nothing had changed.
     when (input.tag /= state.input.tag) do
+      H.modify_ _ { input = input }
+    -- Push vocabulary down whenever the parent's array changes
+    -- (typically once, after the initial /vocabulary fetch settles).
+    -- Array equality is cheap given completion counts in the low
+    -- hundreds; if this becomes a hot path we can hash + version.
+    when (input.vocabulary /= state.input.vocabulary) do
+      case state.view of
+        Just view -> liftEffect (CM.setVocabulary view input.vocabulary)
+        Nothing -> pure unit
       H.modify_ _ { input = input }
   HandleChange content -> do
     H.modify_ _ { currentDoc = content }
@@ -180,5 +196,12 @@ handleQuery = case _ of
     case state.view of
       Just view -> do
         liftEffect (CM.setProposals view proposals)
+        pure (Just next)
+      Nothing -> pure (Just next)
+  SetVocabulary completions next -> do
+    state <- H.get
+    case state.view of
+      Just view -> do
+        liftEffect (CM.setVocabulary view completions)
         pure (Just next)
       Nothing -> pure (Just next)

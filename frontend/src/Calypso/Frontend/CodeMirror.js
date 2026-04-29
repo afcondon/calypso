@@ -7,6 +7,7 @@ import {
 } from '@codemirror/language';
 import { haskell } from '@codemirror/legacy-modes/mode/haskell';
 import { tags as t } from '@lezer/highlight';
+import { autocompletion } from '@codemirror/autocomplete';
 
 // Marks transactions we originate from PureScript (setContent /
 // setErrors) so the updateListener below can distinguish them from
@@ -280,6 +281,51 @@ export const _setProposals = (view) => (hunkViews) => () => {
   });
 };
 
+// --- Autocomplete vocabulary -----------------------------------
+// PureScript hands us a flat Array of completions (see
+// Calypso.Frontend.Completion) — already shaped for CodeMirror's
+// Completion type ({ label, type, detail, info }).  We hold them in
+// a StateField so they live alongside the editor state and the
+// completion source can read them on every keystroke.
+
+const setVocabularyEffect = StateEffect.define();
+
+const vocabularyField = StateField.define({
+  create: () => [],
+  update: (current, tr) => {
+    for (const e of tr.effects) {
+      if (e.is(setVocabularyEffect)) return e.value;
+    }
+    return current;
+  },
+});
+
+// Completion source: matches identifiers consisting of word chars
+// and dashes (so `laplace-resonator-decay` is one token).  Returns
+// the field's options unfiltered — CodeMirror's autocomplete engine
+// scores and filters by the typed prefix automatically.
+function vocabularyCompletionSource(context) {
+  const word = context.matchBefore(/[\w-]+/);
+  if (!word || (word.from === word.to && !context.explicit)) return null;
+  const options = context.state.field(vocabularyField, false) || [];
+  if (options.length === 0) return null;
+  return {
+    from: word.from,
+    options: options.map((c) => ({
+      label: c.label,
+      type: c.kind,
+      detail: c.detail,
+      info: c.info && c.info.length > 0 ? c.info : undefined,
+    })),
+  };
+}
+
+export const _setVocabulary = (view) => (completions) => () => {
+  view.dispatch({
+    effects: setVocabularyEffect.of(completions),
+  });
+};
+
 // Creates a CodeMirror 6 view mounted into `parent`.
 //   onChange   fires on every edit with the full doc content
 //   onSubmit   fires on Mod-Enter with the full doc content
@@ -326,6 +372,11 @@ export const _createEditor =
         syntaxHighlighting(playgroundHighlightStyle),
         errorsField,
         proposalsField,
+        vocabularyField,
+        autocompletion({
+          override: [vocabularyCompletionSource],
+          activateOnTyping: true,
+        }),
         editableCompartment.of(EditorView.editable.of(true)),
         EditorView.updateListener.of((update) => {
           // onChange is an EffectFn1 — call once, no trailing thunk.

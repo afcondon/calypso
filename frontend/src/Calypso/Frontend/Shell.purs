@@ -39,10 +39,15 @@ import Data.Foldable (for_)
 
 import Calypso.Frontend.CodeMirror (ErrorSpan)
 import Calypso.Frontend.Config (backendUrl, readHideParam, writeHideParam, wsBackendUrl)
+import Calypso.Frontend.Completion (Completion, completionsFromVocabulary)
 import Calypso.Frontend.Editor as Editor
 import Calypso.Frontend.Favorite as Favorite
+import Calypso.Frontend.Primer as Primer
+import Calypso.Frontend.Vocabulary as Vocabulary
 import Calypso.Frontend.WsClient as WsClient
 import Calypso.Favorite (Favorite(..))
+import Calypso.Vocabulary as CV
+import Calypso.Vocabulary (Vocabulary)
 import Calypso.Proposal
   ( Hunk(..)
   , Proposal(..)
@@ -97,6 +102,25 @@ cellOf c = Cell { id: c.id, kind: c.kind, source: c.source, form: false }
 data ColumnKey = KeyComposition | KeyCells | KeyHylograph
 
 derive instance Eq ColumnKey
+
+-- | Which tab is active inside the Hylograph (third) pane.  Until
+-- | the pattern visualiser lands, this pane doubles as the
+-- | reference panel: a browsable index of devices/bindings parsed
+-- | from the purerl-tidal setup files (`Vocabulary`), a primer for
+-- | mini-notation operators (`MiniNotation`), and the existing
+-- | per-cell daemon-reply readout (`Replies`).
+data HylographTab = TabVocabulary | TabMiniNotation | TabReplies
+
+derive instance Eq HylographTab
+
+hylographTabLabel :: HylographTab -> String
+hylographTabLabel = case _ of
+  TabVocabulary -> "Vocabulary"
+  TabMiniNotation -> "Mini-notation"
+  TabReplies -> "Replies"
+
+allHylographTabs :: Array HylographTab
+allHylographTabs = [ TabVocabulary, TabMiniNotation, TabReplies ]
 
 type ColumnVisibility =
   { showComposition :: Boolean
@@ -178,6 +202,13 @@ type State =
   , favorites :: Array Favorite
   , favoriteKey :: Maybe String   -- last-loaded favorite, if any
   , favoriteMenuOpen :: Boolean
+  -- Vocabulary parsed from purerl-tidal/setup/*.tidal — drives
+  -- autocomplete and (later) the reference panel.  Held both as the
+  -- raw vocabulary record (for the panel) and as a flattened
+  -- completion list (for the editor's autocompletion source).
+  , vocabulary :: Vocabulary
+  , completions :: Array Completion
+  , hylographTab :: HylographTab
   , settingsOpen :: Boolean
   , compiling :: Boolean
   , errors :: Array CompileError
@@ -247,6 +278,8 @@ data Action
   | ToggleFavoriteMenu
   | LoadFavorite String
   | FavoritesLoaded (Array Favorite)
+  | VocabularyLoaded Vocabulary
+  | SwitchHylographTab HylographTab
   | ToggleSettings
   | WsOpened
   | WsIncoming String
@@ -271,6 +304,9 @@ initialState _ =
   , favorites: []
   , favoriteKey: Nothing
   , favoriteMenuOpen: false
+  , vocabulary: Vocabulary.emptyVocabulary
+  , completions: []
+  , hylographTab: TabVocabulary
   , settingsOpen: false
   , compiling: false
   , errors: []
@@ -323,8 +359,17 @@ handleAction = case _ of
     openWebSocket
     favs <- H.liftAff Favorite.fetchFavorites
     handleAction (FavoritesLoaded favs)
+    vocab <- H.liftAff Vocabulary.fetchVocabulary
+    handleAction (VocabularyLoaded vocab)
   FavoritesLoaded favs ->
     H.modify_ _ { favorites = favs }
+  VocabularyLoaded vocab ->
+    H.modify_ _
+      { vocabulary = vocab
+      , completions = completionsFromVocabulary vocab
+      }
+  SwitchHylographTab tab ->
+    H.modify_ _ { hylographTab = tab }
   ModuleChanged src -> do
     H.modify_ _ { moduleSource = src }
     handleAction ScheduleCompile
@@ -1229,7 +1274,10 @@ renderCompositionColumn state =
             Nothing -> HH.text ""
         ]
     , HH.slot _moduleEditor unit Editor.component
-        { initialDoc: state.moduleSource, tag: "module" }
+        { initialDoc: state.moduleSource
+        , tag: "module"
+        , vocabulary: state.completions
+        }
         compositionOutput
     ]
   where
@@ -1256,7 +1304,7 @@ cellColorClass :: Int -> String
 cellColorClass idx = "cell-color-" <> show (idx `mod` 8)
 
 renderCellRow :: forall m. MonadAff m => State -> Int -> CellRec -> H.ComponentHTML Action Slots m
-renderCellRow _state idx c =
+renderCellRow state idx c =
   HH.div
     [ HP.class_
         ( H.ClassName
@@ -1292,7 +1340,10 @@ renderCellRow _state idx c =
             [ HH.text "×" ]
         ]
     , HH.slot _cellEditor c.id Editor.component
-        { initialDoc: c.source, tag: "cell" }
+        { initialDoc: c.source
+        , tag: "cell"
+        , vocabulary: state.completions
+        }
         (cellOutput c.id)
     ]
   where
@@ -1302,20 +1353,83 @@ renderCellRow _state idx c =
     Editor.AcceptHunkO pid idx -> AcceptHunk pid idx
     Editor.RejectHunkO pid idx -> RejectHunk pid idx
 
--- | Hylograph pane (placeholder).  Until the mini-notation parser and
--- | pattern-visualisation primitives land, we mirror the cells column
--- | row-for-row and show the most recent reply text per cell.  Empty
--- | rows are kept so vertical alignment with the cells column is
--- | preserved.
+-- | Hylograph pane.  Currently a tabbed reference panel: the
+-- | vocabulary parsed from purerl-tidal's setup files, a primer for
+-- | mini-notation, and the existing per-cell daemon replies.  When
+-- | the pattern visualiser lands, it'll likely become its own tab
+-- | too — Asteroids/Battlezone vector aesthetic, per the user's
+-- | direction.
 renderHylographColumn :: forall m. State -> H.ComponentHTML Action Slots m
 renderHylographColumn state =
   HH.section [ HP.class_ (H.ClassName "pane pane-hylograph") ]
-    [ HH.div [ HP.class_ (H.ClassName "hylograph-rows") ]
-        (Array.catMaybes (mapWithIndex maybeRow state.cells))
+    [ HH.div [ HP.class_ (H.ClassName "hylograph-tabs") ]
+        (map (renderTab state.hylographTab) allHylographTabs)
+    , HH.div [ HP.class_ (H.ClassName "hylograph-tab-body") ]
+        [ case state.hylographTab of
+            TabVocabulary -> renderVocabularyTab state
+            TabMiniNotation -> Primer.renderMiniNotation
+            TabReplies -> renderRepliesTab state
+        ]
     ]
+  where
+  renderTab active tab =
+    HH.button
+      [ HP.classes
+          [ H.ClassName "hylograph-tab"
+          , H.ClassName (if active == tab then "hylograph-tab-active" else "")
+          ]
+      , HE.onClick \_ -> SwitchHylographTab tab
+      ]
+      [ HH.text (hylographTabLabel tab) ]
+
+renderRepliesTab :: forall m. State -> H.ComponentHTML Action Slots m
+renderRepliesTab state =
+  HH.div [ HP.class_ (H.ClassName "hylograph-rows") ]
+    (Array.catMaybes (mapWithIndex maybeRow state.cells))
   where
   maybeRow idx c =
     if c.kind == "expr" then Just (renderHylographRow state idx c) else Nothing
+
+renderVocabularyTab :: forall m. State -> H.ComponentHTML Action Slots m
+renderVocabularyTab state =
+  let CV.Vocabulary v = state.vocabulary
+  in case v.setupFiles of
+       [] ->
+         HH.div [ HP.class_ (H.ClassName "vocabulary-empty") ]
+           [ HH.text "No setup files found. Set $CALYPSO_TIDAL_SETUP_DIR or drop *.tidal files into the default purerl-tidal/setup/ directory." ]
+       sfs ->
+         HH.div [ HP.class_ (H.ClassName "vocabulary-list") ]
+           (map renderSetupFile sfs)
+
+renderSetupFile :: forall m. CV.SetupFile -> H.ComponentHTML Action Slots m
+renderSetupFile (CV.SetupFile sf) =
+  HH.div [ HP.class_ (H.ClassName "vocabulary-device") ]
+    [ HH.div [ HP.class_ (H.ClassName "vocabulary-device-header") ]
+        [ HH.span [ HP.class_ (H.ClassName "vocabulary-device-name") ]
+            [ HH.text sf.name ]
+        , case sf.port of
+            Just p ->
+              HH.span [ HP.class_ (H.ClassName "vocabulary-device-port") ]
+                [ HH.text p ]
+            Nothing -> HH.text ""
+        ]
+    , HH.ul [ HP.class_ (H.ClassName "vocabulary-bindings") ]
+        (map renderBinding sf.bindings)
+    ]
+
+renderBinding :: forall m. CV.Binding -> H.ComponentHTML Action Slots m
+renderBinding (CV.Binding b) =
+  HH.li [ HP.class_ (H.ClassName "vocabulary-binding") ]
+    [ HH.span [ HP.class_ (H.ClassName "vocabulary-binding-name") ]
+        [ HH.text b.name ]
+    , HH.span [ HP.class_ (H.ClassName "vocabulary-binding-detail") ]
+        [ HH.text (bindingSummary b) ]
+    ]
+
+bindingSummary :: forall r. { kind :: CV.BindingKind, channel :: Int, number :: Int | r } -> String
+bindingSummary b = case b.kind of
+  CV.MidiNote -> "note ch" <> show b.channel <> " (default " <> show b.number <> ")"
+  CV.MidiCc -> "cc " <> show b.number <> " ch" <> show b.channel
 
 renderHylographRow :: forall m. State -> Int -> CellRec -> H.ComponentHTML Action Slots m
 renderHylographRow state idx c =

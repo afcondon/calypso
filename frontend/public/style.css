@@ -412,6 +412,53 @@ body::before {
 .cell-color-7 { --cell-bar: #ffe066; }
 
 /* ===== Hylograph column ================================================= */
+.pane-hylograph {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.hylograph-tabs {
+  display: flex;
+  flex-direction: row;
+  gap: 0;
+  border-bottom: 1px solid var(--fg-rule);
+  background: var(--bg-deep);
+  flex: 0 0 auto;
+}
+
+.hylograph-tab {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--fg-rule);
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  font-size: 1rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.45rem 0.9rem;
+  cursor: pointer;
+  text-shadow: var(--glow);
+}
+
+.hylograph-tab:hover {
+  color: var(--fg);
+  background: rgba(65, 255, 124, 0.05);
+}
+
+.hylograph-tab-active {
+  color: var(--fg-bright);
+  background: rgba(65, 255, 124, 0.08);
+  text-shadow: var(--glow-bright);
+}
+
+.hylograph-tab-body {
+  flex: 1 1 auto;
+  overflow: auto;
+  min-height: 0;
+}
+
 .hylograph-rows {
   padding: 0.5rem 0.6rem;
   display: flex;
@@ -706,3 +753,207 @@ body::before {
   border: 1px solid var(--bg);
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--fg-dim); }
+
+/* ===== Vocabulary tab ================================================== */
+.vocabulary-empty {
+  padding: 1rem 1rem;
+  color: var(--fg-dim);
+  font-style: italic;
+  font-size: 0.95rem;
+}
+
+.vocabulary-list {
+  padding: 0.6rem 0.8rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.vocabulary-device {
+  border: 1px solid var(--fg-rule);
+  background: rgba(65, 255, 124, 0.025);
+  padding: 0.45rem 0.6rem;
+}
+
+.vocabulary-device-header {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: baseline;
+  border-bottom: 1px solid var(--fg-rule);
+  padding-bottom: 0.3rem;
+  margin-bottom: 0.4rem;
+  gap: 0.5rem;
+}
+
+.vocabulary-device-name {
+  color: var(--fg-bright);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-shadow: var(--glow-bright);
+}
+
+.vocabulary-device-port {
+  color: var(--cyan);
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+}
+
+.vocabulary-bindings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.vocabulary-binding {
+  display: grid;
+  grid-template-columns: minmax(8rem, 14rem) 1fr;
+  gap: 0.5rem;
+  font-family: var(--mono-code);
+  font-size: 0.9rem;
+  padding: 0.1rem 0;
+}
+
+.vocabulary-binding-name {
+  color: var(--fg);
+}
+
+.vocabulary-binding-detail {
+  color: var(--fg-dim);
+}
+
+/* ===== Mini-notation primer ============================================= */
+.primer {
+  padding: 0.6rem 0.9rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  max-width: 60rem;
+}
+
+.primer-section {
+  border-top: 1px solid var(--fg-rule);
+  padding-top: 0.5rem;
+}
+
+.primer-section:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.primer-h {
+  color: var(--fg-bright);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.95rem;
+  margin: 0 0 0.4rem;
+  text-shadow: var(--glow-bright);
+}
+
+.primer-p {
+  margin: 0 0 0.4rem;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  color: var(--fg);
+}
+
+.primer-code {
+  margin: 0.2rem 0;
+  padding: 0.3rem 0.5rem;
+  background: rgba(65, 255, 124, 0.04);
+  border-left: 2px solid var(--fg-rule);
+  font-family: var(--mono-code);
+  font-size: 0.95rem;
+  color: var(--fg-bright);
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+.primer-op {
+  display: grid;
+  grid-template-columns: 3rem 7rem 1fr;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.2rem 0;
+  font-size: 0.95rem;
+}
+
+.primer-op-glyph {
+  color: var(--amber);
+  font-weight: 700;
+  font-size: 1.1rem;
+  text-align: center;
+}
+
+.primer-op-grammar {
+  color: var(--fg-dim);
+  font-family: var(--mono-code);
+  letter-spacing: 0.04em;
+}
+
+.primer-op-example {
+  color: var(--fg-bright);
+  font-family: var(--mono-code);
+  background: rgba(65, 255, 124, 0.04);
+  padding: 0.1rem 0.4rem;
+  border-left: 2px solid var(--fg-rule);
+}
+
+/* ===== Autocomplete popup =============================================== */
+/* CodeMirror's @codemirror/autocomplete renders with .cm-tooltip-autocomplete
+   wrapping a <ul>; defaults are too bright for the CRT theme. */
+.cm-tooltip.cm-tooltip-autocomplete {
+  background: var(--bg-deep);
+  border: 1px solid var(--fg-rule);
+  color: var(--fg);
+  font-family: var(--mono-code);
+  text-shadow: var(--glow);
+}
+
+.cm-tooltip-autocomplete > ul > li {
+  padding: 0.15rem 0.5rem;
+  border-bottom: 1px solid transparent;
+}
+
+.cm-tooltip-autocomplete > ul > li[aria-selected] {
+  background: rgba(65, 255, 124, 0.12);
+  color: var(--fg-bright);
+  text-shadow: var(--glow-bright);
+}
+
+.cm-completionLabel {
+  color: var(--fg);
+}
+
+.cm-completionMatchedText {
+  color: var(--amber);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.cm-completionDetail {
+  color: var(--fg-dim);
+  font-style: normal;
+  margin-left: 0.6rem;
+  font-size: 0.85rem;
+}
+
+.cm-completionInfo {
+  background: var(--bg-deep);
+  border: 1px solid var(--fg-rule);
+  color: var(--fg);
+  padding: 0.3rem 0.5rem;
+  font-family: var(--mono-code);
+  font-size: 0.85rem;
+}
+
+/* CodeMirror's icons (e.g. λ for function, etc.) — tint to phosphor. */
+.cm-completionIcon {
+  color: var(--cyan);
+  opacity: 0.9;
+}
