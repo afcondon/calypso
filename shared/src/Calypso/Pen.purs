@@ -1,4 +1,14 @@
-module Calypso.Conch where
+-- | The Pen — turn-based approval permission for proposed edits.
+-- |
+-- | Calypso's collaboration model: anyone (humans, AI agents) can post
+-- | edit proposals; only the holder of the Pen accepts them into the
+-- | running source.  This module owns the WS-frame shapes the server
+-- | and frontend share for negotiating who currently holds the Pen.
+-- |
+-- | (The Pen is the conceptual descendant of Atelier's Conch — same
+-- | request/yield/force machinery, retargeted from "exclusive writer"
+-- | to "approver of incoming proposals".)
+module Calypso.Pen where
 
 import Prelude
 
@@ -32,19 +42,19 @@ subscriberIdCodec :: JsonCodec SubscriberId
 subscriberIdCodec =
   CA.prismaticCodec "SubscriberId" (Just <<< SubscriberId) unSubscriberId CA.string
 
--- | Turn-based write permission. `holder` is `Nothing` when nobody has
--- | the conch; mutating HTTP endpoints reject writes in that state with
--- | a 409. `lastActivityAt` is ms-since-epoch of the holder's most
--- | recent heartbeat or accepted write — clients show it as an idle
--- | indicator, and the server uses it to decide whether `ForceConch`
--- | from another subscriber should succeed.
-type ConchState =
+-- | Pen state.  `holder` is `Nothing` when nobody has the Pen; in that
+-- | case mutating HTTP endpoints reject writes with a 409.
+-- | `lastActivityAt` is ms-since-epoch of the holder's most recent
+-- | heartbeat or accepted action — clients show it as an idle indicator,
+-- | and the server uses it to decide whether `ForcePen` from another
+-- | subscriber should succeed.
+type PenState =
   { holder :: Maybe SubscriberId
   , lastActivityAt :: Number
   }
 
-conchStateCodec :: JsonCodec ConchState
-conchStateCodec = CAR.object "ConchState"
+penStateCodec :: JsonCodec PenState
+penStateCodec = CAR.object "PenState"
   { holder: nullableSubscriberIdCodec
   , lastActivityAt: CA.number
   }
@@ -66,23 +76,23 @@ nullableSubscriberIdCodec = CA.codec' decode encode
 -- | so late-joining clients don't stay stale until the next write.
 -- |
 -- | `Snapshot` fires after every mutating HTTP write, carrying the new
--- | compile response. The server skips the current conch holder when
+-- | compile response.  The server skips the current Pen holder when
 -- | fanning out (they already have the state they just wrote).
 -- |
--- | `ConchUpdate` fires on any conch state transition — grant, yield,
+-- | `PenUpdate` fires on any Pen state transition — grant, yield,
 -- | force, idle-revoke.
 data Broadcast
   = Welcome
       { yourId :: SubscriberId
-      , conch :: ConchState
+      , pen :: PenState
       , snapshot :: CompileResponse
       }
   | Snapshot
-      { conch :: ConchState
+      { pen :: PenState
       , snapshot :: CompileResponse
       }
-  | ConchUpdate
-      { conch :: ConchState
+  | PenUpdate
+      { pen :: PenState
       }
 
 broadcastCodec :: JsonCodec Broadcast
@@ -93,43 +103,43 @@ broadcastCodec = CA.codec' decode encode
     Just o -> case Object.lookup "type" o >>= AJ.toString of
       Just "welcome" -> do
         yid <- field "yourId" o subscriberIdCodec
-        cs <- field "conch" o conchStateCodec
+        ps <- field "pen" o penStateCodec
         sn <- field "snapshot" o compileResponseCodec
-        Right (Welcome { yourId: yid, conch: cs, snapshot: sn })
+        Right (Welcome { yourId: yid, pen: ps, snapshot: sn })
       Just "snapshot" -> do
-        cs <- field "conch" o conchStateCodec
+        ps <- field "pen" o penStateCodec
         sn <- field "snapshot" o compileResponseCodec
-        Right (Snapshot { conch: cs, snapshot: sn })
-      Just "conch" -> do
-        cs <- field "conch" o conchStateCodec
-        Right (ConchUpdate { conch: cs })
+        Right (Snapshot { pen: ps, snapshot: sn })
+      Just "pen" -> do
+        ps <- field "pen" o penStateCodec
+        Right (PenUpdate { pen: ps })
       Just tag -> Left (UnexpectedValue (AJ.fromString tag))
       Nothing -> Left (AtKey "type" MissingValue)
   encode = case _ of
     Welcome r -> tagged "welcome"
       [ "yourId" /\ CA.encode subscriberIdCodec r.yourId
-      , "conch" /\ CA.encode conchStateCodec r.conch
+      , "pen" /\ CA.encode penStateCodec r.pen
       , "snapshot" /\ CA.encode compileResponseCodec r.snapshot
       ]
     Snapshot r -> tagged "snapshot"
-      [ "conch" /\ CA.encode conchStateCodec r.conch
+      [ "pen" /\ CA.encode penStateCodec r.pen
       , "snapshot" /\ CA.encode compileResponseCodec r.snapshot
       ]
-    ConchUpdate r -> tagged "conch"
-      [ "conch" /\ CA.encode conchStateCodec r.conch
+    PenUpdate r -> tagged "pen"
+      [ "pen" /\ CA.encode penStateCodec r.pen
       ]
 
 -- | Messages a subscriber sends to the server over the WS connection.
--- | `RequestConch` asks for write permission; server replies with a
--- | `ConchUpdate` on grant, or (on denial) silently — the client reads
--- | denial from the unchanged holder in the next broadcast and enters
--- | backoff. `YieldConch` releases a held conch. `ForceConch` takes the
--- | conch if the current holder has been idle past the server's
--- | threshold (60s by default). `Heartbeat` extends the holder's lease.
+-- | `RequestPen` asks for the Pen; server replies with a `PenUpdate`
+-- | on grant, or (on denial) silently — the client reads denial from
+-- | the unchanged holder in the next broadcast and enters backoff.
+-- | `YieldPen` releases a held Pen.  `ForcePen` takes the Pen if the
+-- | current holder has been idle past the server's threshold (60s by
+-- | default).  `Heartbeat` extends the holder's lease.
 data ClientMsg
-  = RequestConch
-  | YieldConch
-  | ForceConch
+  = RequestPen
+  | YieldPen
+  | ForcePen
   | Heartbeat
 
 clientMsgCodec :: JsonCodec ClientMsg
@@ -138,29 +148,29 @@ clientMsgCodec = CA.codec' decode encode
   decode json = case AJ.toObject json of
     Nothing -> Left (TypeMismatch "ClientMsg object")
     Just o -> case Object.lookup "type" o >>= AJ.toString of
-      Just "request-conch" -> Right RequestConch
-      Just "yield-conch" -> Right YieldConch
-      Just "force-conch" -> Right ForceConch
+      Just "request-pen" -> Right RequestPen
+      Just "yield-pen" -> Right YieldPen
+      Just "force-pen" -> Right ForcePen
       Just "heartbeat" -> Right Heartbeat
       Just tag -> Left (UnexpectedValue (AJ.fromString tag))
       Nothing -> Left (AtKey "type" MissingValue)
   encode = case _ of
-    RequestConch -> tagged "request-conch" []
-    YieldConch -> tagged "yield-conch" []
-    ForceConch -> tagged "force-conch" []
+    RequestPen -> tagged "request-pen" []
+    YieldPen -> tagged "yield-pen" []
+    ForcePen -> tagged "force-pen" []
     Heartbeat -> tagged "heartbeat" []
 
 -- | Body of a 409 response when an HTTP mutating endpoint is called
--- | without the conch. Lets the client show "held by <x>, idle for Ys"
--- | and decide whether to offer a `ForceConch` button.
-type ConchHeldBody =
+-- | without the Pen.  Lets the client show "held by <x>, idle for Ys"
+-- | and decide whether to offer a `ForcePen` button.
+type PenHeldBody =
   { error :: String
   , holder :: Maybe SubscriberId
   , lastActivityAt :: Number
   }
 
-conchHeldBodyCodec :: JsonCodec ConchHeldBody
-conchHeldBodyCodec = CAR.object "ConchHeldBody"
+penHeldBodyCodec :: JsonCodec PenHeldBody
+penHeldBodyCodec = CAR.object "PenHeldBody"
   { error: CA.string
   , holder: nullableSubscriberIdCodec
   , lastActivityAt: CA.number

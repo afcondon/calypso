@@ -29,14 +29,14 @@ import Effect.Ref as Ref
 import HTTPurple.WebSocket (ServerSocket, close, send)
 import HTTPurple.WebSocket.Types (Message)
 
-import Calypso.Conch (SubscriberId(..))
+import Calypso.Pen (SubscriberId(..))
 
 -- | Live WebSocket subscribers, keyed by their `ServerSocket`. Keying
 -- | on the socket (rather than the id) matches the shape of
 -- | `WsHandler.onMessage`: the framework hands us the socket, and we
 -- | look up which id it was issued. HTTP authorisation doesn't need
 -- | the reverse — the `X-Atelier-Subscriber-Id` header is compared
--- | directly against the conch holder without a socket round-trip.
+-- | directly against the Pen holder without a socket round-trip.
 newtype Subscribers = Subscribers (Ref (Map ServerSocket SubscriberId))
 
 newSubscribers :: Effect Subscribers
@@ -63,7 +63,7 @@ unregister (Subscribers ref) sock = Ref.modify_ (Map.delete sock) ref
 
 -- | Which id is this socket registered under, if any? Used in
 -- | `onMessage` / `onClose` / `onError` to identify the subscriber
--- | before dispatching to the conch state machine.
+-- | before dispatching to the Pen state machine.
 idFor :: Subscribers -> ServerSocket -> Effect (Maybe SubscriberId)
 idFor (Subscribers ref) sock = Map.lookup sock <$> Ref.read ref
 

@@ -1,5 +1,5 @@
-module Calypso.Server.Conch
-  ( ConchStore
+module Calypso.Server.Pen
+  ( PenStore
   , RequestResult(..)
   , newStore
   , getState
@@ -18,39 +18,39 @@ import Effect (Effect)
 import Effect.Ref (Ref)
 import Effect.Ref as Ref
 
-import Calypso.Conch (ConchState, SubscriberId)
+import Calypso.Pen (PenState, SubscriberId)
 
--- | In-memory conch state, shared by the HTTP writer endpoints (which
+-- | In-memory Pen state, shared by the HTTP writer endpoints (which
 -- | authorise against `holder`) and the WS message dispatcher (which
 -- | mutates it on `request`/`yield`/`force`/heartbeats).
-newtype ConchStore = ConchStore (Ref ConchState)
+newtype PenStore = PenStore (Ref PenState)
 
-newStore :: Effect ConchStore
+newStore :: Effect PenStore
 newStore = do
   now <- currentTimeMs
   ref <- Ref.new { holder: Nothing, lastActivityAt: now }
-  pure (ConchStore ref)
+  pure (PenStore ref)
 
-getState :: ConchStore -> Effect ConchState
-getState (ConchStore ref) = Ref.read ref
+getState :: PenStore -> Effect PenState
+getState (PenStore ref) = Ref.read ref
 
 -- | How long the holder can be silent before another subscriber's
--- | `ForceConch` is allowed to succeed. 60s is the agreed default;
+-- | `ForcePen` is allowed to succeed. 60s is the agreed default;
 -- | exposed in case a test or a config knob wants to override.
 idleTimeoutMs :: Number
 idleTimeoutMs = 60000.0
 
--- | Result of a state-changing conch operation. `Granted` carries the
+-- | Result of a state-changing Pen operation.  `Granted` carries the
 -- | new state and signals "broadcast this to all subscribers".
--- | `Unchanged` means the request was rejected (e.g. the conch is held
+-- | `Unchanged` means the request was rejected (e.g. the Pen is held
 -- | by someone active) — no state change, no broadcast, and the
 -- | requester's client-side backoff kicks in.
 data RequestResult
-  = Granted ConchState
+  = Granted PenState
   | Unchanged
 
-request :: ConchStore -> SubscriberId -> Effect RequestResult
-request (ConchStore ref) sid = do
+request :: PenStore -> SubscriberId -> Effect RequestResult
+request (PenStore ref) sid = do
   cs <- Ref.read ref
   case cs.holder of
     Nothing -> do
@@ -60,10 +60,10 @@ request (ConchStore ref) sid = do
       pure (Granted cs')
     Just _ -> pure Unchanged
 
--- | Release a held conch. No-op if the caller isn't actually the
+-- | Release a held Pen.  No-op if the caller isn't actually the
 -- | holder (defensive — the WS dispatcher also verifies identity).
-yield :: ConchStore -> SubscriberId -> Effect RequestResult
-yield (ConchStore ref) sid = do
+yield :: PenStore -> SubscriberId -> Effect RequestResult
+yield (PenStore ref) sid = do
   cs <- Ref.read ref
   case cs.holder of
     Just h | h == sid -> do
@@ -73,11 +73,11 @@ yield (ConchStore ref) sid = do
       pure (Granted cs')
     _ -> pure Unchanged
 
--- | Take an idle holder's conch. Succeeds only if the current holder
+-- | Take an idle holder's Pen.  Succeeds only if the current holder
 -- | has been silent past `idleTimeoutMs`; otherwise the request is
 -- | rejected the same as a normal `request`.
-force :: ConchStore -> SubscriberId -> Effect RequestResult
-force (ConchStore ref) sid = do
+force :: PenStore -> SubscriberId -> Effect RequestResult
+force (PenStore ref) sid = do
   cs <- Ref.read ref
   now <- currentTimeMs
   case cs.holder of
@@ -94,10 +94,10 @@ force (ConchStore ref) sid = do
         else pure Unchanged
 
 -- | Touch the activity timestamp — called on holder-originated
--- | `Heartbeat` messages and after every accepted HTTP write. Silent
--- | no-op if the caller doesn't hold the conch.
-heartbeat :: ConchStore -> SubscriberId -> Effect Unit
-heartbeat (ConchStore ref) sid = do
+-- | `Heartbeat` messages and after every accepted HTTP write.  Silent
+-- | no-op if the caller doesn't hold the Pen.
+heartbeat :: PenStore -> SubscriberId -> Effect Unit
+heartbeat (PenStore ref) sid = do
   cs <- Ref.read ref
   case cs.holder of
     Just h | h == sid -> do
@@ -105,10 +105,10 @@ heartbeat (ConchStore ref) sid = do
       Ref.write (cs { lastActivityAt = now }) ref
     _ -> pure unit
 
--- | WS disconnect hook. If the departing subscriber held the conch,
+-- | WS disconnect hook.  If the departing subscriber held the Pen,
 -- | release it and return the new state for broadcast.
-onDisconnect :: ConchStore -> SubscriberId -> Effect RequestResult
-onDisconnect (ConchStore ref) sid = do
+onDisconnect :: PenStore -> SubscriberId -> Effect RequestResult
+onDisconnect (PenStore ref) sid = do
   cs <- Ref.read ref
   case cs.holder of
     Just h | h == sid -> do

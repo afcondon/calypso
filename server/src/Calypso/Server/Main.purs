@@ -45,22 +45,22 @@ import Routing.Duplex.Generic (noArgs, sum)
 import Routing.Duplex.Generic.Syntax ((/), (?))
 
 import Data.Int as Int
-import Calypso.Server.Conch (ConchStore, RequestResult(..))
-import Calypso.Server.Conch as Conch
+import Calypso.Server.Pen (PenStore, RequestResult(..))
+import Calypso.Server.Pen as Pen
 import Calypso.Server.Favorites as Favorites
 import Calypso.Server.Session (EvalRequest, EvalResponse, ModulePatch(..), SessionStore, evalResponseCodec)
 import Calypso.Server.Session as Session
 import Calypso.Server.Subscribers (Subscribers)
 import Calypso.Server.Subscribers as Subscribers
 import Data.String as String
-import Calypso.Conch
+import Calypso.Pen
   ( Broadcast(..)
   , SubscriberId(..)
   , broadcastCodec
   , clientMsgCodec
-  , conchHeldBodyCodec
+  , penHeldBodyCodec
   )
-import Calypso.Conch as PConch
+import Calypso.Pen as PPen
 import Calypso.Favorite (favoritesCodec)
 import Calypso.Session
   ( Cell
@@ -273,11 +273,11 @@ evalResponseJson = stringify <<< CA.encode evalResponseCodec
 -- |
 -- | Single-store app context.  Calypso runs one session per server
 -- | (no /workspaces partitioning); the broadcast hooks plus the
--- | conch live alongside it.
+-- | pen live alongside it.
 type AppCtx =
   { mainStore :: SessionStore
   , subs :: Subscribers
-  , conchStore :: ConchStore
+  , penStore :: PenStore
   }
 
 -- | Flattener for handlers that target the single store.  Kept as a
@@ -301,33 +301,33 @@ errorJson code message =
     { error: code, message }
 
 -- | Before any mutating HTTP endpoint runs its work, the caller must
--- | prove they hold the conch via the `X-Atelier-Subscriber-Id`
+-- | prove they hold the pen via the `X-Atelier-Subscriber-Id`
 -- | header. Missing header / mismatched id / nobody-holds-it all yield
--- | a 409 with the current conch state in the body so the client can
--- | decide whether to `RequestConch` or `ForceConch`.
+-- | a 409 with the current pen state in the body so the client can
+-- | decide whether to `RequestPen` or `ForcePen`.
 -- |
 -- | Returns the caller's `SubscriberId` on success so the writer can
--- | heartbeat the conch after the write lands.
-requireConch
+-- | heartbeat the pen after the write lands.
+requirePen
   :: AppCtx
   -> Request Route
   -> Aff (Either ResponseOrUpgrade SubscriberId)
-requireConch ctx req = do
-  conch <- liftEffect $ Conch.getState ctx.conchStore
+requirePen ctx req = do
+  pen <- liftEffect $ Pen.getState ctx.penStore
   let deny = do
         let body =
-              { error: "conch-held"
-              , holder: conch.holder
-              , lastActivityAt: conch.lastActivityAt
+              { error: "pen-held"
+              , holder: pen.holder
+              , lastActivityAt: pen.lastActivityAt
               }
-            json = stringify (CA.encode conchHeldBodyCodec body)
+            json = stringify (CA.encode penHeldBodyCodec body)
         r <- conflict' jsonCors json
         pure (Left r)
   case req.headers !! "X-Atelier-Subscriber-Id" of
     Nothing -> deny
     Just raw ->
       let sid = SubscriberId raw
-      in case conch.holder of
+      in case pen.holder of
           Just h | h == sid -> pure (Right sid)
           _ -> deny
 
@@ -359,11 +359,11 @@ makeWsHandler :: AppCtx -> WsHandler
 makeWsHandler ctx = wsHandler
   { onOpen: \sock -> do
       sid <- liftEffect $ Subscribers.register ctx.subs sock
-      conch <- liftEffect $ Conch.getState ctx.conchStore
+      pen <- liftEffect $ Pen.getState ctx.penStore
       -- Phase 1b: browser tabs always observe the "main" workspace.
       -- Per-subscriber workspace routing is a Phase 2 concern.
       snap <- liftEffect $ Session.get ctx.mainStore
-      let welcome = Welcome { yourId: sid, conch, snapshot: snap }
+      let welcome = Welcome { yourId: sid, pen, snapshot: snap }
       sendText sock (stringify (CA.encode broadcastCodec welcome))
   , onMessage: \sock msg -> case msg of
       TextMessage raw -> handleClientMsg ctx sock raw
@@ -374,8 +374,8 @@ makeWsHandler ctx = wsHandler
       case maybeSid of
         Nothing -> pure unit
         Just sid -> do
-          r <- liftEffect $ Conch.onDisconnect ctx.conchStore sid
-          handleConchResult ctx r
+          r <- liftEffect $ Pen.onDisconnect ctx.penStore sid
+          handlePenResult ctx r
   , onError: \_ _ -> pure unit
   }
 
@@ -390,23 +390,23 @@ handleClientMsg ctx sock raw = case jsonParser raw of
         Nothing -> pure unit
         Just sid -> dispatchClientMsg ctx sid cm
 
-dispatchClientMsg :: AppCtx -> SubscriberId -> PConch.ClientMsg -> Aff Unit
+dispatchClientMsg :: AppCtx -> SubscriberId -> PPen.ClientMsg -> Aff Unit
 dispatchClientMsg ctx sid = case _ of
-  PConch.RequestConch -> do
-    r <- liftEffect $ Conch.request ctx.conchStore sid
-    handleConchResult ctx r
-  PConch.YieldConch -> do
-    r <- liftEffect $ Conch.yield ctx.conchStore sid
-    handleConchResult ctx r
-  PConch.ForceConch -> do
-    r <- liftEffect $ Conch.force ctx.conchStore sid
-    handleConchResult ctx r
-  PConch.Heartbeat -> liftEffect $ Conch.heartbeat ctx.conchStore sid
+  PPen.RequestPen -> do
+    r <- liftEffect $ Pen.request ctx.penStore sid
+    handlePenResult ctx r
+  PPen.YieldPen -> do
+    r <- liftEffect $ Pen.yield ctx.penStore sid
+    handlePenResult ctx r
+  PPen.ForcePen -> do
+    r <- liftEffect $ Pen.force ctx.penStore sid
+    handlePenResult ctx r
+  PPen.Heartbeat -> liftEffect $ Pen.heartbeat ctx.penStore sid
 
-handleConchResult :: AppCtx -> RequestResult -> Aff Unit
-handleConchResult ctx = case _ of
+handlePenResult :: AppCtx -> RequestResult -> Aff Unit
+handlePenResult ctx = case _ of
   Granted cs -> do
-    let msg = ConchUpdate { conch: cs }
+    let msg = PenUpdate { pen: cs }
         encoded = stringify (CA.encode broadcastCodec msg)
     Subscribers.broadcast ctx.subs Nothing (TextMessage encoded)
   Unchanged -> pure unit
@@ -433,19 +433,19 @@ main = serveWithHandle { port: 3060, hostname: "0.0.0.0" } \handle -> do
   Favorites.ensureFavoritesDir favDir
   defaultBody <- Favorites.loadDefaultBody favDir
   subs <- Subscribers.newSubscribers
-  conchStore <- Conch.newStore
+  penStore <- Pen.newStore
   handle.registerChannel (Subscribers.closeAll subs)
   let broadcastSnapshot resp = do
-        conch <- liftEffect $ Conch.getState conchStore
-        let msg = Snapshot { conch, snapshot: resp }
+        pen <- liftEffect $ Pen.getState penStore
+        let msg = Snapshot { pen, snapshot: resp }
             encoded = stringify (CA.encode broadcastCodec msg)
-        Subscribers.broadcast subs conch.holder (TextMessage encoded)
+        Subscribers.broadcast subs pen.holder (TextMessage encoded)
   mainStore <- Session.newStore
     sessionDir
     "calypso-runtime"
     defaultBody
     broadcastSnapshot
-  let ctx = { mainStore, subs, conchStore }
+  let ctx = { mainStore, subs, penStore }
   pure
     { route
     , router: mkRouter ctx
@@ -471,8 +471,8 @@ mkRouter ctx req@{ route: r, method, body } =
         -- With body: set state from the CompileRequest, then compile.
         -- This is the shape the frontend POSTs today.
         -- Without body (empty string): recompile current state.
-        -- Either way, mutates — requires the conch.
-        authResult <- requireConch ctx req
+        -- Either way, mutates — requires the pen.
+        authResult <- requirePen ctx req
         case authResult of
           Left r' -> pure r'
           Right sid -> do
@@ -482,7 +482,7 @@ mkRouter ctx req@{ route: r, method, body } =
               else case parseBody compileRequestCodec bodyStr of
                 Left _ -> liftAff (Session.compileAndStore store)
                 Right rq -> liftAff (Session.replaceAll store rq)
-            liftEffect $ Conch.heartbeat ctx.conchStore sid
+            liftEffect $ Pen.heartbeat ctx.penStore sid
             ok' jsonCors (snapshotJson resp)
 
       SessionModule { preview } -> withStore ctx req \store -> case method of
@@ -496,12 +496,12 @@ mkRouter ctx req@{ route: r, method, body } =
                   resp <- liftAff (Session.previewUpdateModule store (UserModule { source }))
                   ok' jsonCors (snapshotJson resp)
                 else do
-                  authResult <- requireConch ctx req
+                  authResult <- requirePen ctx req
                   case authResult of
                     Left r' -> pure r'
                     Right sid -> do
                       resp <- liftAff (Session.updateModule store (UserModule { source }))
-                      liftEffect $ Conch.heartbeat ctx.conchStore sid
+                      liftEffect $ Pen.heartbeat ctx.penStore sid
                       ok' jsonCors (snapshotJson resp)
         Patch -> do
           bodyStr <- toString body
@@ -515,7 +515,7 @@ mkRouter ctx req@{ route: r, method, body } =
                     Left msg -> ok' jsonCors (errorSnapshotJson "BadRequest" msg)
                     Right resp -> ok' jsonCors (snapshotJson resp)
                 else do
-                  authResult <- requireConch ctx req
+                  authResult <- requirePen ctx req
                   case authResult of
                     Left r' -> pure r'
                     Right sid -> do
@@ -523,7 +523,7 @@ mkRouter ctx req@{ route: r, method, body } =
                       case result of
                         Left msg -> ok' jsonCors (errorSnapshotJson "BadRequest" msg)
                         Right resp -> do
-                          liftEffect $ Conch.heartbeat ctx.conchStore sid
+                          liftEffect $ Pen.heartbeat ctx.penStore sid
                           ok' jsonCors (snapshotJson resp)
         _ -> ok' jsonCors (errorSnapshotJson "MethodNotAllowed" "module endpoint accepts POST or PATCH")
 
@@ -537,12 +537,12 @@ mkRouter ctx req@{ route: r, method, body } =
                 resp <- liftAff (Session.previewAppendCell store rq)
                 ok' jsonCors (snapshotJson resp)
               else do
-                authResult <- requireConch ctx req
+                authResult <- requirePen ctx req
                 case authResult of
                   Left r' -> pure r'
                   Right sid -> do
                     resp <- liftAff (Session.appendCell store rq)
-                    liftEffect $ Conch.heartbeat ctx.conchStore sid
+                    liftEffect $ Pen.heartbeat ctx.penStore sid
                     ok' jsonCors (snapshotJson resp)
 
       SessionCellAt cellId { preview } -> withStore ctx req \store -> case method of
@@ -552,12 +552,12 @@ mkRouter ctx req@{ route: r, method, body } =
               resp <- liftAff (Session.previewRemoveCell store cellId)
               ok' jsonCors (snapshotJson resp)
             else do
-              authResult <- requireConch ctx req
+              authResult <- requirePen ctx req
               case authResult of
                 Left r' -> pure r'
                 Right sid -> do
                   resp <- liftAff (Session.removeCell store cellId)
-                  liftEffect $ Conch.heartbeat ctx.conchStore sid
+                  liftEffect $ Pen.heartbeat ctx.penStore sid
                   ok' jsonCors (snapshotJson resp)
         Patch -> do
           bodyStr <- toString body
@@ -569,12 +569,12 @@ mkRouter ctx req@{ route: r, method, body } =
                   resp <- liftAff (Session.previewUpdateCell store cellId patch)
                   ok' jsonCors (snapshotJson resp)
                 else do
-                  authResult <- requireConch ctx req
+                  authResult <- requirePen ctx req
                   case authResult of
                     Left r' -> pure r'
                     Right sid -> do
                       resp <- liftAff (Session.updateCell store cellId patch)
-                      liftEffect $ Conch.heartbeat ctx.conchStore sid
+                      liftEffect $ Pen.heartbeat ctx.penStore sid
                       ok' jsonCors (snapshotJson resp)
         _ -> ok' jsonCors (errorSnapshotJson "MethodNotAllowed" "cell endpoint accepts PATCH or DELETE")
 

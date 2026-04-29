@@ -43,15 +43,15 @@ import Calypso.Frontend.Editor as Editor
 import Calypso.Frontend.Favorite as Favorite
 import Calypso.Frontend.WsClient as WsClient
 import Calypso.Favorite (Favorite(..))
-import Calypso.Conch
+import Calypso.Pen
   ( Broadcast(..)
   , ClientMsg(..)
-  , ConchHeldBody
-  , ConchState
+  , PenHeldBody
+  , PenState
   , SubscriberId
   , broadcastCodec
   , clientMsgCodec
-  , conchHeldBodyCodec
+  , penHeldBodyCodec
   , unSubscriberId
   )
 import Calypso.Session
@@ -189,15 +189,19 @@ type State =
   , compositionStatus :: Maybe String
   , cellTypes :: Map String String
   , pendingCompile :: Maybe H.ForkId
-  -- Conch + WebSocket transport, unchanged from Atelier.
+  -- Pen + WebSocket transport.  The Pen is the descendant of
+  -- Atelier's Conch — same plumbing, retargeted from "exclusive
+  -- writer" to "approver of incoming proposals" once that
+  -- machinery exists.  Today the holder is still the only one who
+  -- can mutate /session/* state.
   , myId :: Maybe SubscriberId
-  , conch :: ConchState
-  , requestingConch :: Boolean
-  , nextConchRetryAt :: Maybe Number
-  , conchBackoffMs :: Int
+  , pen :: PenState
+  , requestingPen :: Boolean
+  , nextPenRetryAt :: Maybe Number
+  , penBackoffMs :: Int
   , ws :: Maybe WsClient.WebSocket
   , wsSub :: Maybe H.SubscriptionId
-  , conchBanner :: Maybe String
+  , penBanner :: Maybe String
   , lastSyncedModule :: String
   , lastSyncedCells :: Map String { source :: String, kind :: String }
   , lastSyncedRuntime :: String
@@ -233,10 +237,10 @@ data Action
   | WsIncoming String
   | WsClosed Int String
   | WsErrored
-  | RequestConchAction
-  | YieldConchAction
-  | ForceConchAction
-  | DismissConchBanner
+  | RequestPenAction
+  | YieldPenAction
+  | ForcePenAction
+  | DismissPenBanner
   | ToggleColumn ColumnKey
   | Startup
 
@@ -264,13 +268,13 @@ initialState _ =
   , cellTypes: Map.empty
   , pendingCompile: Nothing
   , myId: Nothing
-  , conch: { holder: Nothing, lastActivityAt: 0.0 }
-  , requestingConch: false
-  , nextConchRetryAt: Nothing
-  , conchBackoffMs: 250
+  , pen: { holder: Nothing, lastActivityAt: 0.0 }
+  , requestingPen: false
+  , nextPenRetryAt: Nothing
+  , penBackoffMs: 250
   , ws: Nothing
   , wsSub: Nothing
-  , conchBanner: Nothing
+  , penBanner: Nothing
   , lastSyncedModule: ""
   , lastSyncedCells: Map.empty
   , lastSyncedRuntime: ""
@@ -375,14 +379,14 @@ handleAction = case _ of
   WsIncoming raw -> handleIncomingBroadcast raw
   WsClosed _ _ -> H.modify_ _ { ws = Nothing }
   WsErrored -> pure unit
-  RequestConchAction -> do
-    sendClientMsg RequestConch
-    H.modify_ _ { requestingConch = true }
-  YieldConchAction -> sendClientMsg YieldConch
-  ForceConchAction -> do
-    sendClientMsg ForceConch
-    H.modify_ _ { requestingConch = true }
-  DismissConchBanner -> H.modify_ _ { conchBanner = Nothing }
+  RequestPenAction -> do
+    sendClientMsg RequestPen
+    H.modify_ _ { requestingPen = true }
+  YieldPenAction -> sendClientMsg YieldPen
+  ForcePenAction -> do
+    sendClientMsg ForcePen
+    H.modify_ _ { requestingPen = true }
+  DismissPenBanner -> H.modify_ _ { penBanner = Nothing }
   ScheduleCompile -> do
     s <- H.get
     case s.pendingCompile of
@@ -596,21 +600,21 @@ httpJson method url bodyJson = do
     Left err -> pure (Left (AX.printError err))
     Right r -> case r.status of
       AX.StatusCode 409 -> do
-        let banner = case CA.decode conchHeldBodyCodec r.body of
-              Left _ -> "Another viewer holds the conch."
-              Right held -> conchHeldMessage held
-        H.modify_ _ { conchBanner = Just banner, compiling = false }
-        pure (Left ("conch-held: " <> banner))
+        let banner = case CA.decode penHeldBodyCodec r.body of
+              Left _ -> "Another viewer holds the pen."
+              Right held -> penHeldMessage held
+        H.modify_ _ { penBanner = Just banner, compiling = false }
+        pure (Left ("pen-held: " <> banner))
       AX.StatusCode code
         | code >= 200 && code < 300 -> case CA.decode compileResponseCodec r.body of
             Left decodeErr -> pure (Left ("decode: " <> CA.printJsonDecodeError decodeErr))
             Right resp -> pure (Right resp)
         | otherwise -> pure (Left ("HTTP " <> show code))
 
-conchHeldMessage :: ConchHeldBody -> String
-conchHeldMessage held = case held.holder of
-  Nothing -> "Conch is unclaimed. Take it to write."
-  Just _ -> "Another viewer holds the conch. Request it to write."
+penHeldMessage :: PenHeldBody -> String
+penHeldMessage held = case held.holder of
+  Nothing -> "Pen is unclaimed. Take it to write."
+  Just _ -> "Another viewer holds the pen. Request it to write."
 
 encodeJsonObject :: Array (Tuple String String) -> Json
 encodeJsonObject pairs =
@@ -747,46 +751,46 @@ handleIncomingBroadcast raw = case jsonParser raw of
     Left _ -> pure unit
     Right bc -> case bc of
       Welcome r -> do
-        H.modify_ _ { myId = Just r.yourId, conch = r.conch }
+        H.modify_ _ { myId = Just r.yourId, pen = r.pen }
         let CompileResponse snap = r.snapshot
         applyRemote snap
         syncEditorsEditable
-        -- Auto-claim the conch if nobody holds it.  Algorave-shaped
+        -- Auto-claim the pen if nobody holds it.  Algorave-shaped
         -- live coding is usually one-person-one-rig; the click-to-
         -- take friction is pure tax.  If somebody else already
         -- holds it (the rare collab case) we leave them alone.
-        case r.conch.holder of
-          Nothing -> handleAction RequestConchAction
+        case r.pen.holder of
+          Nothing -> handleAction RequestPenAction
           Just _ -> pure unit
       Snapshot r -> do
-        H.modify_ _ { conch = r.conch }
+        H.modify_ _ { pen = r.pen }
         s <- H.get
         let CompileResponse snap = r.snapshot
         when (remoteDiffers s snap) (applyRemote snap)
-      ConchUpdate r -> do
+      PenUpdate r -> do
         s <- H.get
-        let wasRequesting = s.requestingConch
-            iHoldNow = case r.conch.holder, s.myId of
+        let wasRequesting = s.requestingPen
+            iHoldNow = case r.pen.holder, s.myId of
               Just h, Just me -> h == me
               _, _ -> false
             -- A 409 from any mutating call (e.g. LoadFavorite while
-            -- somebody else held the conch) leaves a "conch-held"
+            -- somebody else held the pen) leaves a "pen-held"
             -- transportError sitting in the error panel.  Once the
-            -- user has the conch the error is stale; clear it (and
+            -- user has the pen the error is stale; clear it (and
             -- any runtimeError) so the panel mirrors the live state.
-            stale = iHoldNow && isConchHeldError s.transportError
+            stale = iHoldNow && isPenHeldError s.transportError
         H.modify_ _
-          { conch = r.conch
-          , requestingConch = if iHoldNow || (not wasRequesting) then false else s.requestingConch
-          , conchBackoffMs = if iHoldNow then 250 else s.conchBackoffMs
-          , conchBanner = if iHoldNow then Nothing else s.conchBanner
+          { pen = r.pen
+          , requestingPen = if iHoldNow || (not wasRequesting) then false else s.requestingPen
+          , penBackoffMs = if iHoldNow then 250 else s.penBackoffMs
+          , penBanner = if iHoldNow then Nothing else s.penBanner
           , transportError = if stale then Nothing else s.transportError
           , runtimeError = if iHoldNow then Nothing else s.runtimeError
           }
         syncEditorsEditable
         where
-        isConchHeldError = case _ of
-          Just msg -> Str.take 11 msg == "conch-held:"
+        isPenHeldError = case _ of
+          Just msg -> Str.take 9 msg == "pen-held:"
           Nothing -> false
 
 syncEditorsEditable
@@ -795,13 +799,13 @@ syncEditorsEditable
   => H.HalogenM State Action Slots o m Unit
 syncEditorsEditable = do
   s <- H.get
-  let editable = iHoldConch s
+  let editable = iHoldPen s
   _ <- H.tell _moduleEditor unit (Editor.SetEditable editable)
   for_ s.cells \c ->
     H.tell _cellEditor c.id (Editor.SetEditable editable)
 
-iHoldConch :: State -> Boolean
-iHoldConch s = case s.conch.holder, s.myId of
+iHoldPen :: State -> Boolean
+iHoldPen s = case s.pen.holder, s.myId of
   Just h, Just me -> h == me
   _, _ -> false
 
@@ -952,7 +956,7 @@ render state =
         )
     ]
     [ renderHeader state
-    , renderConchBanner state
+    , renderPenBanner state
     , if state.settingsOpen then renderSettingsPanel state else HH.text ""
     , HH.main
         [ HP.class_ (H.ClassName "columns")
@@ -965,23 +969,23 @@ render state =
     , renderErrorPanel state
     ]
 
-renderConchBanner :: forall m. State -> H.ComponentHTML Action Slots m
-renderConchBanner state = case state.conchBanner of
+renderPenBanner :: forall m. State -> H.ComponentHTML Action Slots m
+renderPenBanner state = case state.penBanner of
   Nothing -> HH.text ""
   Just msg ->
-    HH.div [ HP.class_ (H.ClassName "conch-banner") ]
+    HH.div [ HP.class_ (H.ClassName "pen-banner") ]
       [ HH.text msg
       , HH.button
-          [ HP.class_ (H.ClassName "conch-banner-dismiss")
-          , HE.onClick \_ -> DismissConchBanner
+          [ HP.class_ (H.ClassName "pen-banner-dismiss")
+          , HE.onClick \_ -> DismissPenBanner
           ]
           [ HH.text "×" ]
       ]
 
 stateIdleMsFor :: State -> Number
-stateIdleMsFor state = case state.conch.holder of
+stateIdleMsFor state = case state.pen.holder of
   Nothing -> 0.0
-  Just _ -> state.conch.lastActivityAt
+  Just _ -> state.pen.lastActivityAt
 
 renderSettingsPanel :: forall m. State -> H.ComponentHTML Action Slots m
 renderSettingsPanel _ =
@@ -1007,23 +1011,23 @@ renderHeader state =
         , HE.onClick \_ -> ToggleSettings
         ]
         [ HH.text "⚙" ]
-    , renderTitleConch state
+    , renderTitlePen state
     , renderViewToggle state
     , HH.div [ HP.class_ (H.ClassName "header-spacer") ] []
     , renderFavoritesDropdown state
     , HH.div [ HP.class_ (H.ClassName "header-spacer") ] []
     ]
 
-renderTitleConch :: forall m. State -> H.ComponentHTML Action Slots m
-renderTitleConch state =
-  let iHold = iHoldConch state
-      nobodyHolds = case state.conch.holder of
+renderTitlePen :: forall m. State -> H.ComponentHTML Action Slots m
+renderTitlePen state =
+  let iHold = iHoldPen state
+      nobodyHolds = case state.pen.holder of
         Nothing -> true
         Just _ -> false
       somebodyElseHolds = (not iHold) && (not nobodyHolds)
       idleMs = stateIdleMsFor state
       forceable = somebodyElseHolds && idleMs > 60000.0
-      requesting = state.requestingConch && (not iHold)
+      requesting = state.requestingPen && (not iHold)
       status
         | iHold = "You hold the pen"
         | requesting = "Requesting…"
@@ -1031,27 +1035,27 @@ renderTitleConch state =
         | forceable = "Held (idle — force?)"
         | otherwise = "Observing"
       stateCls
-        | iHold = "conch-holding"
-        | requesting = "conch-requesting"
-        | nobodyHolds = "conch-unclaimed"
-        | otherwise = "conch-observing"
+        | iHold = "pen-holding"
+        | requesting = "pen-requesting"
+        | nobodyHolds = "pen-unclaimed"
+        | otherwise = "pen-observing"
       title
-        | iHold = "You hold the conch. Click to yield."
-        | nobodyHolds = "Nobody holds the conch. Click to take it."
+        | iHold = "You hold the pen. Click to yield."
+        | nobodyHolds = "Nobody holds the pen. Click to take it."
         | forceable = "Holder has been idle >60s. Click to force-take."
-        | otherwise = "Another viewer holds the conch. Click to request it."
+        | otherwise = "Another viewer holds the pen. Click to request it."
       action
-        | iHold = YieldConchAction
-        | forceable = ForceConchAction
-        | otherwise = RequestConchAction
+        | iHold = YieldPenAction
+        | forceable = ForcePenAction
+        | otherwise = RequestPenAction
   in HH.button
-       [ HP.class_ (H.ClassName ("title-conch " <> stateCls))
+       [ HP.class_ (H.ClassName ("title-pen " <> stateCls))
        , HP.title title
        , HE.onClick \_ -> action
        ]
-       [ HH.span [ HP.class_ (H.ClassName "title-conch-name") ]
+       [ HH.span [ HP.class_ (H.ClassName "title-pen-name") ]
            [ HH.text "Calypso" ]
-       , HH.span [ HP.class_ (H.ClassName "title-conch-status") ]
+       , HH.span [ HP.class_ (H.ClassName "title-pen-status") ]
            [ HH.text status ]
        ]
 

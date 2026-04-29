@@ -101,7 +101,7 @@ type ImportSpec =
 -- |
 -- | `broadcast` is called after every accepted mutation with the fresh
 -- | `CompileResponse`. Main.purs wires it to push a `Snapshot` frame to
--- | every WS subscriber (minus the conch holder, whose client already
+-- | every WS subscriber (minus the Pen holder, whose client already
 -- | has the state it just wrote). Preview endpoints do not broadcast.
 newtype SessionStore = SessionStore
   { lock :: AVar Unit

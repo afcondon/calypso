@@ -102,8 +102,8 @@ body::before {
 .settings-btn:hover { color: var(--fg); border-color: var(--fg); }
 .settings-btn.active { color: var(--fg-bright); border-color: var(--fg-bright); }
 
-/* ===== Title / conch indicator ========================================== */
-.title-conch {
+/* ===== Title / pen indicator ========================================== */
+.title-pen {
   font: inherit;
   font-family: var(--mono);
   font-size: 1.4rem;
@@ -120,7 +120,7 @@ body::before {
   letter-spacing: 0.04em;
 }
 
-.title-conch-name {
+.title-pen-name {
   font-size: 1.25rem;
   font-weight: normal;
   text-transform: uppercase;
@@ -129,25 +129,25 @@ body::before {
   text-shadow: var(--glow-bright);
 }
 
-.title-conch-status {
+.title-pen-status {
   font-size: 0.85rem;
   color: var(--fg-dim);
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
 
-.title-conch.conch-holding { border-left-color: var(--fg-bright); }
-.title-conch.conch-holding .title-conch-status { color: var(--fg-bright); }
+.title-pen.pen-holding { border-left-color: var(--fg-bright); }
+.title-pen.pen-holding .title-pen-status { color: var(--fg-bright); }
 
-.title-conch.conch-requesting { border-left-color: var(--amber); }
-.title-conch.conch-requesting .title-conch-status { color: var(--amber); }
+.title-pen.pen-requesting { border-left-color: var(--amber); }
+.title-pen.pen-requesting .title-pen-status { color: var(--amber); }
 
-.title-conch.conch-unclaimed { border-left-color: var(--cyan); }
-.title-conch.conch-unclaimed .title-conch-status { color: var(--cyan); }
+.title-pen.pen-unclaimed { border-left-color: var(--cyan); }
+.title-pen.pen-unclaimed .title-pen-status { color: var(--cyan); }
 
-.title-conch.conch-observing { border-left-color: var(--fg-rule); }
+.title-pen.pen-observing { border-left-color: var(--fg-rule); }
 
-.title-conch:hover { border-color: var(--fg); }
+.title-pen:hover { border-color: var(--fg); }
 
 /* ===== View toggle ====================================================== */
 .view-toggle { display: inline-flex; gap: 0.25rem; }
@@ -223,7 +223,7 @@ body::before {
 .starter-desc { font-size: 0.85rem; color: var(--fg-dim); margin-top: 0.15rem; }
 
 /* ===== Conch banner ===================================================== */
-.conch-banner {
+.pen-banner {
   background: var(--bg-elev);
   color: var(--amber);
   border-bottom: 1px solid var(--amber);
@@ -235,7 +235,7 @@ body::before {
   text-shadow: 0 0 4px rgba(255, 184, 74, 0.5);
 }
 
-.conch-banner-dismiss {
+.pen-banner-dismiss {
   font: inherit;
   background: transparent;
   border: 1px solid var(--amber);
