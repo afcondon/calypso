@@ -19,7 +19,7 @@ runtime-workspace/workspaces/eval-scratch/
 # Per-workspace persisted session state (module + cells + runtime).
 # Written on every session mutation so restarts don't lose the human's
 # work; regenerates cleanly from /session/* activity and is not source.
-runtime-workspace/workspaces/*/atelier-session.json
+runtime-workspace/workspaces/*/calypso-session.json
 
 # Local Claude Code settings (per-machine permission grants) and the
 # runtime file purs ide writes next to the project root.

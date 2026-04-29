@@ -130,12 +130,35 @@ type SessionState =
 
 initialState :: SessionState
 initialState =
-  { runtime: "browser"
-  , "module": UserModule { source: "module Scratch where\n\nimport Prelude\n" }
+  { runtime: "purerl-tidal-ws"
+  , "module": UserModule { source: tidalStarterModule }
   , cells: []
   , nextCellId: 1
   , lastResponse: Nothing
   }
+
+-- | Starter content for a fresh Calypso session. Comment-encoded
+-- | `-- @` directives are how compositions carry score-shaped
+-- | metadata (scales, chord progressions, named melodic lines) that
+-- | the typographic layer will render alongside the runnable text.
+-- | The frontend hasn't grown the @-directive parser yet; landing
+-- | the starter shape now means new sessions arrive in the right
+-- | mental model from day one.
+tidalStarterModule :: String
+tidalStarterModule = """-- Calypso composition. Edit freely; cells fire against a running
+-- purerl-tidal at ws://localhost:3012/ws.
+--
+-- @scale       c-minor-pentatonic [c d# f g a#]
+-- @progression vamp [Dm7 G7 Cmaj7]
+--
+-- Load device vocabularies from the purerl-tidal setup directory
+-- before firing patterns:
+--
+--   load rample
+--   load qd
+--   load laplace
+--   load turnado
+"""
 
 newStore
   :: String
@@ -180,7 +203,7 @@ persistedStateCodec = CAR.object "PersistedState"
 -- | the workspace dir (gitignored alongside `output/`) so each
 -- | workspace's state travels with its other artefacts.
 sessionFilePath :: String -> String
-sessionFilePath workspaceDir = workspaceDir <> "/atelier-session.json"
+sessionFilePath workspaceDir = workspaceDir <> "/calypso-session.json"
 
 -- | Synchronous: boot path, called from `newStore`. Returns `Nothing`
 -- | if the file is absent, empty, or fails to decode. Logs on
@@ -193,11 +216,11 @@ loadPersisted workspaceDir = do
     Left _ -> pure Nothing
     Right raw -> case jsonParser raw of
       Left err -> do
-        Console.warn $ "atelier-session.json at " <> path <> " failed to parse: " <> err
+        Console.warn $ "calypso-session.json at " <> path <> " failed to parse: " <> err
         pure Nothing
       Right j -> case CA.decode persistedStateCodec j of
         Left err -> do
-          Console.warn $ "atelier-session.json at " <> path <> " failed to decode: "
+          Console.warn $ "calypso-session.json at " <> path <> " failed to decode: "
             <> CA.printJsonDecodeError err
           pure Nothing
         Right p -> pure $ Just $
@@ -225,7 +248,7 @@ persist workspaceDir s = do
   case result of
     Left err ->
       liftEffect $ Console.warn $
-        "atelier-session.json write failed at " <> path <> ": " <> show err
+        "calypso-session.json write failed at " <> path <> ": " <> show err
     Right _ -> pure unit
 
 -- | Read the current session snapshot as a CompileResponse (for
