@@ -11,13 +11,9 @@ module Calypso.Frontend.CodeMirror
 
 import Prelude
 
-import Data.Maybe (Maybe(..))
 import Effect (Effect)
 import Effect.Uncurried (EffectFn1, mkEffectFn1)
 import Web.DOM (Element)
-
-import Sigil.Html (renderBody)
-import Sigil.Parse (parseToRenderType)
 
 foreign import data EditorView :: Type
 
@@ -46,15 +42,9 @@ foreign import _setErrors :: EditorView -> Array ErrorSpan -> Effect Unit
 
 foreign import _setEditable :: EditorView -> Boolean -> Effect Unit
 
--- | Hover-tooltip renderer: parses a `purs ide` type string and emits
--- | Sigil HTML. JS calls this synchronously from the hover callback;
--- | falls back to a plain `<code>` if Sigil can't parse the input.
-renderTypeHtml :: String -> String
-renderTypeHtml typeStr = case parseToRenderType typeStr of
-  Just ast -> renderBody { ast }
-  Nothing ->
-    "<code class=\"cm-tooltip-fallback\">" <> typeStr <> "</code>"
-
+-- | Hover-tooltip renderer.  Calypso has no types to render in
+-- | tooltips, so this is a plain-code fallback.  Kept on the FFI
+-- | surface because the JS bridge still expects a callback.
 createEditor
   :: Element
   -> String
@@ -63,7 +53,7 @@ createEditor
 createEditor el initialDoc onChange =
   _createEditor el initialDoc
     (mkEffectFn1 onChange)
-    (mkEffectFn1 (\s -> pure (renderTypeHtml s)))
+    (mkEffectFn1 (\s -> pure ("<code class=\"cm-tooltip-fallback\">" <> s <> "</code>")))
 
 setErrors :: EditorView -> Array ErrorSpan -> Effect Unit
 setErrors = _setErrors

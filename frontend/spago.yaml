@@ -1,6 +1,6 @@
 package:
   name: calypso-frontend
-  description: Halogen frontend — module editor, playground cells, value+type gutter.
+  description: Halogen frontend — composition module, live cells, hylograph pane.
   bundle:
     module: Calypso.Frontend.Main
     outfile: public/bundle.js
@@ -21,16 +21,14 @@ package:
     - foreign
     - halogen
     - http-methods
-    - hylograph-simulation
+    - maybe
     - nullable
     - numbers
     - ordered-collections
-    - transformers
-    - maybe
     - calypso-shared
     - prelude
-    - sigil
     - strings
+    - transformers
     - tuples
     - web-dom
     - web-events

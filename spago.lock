@@ -21,13 +21,11 @@
             "foreign",
             "halogen",
             "http-methods",
-            "hylograph-simulation",
             "maybe",
             "nullable",
             "numbers",
             "ordered-collections",
             "prelude",
-            "sigil",
             "strings",
             "transformers",
             "tuples",
@@ -936,24 +934,6 @@
         "variant"
       ]
     },
-    "colors": {
-      "type": "registry",
-      "version": "7.0.1",
-      "integrity": "sha256-3A93ysUoamlsH2yfIiPFH0SoG8DZQk2ytFKlKhd/aJg=",
-      "dependencies": [
-        "arrays",
-        "control",
-        "either",
-        "foldable-traversable",
-        "integers",
-        "lists",
-        "maybe",
-        "numbers",
-        "partial",
-        "prelude",
-        "strings"
-      ]
-    },
     "console": {
       "type": "registry",
       "version": "6.1.0",
@@ -1262,21 +1242,6 @@
         "unfoldable"
       ]
     },
-    "graphs": {
-      "type": "registry",
-      "version": "8.1.0",
-      "integrity": "sha256-qllMIjmOGqwELOlXyHuiTT3YpeL/+gjaq7omAZ4npJQ=",
-      "dependencies": [
-        "bifunctors",
-        "catenable-lists",
-        "foldable-traversable",
-        "lists",
-        "maybe",
-        "ordered-collections",
-        "prelude",
-        "tuples"
-      ]
-    },
     "halogen": {
       "type": "registry",
       "version": "7.0.0",
@@ -1433,105 +1398,6 @@
         "untagged-union"
       ]
     },
-    "hylograph-graph": {
-      "type": "local",
-      "path": "../../../purescript-hylograph-libs/purescript-hylograph-graph",
-      "dependencies": [
-        "arrays",
-        "either",
-        "foldable-traversable",
-        "free",
-        "graphs",
-        "integers",
-        "lists",
-        "maybe",
-        "numbers",
-        "ordered-collections",
-        "prelude",
-        "tree-rose",
-        "tuples"
-      ]
-    },
-    "hylograph-selection": {
-      "type": "local",
-      "path": "../../../purescript-hylograph-libs/purescript-hylograph-selection",
-      "dependencies": [
-        "arrays",
-        "colors",
-        "contravariant",
-        "datetime",
-        "effect",
-        "either",
-        "foldable-traversable",
-        "free",
-        "graphs",
-        "hylograph-graph",
-        "hylograph-transitions",
-        "integers",
-        "lists",
-        "maybe",
-        "newtype",
-        "nullable",
-        "numbers",
-        "ordered-collections",
-        "prelude",
-        "refs",
-        "strings",
-        "transformers",
-        "tree-rose",
-        "tuples",
-        "typelevel-prelude",
-        "unsafe-coerce",
-        "web-dom",
-        "web-events",
-        "web-html",
-        "web-pointerevents",
-        "web-uievents"
-      ]
-    },
-    "hylograph-simulation": {
-      "type": "local",
-      "path": "../../../purescript-hylograph-libs/purescript-hylograph-simulation",
-      "dependencies": [
-        "aff",
-        "arrays",
-        "console",
-        "effect",
-        "foldable-traversable",
-        "foreign-object",
-        "hylograph-selection",
-        "hylograph-transitions",
-        "integers",
-        "maybe",
-        "newtype",
-        "nullable",
-        "numbers",
-        "ordered-collections",
-        "prelude",
-        "refs",
-        "tuples",
-        "typelevel-prelude",
-        "web-dom"
-      ]
-    },
-    "hylograph-transitions": {
-      "type": "local",
-      "path": "../../../purescript-hylograph-libs/purescript-hylograph-transitions",
-      "dependencies": [
-        "arrays",
-        "control",
-        "effect",
-        "either",
-        "foldable-traversable",
-        "integers",
-        "maybe",
-        "numbers",
-        "ordered-collections",
-        "prelude",
-        "refs",
-        "strings"
-      ]
-    },
     "identity": {
       "type": "registry",
       "version": "6.0.0",
@@ -1610,39 +1476,6 @@
         "prelude",
         "record",
         "typelevel-prelude"
-      ]
-    },
-    "language-cst-parser": {
-      "type": "registry",
-      "version": "0.14.1",
-      "integrity": "sha256-tnue0oM2/EmyNJmLoJDnmUDfinKLJHi2fcSGt7d6ewU=",
-      "dependencies": [
-        "arrays",
-        "const",
-        "control",
-        "either",
-        "enums",
-        "foldable-traversable",
-        "free",
-        "functions",
-        "functors",
-        "identity",
-        "integers",
-        "lazy",
-        "lists",
-        "maybe",
-        "newtype",
-        "numbers",
-        "ordered-collections",
-        "partial",
-        "prelude",
-        "st",
-        "strings",
-        "transformers",
-        "tuples",
-        "typelevel-prelude",
-        "unfoldable",
-        "unsafe-coerce"
       ]
     },
     "lazy": {
@@ -2072,24 +1905,6 @@
         "unsafe-coerce"
       ]
     },
-    "sigil": {
-      "type": "registry",
-      "version": "0.3.0",
-      "integrity": "sha256-AkxQmeLWPwjls15NBh6PieKztZd14NA/5ySGBkEVurE=",
-      "dependencies": [
-        "arrays",
-        "effect",
-        "integers",
-        "language-cst-parser",
-        "maybe",
-        "ordered-collections",
-        "prelude",
-        "strings",
-        "tuples",
-        "unsafe-coerce",
-        "web-dom"
-      ]
-    },
     "st": {
       "type": "registry",
       "version": "6.2.0",
@@ -2160,20 +1975,6 @@
         "tailrec",
         "tuples",
         "unfoldable"
-      ]
-    },
-    "tree-rose": {
-      "type": "registry",
-      "version": "4.0.2",
-      "integrity": "sha256-7Zu/FJb5jmSDxy9N5t5cKUgTWUnXkOvyIoDT/07l8as=",
-      "dependencies": [
-        "control",
-        "foldable-traversable",
-        "free",
-        "lists",
-        "maybe",
-        "prelude",
-        "tailrec"
       ]
     },
     "tuples": {
