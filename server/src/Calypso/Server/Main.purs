@@ -435,8 +435,8 @@ withStore ctx req action = do
 -- | sharing the lock that serialises compiles.
 resolveEvalStore :: AppCtx -> Query -> Aff (Either ResponseOrUpgrade SessionStore)
 resolveEvalStore ctx q = case Object.lookup "workspace" q of
-  Nothing -> lookupKnown evalScratchId
-  Just "" -> lookupKnown evalScratchId
+  Nothing -> lookupKnown mainWorkspaceId
+  Just "" -> lookupKnown mainWorkspaceId
   Just s -> case validateWorkspaceId s of
     Left msg -> do
       r <- badRequest' jsonCors (errorJson "BadWorkspaceId" msg)

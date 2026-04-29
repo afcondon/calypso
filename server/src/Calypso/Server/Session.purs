@@ -53,10 +53,7 @@ import Node.Encoding (Encoding(..))
 import Node.FS.Aff as FSA
 import Node.FS.Sync as FSS
 
-import Calypso.Server.Adapter (Adapter)
-import Calypso.Server.Adapter.PurerlTidalWS (purerlTidalWs, sendCell)
-import Calypso.Server.Compile as Compile
-import Calypso.Server.Synthesize (synthesize)
+import Calypso.Server.Adapter.PurerlTidalWS (sendCell)
 import Data.Argonaut.Core (fromString) as AJ
 import Calypso.Session
   ( Cell(..)
@@ -259,19 +256,12 @@ emptyResponse s = CompileResponse
   , cells: s.cells
   }
 
--- | Calypso has a single adapter: every cell evaluation goes through
--- | a one-shot WebSocket round-trip into the running purerl-tidal.
--- | The `runtime` string from the session's CompileRequest is
--- | currently ignored — kept in the type so persisted Atelier-shape
--- | sessions continue to deserialise during the migration.
-pickAdapter :: String -> Adapter
-pickAdapter _ = purerlTidalWs
-
--- | Apply a state update under the lock, then recompile against the
--- | new state, cache + return the snapshot. `finally` guarantees the
--- | lock is released even when `compileNow` throws or the adapter
--- | hangs long enough to be cancelled — otherwise a single stuck
--- | compile wedges every subsequent write in the process.
+-- | Apply a state update under the lock, persist, broadcast, and
+-- | return a snapshot. Atelier ran a compile here too; in Calypso the
+-- | snapshot is just the new state — patterns are evaluated separately
+-- | through /eval, which goes directly to the daemon. `finally`
+-- | guarantees the lock releases on errors so a single stuck mutator
+-- | doesn't wedge subsequent writes.
 withUpdate
   :: SessionStore
   -> (SessionState -> SessionState)
@@ -288,24 +278,26 @@ withUpdate (SessionStore { lock, state, broadcast, workspaceDir, packageName }) 
     broadcast resp
     pure resp
 
+-- | Stub compile response. Atelier's `compileNow` synthesised user +
+-- | main sources, ran a real compile, and decoded structured types,
+-- | warnings, and errors. Calypso doesn't compile anything — patterns
+-- | flow through /eval to the daemon — so this just shapes a snapshot
+-- | of the current state for the wire. Kept Aff so the existing
+-- | mutator structure (withUpdate) doesn't need changing; in a future
+-- | pass we'll trim the surrounding machinery and the CompileResponse
+-- | shape itself.
 compileNow :: String -> String -> SessionState -> Aff CompileResponse
-compileNow workspaceDir packageName s =
-  let
-    req = CompileRequest
-      { "module": s."module"
-      , cells: s.cells
-      , runtime: s.runtime
-      }
-    synth = synthesize { purerl: s.runtime == "purerl" } req
-    adapter = pickAdapter s.runtime
-  in
-    Compile.compile adapter workspaceDir packageName
-      { userSource: synth.userSource
-      , mainSource: synth.mainSource
-      , cellLines: synth.cellLines
-      , "module": s."module"
-      , cells: s.cells
-      }
+compileNow _ _ s = pure $ CompileResponse
+  { js: Nothing
+  , warnings: []
+  , errors: []
+  , types: []
+  , cellLines: []
+  , emits: []
+  , runtime: "purerl-tidal-ws"
+  , "module": s."module"
+  , cells: s.cells
+  }
 
 -- | Public: force a recompile with the current state.
 compileAndStore :: SessionStore -> Aff CompileResponse

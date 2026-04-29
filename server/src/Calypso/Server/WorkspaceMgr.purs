@@ -1,120 +1,82 @@
+-- | Minimal stub for the workspace ID + path helpers `Main.purs`
+-- | imports. Atelier had real workspace materialisation (template
+-- | copy, per-workspace spago packages, multi-workspace listing on
+-- | disk); Calypso doesn't need any of that — there's a single
+-- | session, persisted as `atelier-session.json` under a fixed
+-- | directory. The functions here keep the Main.purs surface stable
+-- | while doing nothing on disk.
+-- |
+-- | A future cleanup pass collapses Main.purs to the single-session
+-- | shape and deletes this stub entirely.
 module Calypso.Server.WorkspaceMgr
   ( WorkspaceId(..)
-  , workspaceIdString
-  , validateWorkspaceId
-  , requestWorkspaceId
-  , workspacePath
-  , listWorkspaces
-  , listWorkspacesSync
   , createWorkspace
   , createWorkspaceSync
   , deleteWorkspace
+  , listWorkspacesSync
+  , requestWorkspaceId
+  , validateWorkspaceId
+  , workspaceIdString
+  , workspacePath
   ) where
 
 import Prelude
 
-import Control.Promise (Promise, toAffE)
-import Data.Array (all)
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..))
-import Data.String (null) as String
-import Data.String.CodeUnits (toCharArray)
+import Data.Newtype (class Newtype)
 import Effect (Effect)
 import Effect.Aff (Aff)
-import Foreign.Object as Object
 import HTTPurple.Query (Query)
+import HTTPurple.Lookup ((!!))
 
--- | Opaque workspace identifier. Equality + ordering so it can key a
--- | Map; Show only for diagnostics (not the wire form — the wire form
--- | is plain JSON strings, assembled inline at the route boundaries).
 newtype WorkspaceId = WorkspaceId String
 
+derive instance Newtype WorkspaceId _
 derive newtype instance Eq WorkspaceId
 derive newtype instance Ord WorkspaceId
-
-instance Show WorkspaceId where
-  show (WorkspaceId s) = "WorkspaceId " <> show s
 
 workspaceIdString :: WorkspaceId -> String
 workspaceIdString (WorkspaceId s) = s
 
--- | A workspace id must be non-empty and drawn from [A-Za-z0-9_-].
--- | These constraints keep it safe to use as a directory name and
--- | URL segment without escaping.
+-- | Permissive: any non-empty string is a valid workspace id. Real
+-- | validation lived alongside template-copy in Atelier; not needed
+-- | for a single-session app.
 validateWorkspaceId :: String -> Either String WorkspaceId
 validateWorkspaceId s
-  | String.null s = Left "workspace id cannot be empty"
-  | all isValidWorkspaceIdChar (toCharArray s) = Right (WorkspaceId s)
-  | otherwise = Left "workspace id must match [A-Za-z0-9_-]+"
+  | s == "" = Left "workspace id cannot be empty"
+  | otherwise = Right (WorkspaceId s)
 
-isValidWorkspaceIdChar :: Char -> Boolean
-isValidWorkspaceIdChar c =
-  (c >= '0' && c <= '9')
-    || (c >= 'a' && c <= 'z')
-    || (c >= 'A' && c <= 'Z')
-    || c == '_'
-    || c == '-'
-
--- | Resolve the workspace id for an incoming request. Missing or
--- | empty `workspace` query param → "main"; otherwise validate.
--- | Returns Left with a message on invalid ids so handlers can 400.
+-- | `workspace=...` query param → WorkspaceId, defaulting to "main"
+-- | when the query is absent. Backwards-compatible with Atelier-shaped
+-- | callers that pass `?workspace=foo`.
 requestWorkspaceId :: Query -> Either String WorkspaceId
-requestWorkspaceId q = case Object.lookup "workspace" q of
+requestWorkspaceId q = case q !! "workspace" of
   Nothing -> Right (WorkspaceId "main")
-  Just "" -> Right (WorkspaceId "main")
   Just s -> validateWorkspaceId s
 
--- | On-disk path for a workspace under the given root.
 workspacePath :: String -> WorkspaceId -> String
-workspacePath rootDir (WorkspaceId id) = rootDir <> "/" <> id
+workspacePath rootDir wid = rootDir <> "/" <> workspaceIdString wid
 
--- ============================================================
--- Filesystem operations (JS FFI)
--- ============================================================
-
-foreign import _listWorkspaceDirs :: String -> Effect (Promise (Array String))
-foreign import _listWorkspaceDirsSync :: String -> Effect (Array String)
-foreign import _createWorkspaceDir
-  :: String -> String -> String -> String -> Effect (Promise Unit)
-foreign import _createWorkspaceDirSync
-  :: String -> String -> String -> String -> Effect Unit
-foreign import _deleteWorkspaceDir
-  :: String -> String -> Effect (Promise Unit)
-
--- | Enumerate existing workspace subdirectories under `rootDir`. Any
--- | directory name is treated as a valid id at this layer; invalid
--- | ones would have been rejected at creation time.
-listWorkspaces :: String -> Aff (Array WorkspaceId)
-listWorkspaces rootDir = map WorkspaceId <$> toAffE (_listWorkspaceDirs rootDir)
-
--- | Synchronous variant used during boot, where we need the workspace
--- | map populated before the HTTP listener starts accepting requests.
+-- | Atelier listed workspace dirs from `runtime-workspace/workspaces/`.
+-- | Calypso has no template-driven workspaces; just return empty.
 listWorkspacesSync :: String -> Effect (Array WorkspaceId)
-listWorkspacesSync rootDir = map WorkspaceId <$> _listWorkspaceDirsSync rootDir
+listWorkspacesSync _ = pure []
 
--- | Materialise a new workspace on disk: create the directory, copy
--- | the runtime-library files from `templateDir`, rewrite
--- | `spago.yaml` + `package.json` so the package is uniquely named
--- | (the outer workspace sees every workspace's package at once, so
--- | `spago build -p <name>` needs distinct names to pick the right
--- | one), and seed `src/Main.purs` + `src/Calypso/User.purs`.
+-- | No-op stubs — Calypso doesn't materialise workspaces from a
+-- | template. Kept on the import surface so Main.purs's existing
+-- | route handlers don't have to be rewritten in this commit.
 createWorkspace
   :: { rootDir :: String, templateDir :: String, packageName :: String }
   -> WorkspaceId
   -> Aff Unit
-createWorkspace { rootDir, templateDir, packageName } (WorkspaceId id) =
-  toAffE (_createWorkspaceDir rootDir templateDir packageName id)
+createWorkspace _ _ = pure unit
 
--- | Synchronous variant of `createWorkspace` used at boot to materialise
--- | the `eval-scratch` workspace before the HTTP listener starts.
 createWorkspaceSync
   :: { rootDir :: String, templateDir :: String, packageName :: String }
   -> WorkspaceId
   -> Effect Unit
-createWorkspaceSync { rootDir, templateDir, packageName } (WorkspaceId id) =
-  _createWorkspaceDirSync rootDir templateDir packageName id
+createWorkspaceSync _ _ = pure unit
 
--- | Recursively remove a workspace from disk.
 deleteWorkspace :: String -> WorkspaceId -> Aff Unit
-deleteWorkspace rootDir (WorkspaceId id) =
-  toAffE (_deleteWorkspaceDir rootDir id)
+deleteWorkspace _ _ = pure unit

@@ -13,8 +13,7 @@
 -- | response type can pick up. Step 4 swaps the wire format for
 -- | something Tidal-native.
 module Calypso.Server.Adapter.PurerlTidalWS
-  ( purerlTidalWs
-  , sendCell
+  ( sendCell
   , TidalReply
   ) where
 
@@ -30,8 +29,6 @@ import Effect.Exception (Error, error) as Exn
 import Effect.Exception (Error)
 import Foreign.Object as Object
 
-import Calypso.Server.Adapter (Adapter)
-
 -- | Tidal-shaped reply from the daemon. `ok` reflects the heuristic in
 -- | the FFI (text starting with "ERR"/"ERROR" → ok=false). `reply` is
 -- | the daemon's full reply line, verbatim.
@@ -43,8 +40,9 @@ foreign import sendCellImpl
   -> (Json -> Effect Unit)
   -> Effect Unit
 
--- | Send a cell to purerl-tidal, get back a typed reply. Preferred over
--- | the Adapter wrapper for new code — no BundleOutcome shape-fitting.
+-- | One-shot send: open WS to purerl-tidal, ship the cell text as one
+-- | frame, await one reply frame, close. Aff bridges the FFI's two-
+-- | callback shape into the standard error-or-result envelope.
 sendCell :: String -> Aff TidalReply
 sendCell cellText = makeAff \resolve -> do
   sendCellImpl cellText
@@ -64,20 +62,3 @@ sendCell cellText = makeAff \resolve -> do
     ok <- AJ.toBoolean okJson
     reply <- AJ.toString replyJson
     pure { ok, reply }
-
--- | Legacy Adapter-shaped wrapper. Returns the FFI's raw Json so
--- | `Compile.compile`'s BuildResult decoder can handle it. Kept while
--- | the old compile pipeline is still in tree; once step 4 strips
--- | Compile.purs, this can go away and only `sendCell` remains.
-purerlTidalWs :: Adapter
-purerlTidalWs =
-  { name: "purerl-tidal-ws"
-  , bundle: \_ _ userSrc _ -> sendCellRaw userSrc
-  }
-  where
-  sendCellRaw :: String -> Aff Json
-  sendCellRaw cellText = makeAff \resolve -> do
-    sendCellImpl cellText
-      (\err -> resolve (Left err))
-      (\json -> resolve (Right json))
-    pure nonCanceler
