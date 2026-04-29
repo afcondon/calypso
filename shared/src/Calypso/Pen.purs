@@ -23,6 +23,7 @@ import Data.Tuple (Tuple)
 import Data.Tuple.Nested ((/\))
 import Foreign.Object as Object
 
+import Calypso.Proposal (Proposal, ProposalId, proposalCodec, proposalIdCodec, proposalsCodec)
 import Calypso.Session (CompileResponse, compileResponseCodec)
 
 -- | A server-assigned identifier for one WebSocket subscriber. Lives
@@ -72,8 +73,9 @@ nullableSubscriberIdCodec = CA.codec' decode encode
 -- | Messages the server pushes to subscribers over the WS connection.
 -- |
 -- | `Welcome` fires once, immediately after the handshake completes;
--- | it delivers the subscriber's assigned id plus the current snapshot
--- | so late-joining clients don't stay stale until the next write.
+-- | it delivers the subscriber's assigned id, the current Pen state,
+-- | the session snapshot, and any pending proposals so a late-joining
+-- | tab arrives fully oriented.
 -- |
 -- | `Snapshot` fires after every mutating HTTP write, carrying the new
 -- | compile response.  The server skips the current Pen holder when
@@ -81,11 +83,19 @@ nullableSubscriberIdCodec = CA.codec' decode encode
 -- |
 -- | `PenUpdate` fires on any Pen state transition — grant, yield,
 -- | force, idle-revoke.
+-- |
+-- | `ProposalAdded` fires on POST /proposals with the new proposal.
+-- | `ProposalUpdated` fires when a hunk is accepted or rejected and
+-- | hunks remain.  `ProposalRetired` fires when a proposal is
+-- | withdrawn or has all its hunks resolved.  All three go to every
+-- | subscriber including the proposer (the proposer needs the server-
+-- | assigned ProposalId).
 data Broadcast
   = Welcome
       { yourId :: SubscriberId
       , pen :: PenState
       , snapshot :: CompileResponse
+      , proposals :: Array Proposal
       }
   | Snapshot
       { pen :: PenState
@@ -93,6 +103,15 @@ data Broadcast
       }
   | PenUpdate
       { pen :: PenState
+      }
+  | ProposalAdded
+      { proposal :: Proposal
+      }
+  | ProposalUpdated
+      { proposal :: Proposal
+      }
+  | ProposalRetired
+      { id :: ProposalId
       }
 
 broadcastCodec :: JsonCodec Broadcast
@@ -105,7 +124,8 @@ broadcastCodec = CA.codec' decode encode
         yid <- field "yourId" o subscriberIdCodec
         ps <- field "pen" o penStateCodec
         sn <- field "snapshot" o compileResponseCodec
-        Right (Welcome { yourId: yid, pen: ps, snapshot: sn })
+        pp <- field "proposals" o proposalsCodec
+        Right (Welcome { yourId: yid, pen: ps, snapshot: sn, proposals: pp })
       Just "snapshot" -> do
         ps <- field "pen" o penStateCodec
         sn <- field "snapshot" o compileResponseCodec
@@ -113,6 +133,15 @@ broadcastCodec = CA.codec' decode encode
       Just "pen" -> do
         ps <- field "pen" o penStateCodec
         Right (PenUpdate { pen: ps })
+      Just "proposal-added" -> do
+        p <- field "proposal" o proposalCodec
+        Right (ProposalAdded { proposal: p })
+      Just "proposal-updated" -> do
+        p <- field "proposal" o proposalCodec
+        Right (ProposalUpdated { proposal: p })
+      Just "proposal-retired" -> do
+        pid <- field "id" o proposalIdCodec
+        Right (ProposalRetired { id: pid })
       Just tag -> Left (UnexpectedValue (AJ.fromString tag))
       Nothing -> Left (AtKey "type" MissingValue)
   encode = case _ of
@@ -120,6 +149,7 @@ broadcastCodec = CA.codec' decode encode
       [ "yourId" /\ CA.encode subscriberIdCodec r.yourId
       , "pen" /\ CA.encode penStateCodec r.pen
       , "snapshot" /\ CA.encode compileResponseCodec r.snapshot
+      , "proposals" /\ CA.encode proposalsCodec r.proposals
       ]
     Snapshot r -> tagged "snapshot"
       [ "pen" /\ CA.encode penStateCodec r.pen
@@ -127,6 +157,15 @@ broadcastCodec = CA.codec' decode encode
       ]
     PenUpdate r -> tagged "pen"
       [ "pen" /\ CA.encode penStateCodec r.pen
+      ]
+    ProposalAdded r -> tagged "proposal-added"
+      [ "proposal" /\ CA.encode proposalCodec r.proposal
+      ]
+    ProposalUpdated r -> tagged "proposal-updated"
+      [ "proposal" /\ CA.encode proposalCodec r.proposal
+      ]
+    ProposalRetired r -> tagged "proposal-retired"
+      [ "id" /\ CA.encode proposalIdCodec r.id
       ]
 
 -- | Messages a subscriber sends to the server over the WS connection.

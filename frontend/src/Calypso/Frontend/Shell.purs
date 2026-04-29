@@ -788,10 +788,16 @@ handleIncomingBroadcast raw = case jsonParser raw of
           , runtimeError = if iHoldNow then Nothing else s.runtimeError
           }
         syncEditorsEditable
-        where
-        isPenHeldError = case _ of
-          Just msg -> Str.take 9 msg == "pen-held:"
-          Nothing -> false
+      -- Proposal frames: stage 3 wires the inline ghost-text view.
+      -- For now we acknowledge them silently so the frame decoder
+      -- doesn't fall through.
+      ProposalAdded _ -> pure unit
+      ProposalUpdated _ -> pure unit
+      ProposalRetired _ -> pure unit
+      where
+      isPenHeldError = case _ of
+        Just msg -> Str.take 9 msg == "pen-held:"
+        Nothing -> false
 
 syncEditorsEditable
   :: forall o m

@@ -5,6 +5,7 @@ import Prelude
 import Data.Argonaut.Core (stringify, toObject)
 import Data.Argonaut.Core as AJ
 import Data.Argonaut.Parser (jsonParser)
+import Data.Array as Array
 import Data.Codec.Argonaut (JsonCodec)
 import Data.Codec.Argonaut as CA
 import Data.Codec.Argonaut.Record as CAR
@@ -12,7 +13,9 @@ import Data.Either (Either(..))
 import Foreign.Object as Object
 import Data.Generic.Rep (class Generic)
 import Data.Maybe (Maybe(..))
+import Data.String.Pattern (Pattern(..))
 import Data.Traversable (traverse)
+import Data.Tuple (Tuple(..))
 import Effect.Aff (Aff)
 import Effect.Aff.Class (liftAff)
 import Effect.Class (liftEffect)
@@ -48,6 +51,9 @@ import Data.Int as Int
 import Calypso.Server.Pen (PenStore, RequestResult(..))
 import Calypso.Server.Pen as Pen
 import Calypso.Server.Favorites as Favorites
+import Calypso.Server.Hash (sha1Hex)
+import Calypso.Server.Proposals (ProposalStore)
+import Calypso.Server.Proposals as Proposals
 import Calypso.Server.Session (EvalRequest, EvalResponse, ModulePatch(..), SessionStore, evalResponseCodec)
 import Calypso.Server.Session as Session
 import Calypso.Server.Subscribers (Subscribers)
@@ -62,8 +68,17 @@ import Calypso.Pen
   )
 import Calypso.Pen as PPen
 import Calypso.Favorite (favoritesCodec)
+import Calypso.Proposal
+  ( Hunk(..)
+  , Proposal(..)
+  , ProposalId(..)
+  , ProposalTarget(..)
+  , hunkCodec
+  , proposalCodec
+  , proposalTargetCodec
+  )
 import Calypso.Session
-  ( Cell
+  ( Cell(..)
   , CompileError(..)
   , CompileRequest(..)
   , CompileResponse(..)
@@ -85,6 +100,12 @@ data Route
   -- GET-only listing of `~/.calypso/favorites/*.tidal` — composition-pane
   -- templates the user keeps cross-machine.  Loaded into the dropdown.
   | FavoritesRoute
+  -- Proposals: anyone (humans, AI agents) can POST; the Pen holder
+  -- accepts/rejects per-hunk; the proposer can withdraw.
+  | ProposalsRoute
+  | ProposalOne String
+  | ProposalHunkAccept String String  -- proposal id, hunk index (parsed in handler)
+  | ProposalHunkReject String String
 
 derive instance Generic Route _
 
@@ -99,6 +120,10 @@ route = root $ sum
   , "SessionCellAt": "session" / "cells" / segment ? { preview: flag }
   , "Eval": "eval" / noArgs
   , "FavoritesRoute": "favorites" / noArgs
+  , "ProposalsRoute": "proposals" / noArgs
+  , "ProposalOne": "proposals" / segment
+  , "ProposalHunkAccept": "proposals" / segment / "hunks" / segment / "accept"
+  , "ProposalHunkReject": "proposals" / segment / "hunks" / segment / "reject"
   }
 
 -- ============================================================
@@ -272,12 +297,13 @@ evalResponseJson = stringify <<< CA.encode evalResponseCodec
 -- | pinned to main (per-subscriber workspace routing is Phase 2).
 -- |
 -- | Single-store app context.  Calypso runs one session per server
--- | (no /workspaces partitioning); the broadcast hooks plus the
--- | pen live alongside it.
+-- | (no /workspaces partitioning); the broadcast hooks, the Pen, and
+-- | the proposal queue live alongside it.
 type AppCtx =
   { mainStore :: SessionStore
   , subs :: Subscribers
   , penStore :: PenStore
+  , proposalStore :: ProposalStore
   }
 
 -- | Flattener for handlers that target the single store.  Kept as a
@@ -299,6 +325,140 @@ errorJson code message =
   stringify $ CA.encode
     (CAR.object "Error" { error: CA.string, message: CA.string })
     { error: code, message }
+
+-- ============================================================
+-- Proposal handling
+-- ============================================================
+
+-- | Body decoder for `POST /proposals`.  We don't accept an `id` (the
+-- | server mints it) or `createdAt` (the server stamps it).
+parseProposalCreateBody
+  :: String
+  -> Either String { author :: String
+                   , target :: ProposalTarget
+                   , basedOn :: String
+                   , hunks :: Array Hunk
+                   , prompt :: Maybe String
+                   }
+parseProposalCreateBody raw = case jsonParser raw of
+  Left e -> Left ("bad JSON: " <> e)
+  Right j -> case AJ.toObject j of
+    Nothing -> Left "expected a JSON object"
+    Just o -> do
+      author <- requireStr "author" o
+      tJson <- requireField "target" o
+      target <- case CA.decode proposalTargetCodec tJson of
+        Left e -> Left ("target: " <> CA.printJsonDecodeError e)
+        Right t -> Right t
+      basedOn <- requireStr "basedOn" o
+      hunksJson <- requireField "hunks" o
+      hunksArr <- case AJ.toArray hunksJson of
+        Nothing -> Left "hunks must be an array"
+        Just arr -> Right arr
+      hunks <- traverse decodeHunk hunksArr
+      let prompt = case Object.lookup "prompt" o of
+            Nothing -> Nothing
+            Just v -> AJ.toString v
+      pure { author, target, basedOn, hunks, prompt }
+  where
+  requireField key o = case Object.lookup key o of
+    Nothing -> Left ("missing field: " <> key)
+    Just v -> Right v
+  requireStr key o = case Object.lookup key o of
+    Nothing -> Left ("missing field: " <> key)
+    Just v -> case AJ.toString v of
+      Just s -> Right s
+      Nothing -> Left (key <> " must be a string")
+  decodeHunk j = case CA.decode hunkCodec j of
+    Left e -> Left ("hunk: " <> CA.printJsonDecodeError e)
+    Right h -> Right h
+
+-- | Broadcast a frame to every connected subscriber, no skip.  Used
+-- | for proposal-{added,updated,retired} since proposals affect the
+-- | review surface for everyone, including the proposer (who needs
+-- | the server-assigned ProposalId).
+broadcastToAll :: Subscribers -> Broadcast -> Aff Unit
+broadcastToAll subs msg =
+  Subscribers.broadcast subs Nothing
+    (TextMessage (stringify (CA.encode broadcastCodec msg)))
+
+-- | Read the source body of a proposal's target.
+sourceForTarget :: AppCtx -> ProposalTarget -> Aff (Maybe String)
+sourceForTarget ctx tgt = do
+  CompileResponse r <- liftEffect $ Session.get ctx.mainStore
+  let UserModule m = r."module"
+  pure case tgt of
+    TgtModule -> Just m.source
+    TgtCell cid ->
+      _.source <<< (\(Cell c) -> c) <$>
+        Array.find (\(Cell c) -> c.id == cid) r.cells
+
+-- | Apply a hunk to a source body.  startLine is 1-based.
+applyHunk :: Hunk -> String -> String
+applyHunk (Hunk h) src =
+  let lines = String.split (Pattern "\n") src
+      before = Array.take (h.startLine - 1) lines
+      after = Array.drop (h.startLine - 1 + Array.length h.removed) lines
+      merged = before <> h.added <> after
+  in String.joinWith "\n" merged
+
+-- | Accept a hunk: validate basedOn, apply to source, persist,
+-- | broadcast Snapshot, then plus broadcast ProposalUpdated/Retired.
+handleProposalAccept :: AppCtx -> SubscriberId -> ProposalId -> Int -> ResponseM
+handleProposalAccept ctx sid pid idx = do
+  -- Look up the proposal and its target source first; we need both
+  -- to validate basedOn before mutating anything.
+  ps <- liftEffect $ Proposals.listProposals ctx.proposalStore
+  case Array.find (\(Proposal p) -> p.id == pid) ps of
+    Nothing -> response' Status.notFound jsonCors
+      (errorJson "NoSuchProposal" "no such proposal")
+    Just (Proposal p) -> case Array.index p.hunks idx of
+      Nothing -> badRequest' jsonCors (errorJson "BadHunkIndex" "hunk index out of range")
+      Just hunk -> do
+        mSrc <- liftAff (sourceForTarget ctx p.target)
+        case mSrc of
+          Nothing -> response' Status.notFound jsonCors
+            (errorJson "NoSuchTarget" "proposal target no longer exists")
+          Just currentSrc -> do
+            currentHash <- liftEffect $ sha1Hex currentSrc
+            if currentHash /= p.basedOn
+              then response' Status.conflict jsonCors
+                (errorJson "RebaseNeeded"
+                  "proposal basedOn does not match current source; rebase needed")
+              else do
+                let newSrc = applyHunk hunk currentSrc
+                snap <- liftAff case p.target of
+                  TgtModule ->
+                    Session.updateModule ctx.mainStore (UserModule { source: newSrc })
+                  TgtCell cid ->
+                    Session.updateCell ctx.mainStore cid
+                      { source: Just newSrc, kind: Nothing, form: Nothing }
+                liftEffect $ Pen.heartbeat ctx.penStore sid
+                taken <- liftEffect $ Proposals.takeHunk ctx.proposalStore pid idx
+                case taken of
+                  Just (Tuple _ Nothing) ->
+                    liftAff $ broadcastToAll ctx.subs (ProposalRetired { id: pid })
+                  Just (Tuple _ (Just updated)) ->
+                    liftAff $ broadcastToAll ctx.subs (ProposalUpdated { proposal: updated })
+                  Nothing -> pure unit
+                ok' jsonCors (snapshotJson snap)
+
+-- | Reject a hunk: pluck it from the proposal and broadcast the
+-- | updated/retired frame.  No source mutation.
+handleProposalReject :: AppCtx -> SubscriberId -> ProposalId -> Int -> ResponseM
+handleProposalReject ctx sid pid idx = do
+  taken <- liftEffect $ Proposals.takeHunk ctx.proposalStore pid idx
+  case taken of
+    Nothing -> response' Status.notFound jsonCors
+      (errorJson "NoSuchProposal" "proposal or hunk not found")
+    Just (Tuple _ remaining) -> do
+      liftEffect $ Pen.heartbeat ctx.penStore sid
+      case remaining of
+        Nothing ->
+          liftAff $ broadcastToAll ctx.subs (ProposalRetired { id: pid })
+        Just updated ->
+          liftAff $ broadcastToAll ctx.subs (ProposalUpdated { proposal: updated })
+      ok' jsonCors (errorJson "ok" "rejected")
 
 -- | Before any mutating HTTP endpoint runs its work, the caller must
 -- | prove they hold the pen via the `X-Atelier-Subscriber-Id`
@@ -360,10 +520,9 @@ makeWsHandler ctx = wsHandler
   { onOpen: \sock -> do
       sid <- liftEffect $ Subscribers.register ctx.subs sock
       pen <- liftEffect $ Pen.getState ctx.penStore
-      -- Phase 1b: browser tabs always observe the "main" workspace.
-      -- Per-subscriber workspace routing is a Phase 2 concern.
       snap <- liftEffect $ Session.get ctx.mainStore
-      let welcome = Welcome { yourId: sid, pen, snapshot: snap }
+      proposals <- liftEffect $ Proposals.listProposals ctx.proposalStore
+      let welcome = Welcome { yourId: sid, pen, snapshot: snap, proposals }
       sendText sock (stringify (CA.encode broadcastCodec welcome))
   , onMessage: \sock msg -> case msg of
       TextMessage raw -> handleClientMsg ctx sock raw
@@ -434,6 +593,7 @@ main = serveWithHandle { port: 3060, hostname: "0.0.0.0" } \handle -> do
   defaultBody <- Favorites.loadDefaultBody favDir
   subs <- Subscribers.newSubscribers
   penStore <- Pen.newStore
+  proposalStore <- Proposals.newStore
   handle.registerChannel (Subscribers.closeAll subs)
   let broadcastSnapshot resp = do
         pen <- liftEffect $ Pen.getState penStore
@@ -445,7 +605,7 @@ main = serveWithHandle { port: 3060, hostname: "0.0.0.0" } \handle -> do
     "calypso-runtime"
     defaultBody
     broadcastSnapshot
-  let ctx = { mainStore, subs, penStore }
+  let ctx = { mainStore, subs, penStore, proposalStore }
   pure
     { route
     , router: mkRouter ctx
@@ -596,3 +756,64 @@ mkRouter ctx req@{ route: r, method, body } =
               ok' jsonCors (evalResponseJson resp)
         _ -> response' Status.methodNotAllowed jsonCors
           (errorJson "MethodNotAllowed" "/eval accepts POST")
+
+      ProposalsRoute -> case method of
+        Get -> do
+          ps <- liftEffect $ Proposals.listProposals ctx.proposalStore
+          ok' jsonCors (stringify (CA.encode (CA.array proposalCodec) ps))
+        Post -> do
+          bodyStr <- toString body
+          case parseProposalCreateBody bodyStr of
+            Left msg -> badRequest' jsonCors (errorJson "BadRequest" msg)
+            Right p -> do
+              pid <- liftEffect Proposals.freshProposalId
+              now <- liftEffect Proposals.currentTimeMs
+              let proposal = Proposal
+                    { id: pid
+                    , author: p.author
+                    , target: p.target
+                    , basedOn: p.basedOn
+                    , hunks: p.hunks
+                    , prompt: p.prompt
+                    , createdAt: now
+                    }
+              liftEffect $ Proposals.addProposal ctx.proposalStore proposal
+              broadcastToAll ctx.subs (ProposalAdded { proposal })
+              ok' jsonCors (stringify (CA.encode proposalCodec proposal))
+        _ -> response' Status.methodNotAllowed jsonCors
+          (errorJson "MethodNotAllowed" "/proposals accepts GET or POST")
+
+      ProposalOne idStr -> case method of
+        Delete -> do
+          let pid = ProposalId idStr
+          mw <- liftEffect $ Proposals.withdraw ctx.proposalStore pid
+          case mw of
+            Nothing -> response' Status.notFound jsonCors
+              (errorJson "NoSuchProposal" ("proposal not found: " <> idStr))
+            Just _ -> do
+              broadcastToAll ctx.subs (ProposalRetired { id: pid })
+              ok' jsonCors (errorJson "ok" ("withdrawn: " <> idStr))
+        _ -> response' Status.methodNotAllowed jsonCors
+          (errorJson "MethodNotAllowed" "/proposals/:id accepts DELETE")
+
+      ProposalHunkAccept idStr idxStr -> case method of
+        Post -> case Int.fromString idxStr of
+          Nothing -> badRequest' jsonCors (errorJson "BadHunkIndex" idxStr)
+          Just idx -> do
+            authResult <- requirePen ctx req
+            case authResult of
+              Left r' -> pure r'
+              Right sid -> handleProposalAccept ctx sid (ProposalId idStr) idx
+        _ -> response' Status.methodNotAllowed jsonCors
+          (errorJson "MethodNotAllowed" "/proposals/:id/hunks/:idx/accept accepts POST")
+
+      ProposalHunkReject idStr idxStr -> case method of
+        Post -> case Int.fromString idxStr of
+          Nothing -> badRequest' jsonCors (errorJson "BadHunkIndex" idxStr)
+          Just idx -> do
+            authResult <- requirePen ctx req
+            case authResult of
+              Left r' -> pure r'
+              Right sid -> handleProposalReject ctx sid (ProposalId idStr) idx
+        _ -> response' Status.methodNotAllowed jsonCors
+          (errorJson "MethodNotAllowed" "/proposals/:id/hunks/:idx/reject accepts POST")
