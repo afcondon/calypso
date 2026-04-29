@@ -1,4 +1,4 @@
-import { EditorView, keymap, lineNumbers, drawSelection, hoverTooltip, Decoration } from '@codemirror/view';
+import { EditorView, keymap, lineNumbers, drawSelection, Decoration } from '@codemirror/view';
 import { EditorState, StateField, StateEffect, Annotation, Compartment } from '@codemirror/state';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import {
@@ -53,28 +53,6 @@ const playgroundHighlightStyle = HighlightStyle.define([
   { tag: t.namespace,     color: '#3d7a72' },
 ]);
 
-// Backend origin is derived from window.location at bundle-load time
-// so the same bundle works from localhost and over Tailscale.
-const BACKEND_URL =
-  typeof window !== 'undefined' && window.location && window.location.hostname
-    ? `http://${window.location.hostname}:3050`
-    : 'http://localhost:3050';
-const IDE_TYPE_URL = `${BACKEND_URL}/ide/type`;
-
-// Characters that are part of a PureScript identifier (word or operator).
-// We stay conservative: only plain word chars — operator tooltips can
-// come later once the grammar we're using disambiguates them reliably.
-function isWordChar(ch) {
-  return /[A-Za-z0-9_']/.test(ch);
-}
-
-function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
 // --- Inline error decoration -----------------------------------
 // Errors are fed in as an Array of { startLine, startColumn, endLine,
 // endColumn, message } records (1-based line/col, matching the
@@ -121,69 +99,15 @@ export const _setErrors = (view) => (errors) => () => {
   view.dispatch({ effects: setErrorsEffect.of(buildErrorDecos(view, errors)) });
 };
 
-// CM6 hover-tooltip extension. Extracts the word at the hover point,
-// POSTs to /ide/type, hands the type string to the renderer (which
-// returns Sigil HTML when parseable, plain `<code>` otherwise).
-// Prefers a Main or Calypso.User origin so local bindings win over
-// library shadowing.
-function makeTypeHover(renderType) {
-  return hoverTooltip(async (view, pos, side) => {
-    const line = view.state.doc.lineAt(pos);
-    const text = line.text;
-    let start = pos;
-    let end = pos;
-    while (start > line.from && isWordChar(text[start - line.from - 1])) start--;
-    while (end < line.to && isWordChar(text[end - line.from])) end++;
-    if (start === end && side < 0) return null;
-    const word = text.slice(start - line.from, end - line.from);
-    if (!word || !isWordChar(word[0])) return null;
-
-    let hits = [];
-    try {
-      const resp = await fetch(IDE_TYPE_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: word }),
-      });
-      const json = await resp.json();
-      hits = json.hits || [];
-    } catch (_) {
-      return null;
-    }
-    if (hits.length === 0) return null;
-
-    const hit =
-      hits.find((h) => h.moduleName === 'Main' || h.moduleName === 'Calypso.User') ||
-      hits[0];
-
-    return {
-      pos: start,
-      end,
-      above: true,
-      create() {
-        const dom = document.createElement('div');
-        dom.className = 'cm-tooltip-type';
-        const typeHtml = renderType(hit.typeSignature);
-        dom.innerHTML =
-          '<div class="cm-tooltip-sig">' +
-            '<span class="cm-tooltip-name">' + escapeHtml(hit.identifier) + '</span>' +
-            ' <span class="cm-tooltip-dcolon">::</span> ' +
-            '<span class="cm-tooltip-ty">' + typeHtml + '</span>' +
-          '</div>' +
-          (hit.moduleName
-            ? '<div class="cm-tooltip-module">' + escapeHtml(hit.moduleName) + '</div>'
-            : '');
-        return { dom };
-      },
-    };
-  });
-}
-
 // Creates a CodeMirror 6 view mounted into `parent`. `onChange` fires
 // every time the document is edited, with the full new document content.
 // Returns the EditorView so callers can query/destroy it later.
-export const _createEditor = (parent) => (initialDoc) => (onChange) => (renderType) => () => {
-  const typeHover = makeTypeHover(renderType);
+//
+// `_renderType` is unused — Calypso has no types to render in hover
+// tooltips.  Kept on the FFI surface so the PureScript signature
+// stays stable while we settle on what tooltip content (if any) the
+// composition pane wants.
+export const _createEditor = (parent) => (initialDoc) => (onChange) => (_renderType) => () => {
   const view = new EditorView({
     parent,
     state: EditorState.create({
@@ -195,13 +119,14 @@ export const _createEditor = (parent) => (initialDoc) => (onChange) => (renderTy
         bracketMatching(),
         indentOnInput(),
         keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
-        // Haskell's lexer is close enough for PureScript for now; a
-        // dedicated PureScript grammar lands as a later upgrade.
+        // Haskell's lexer is close enough for Tidal mini-notation
+        // surface syntax; a Tidal-aware grammar lands as a later
+        // upgrade once the mini-notation parser exists on the
+        // PureScript side.
         StreamLanguage.define(haskell),
         syntaxHighlighting(playgroundHighlightStyle),
         errorsField,
         editableCompartment.of(EditorView.editable.of(true)),
-        typeHover,
         EditorView.updateListener.of((update) => {
           // onChange is an EffectFn1 — call once, no trailing thunk.
           // Skip transactions we initiated ourselves (setContent);

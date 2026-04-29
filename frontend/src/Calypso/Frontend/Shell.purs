@@ -40,9 +40,9 @@ import Data.Foldable (for_)
 import Calypso.Frontend.CodeMirror (ErrorSpan)
 import Calypso.Frontend.Config (backendUrl, readHideParam, writeHideParam, wsBackendUrl)
 import Calypso.Frontend.Editor as Editor
-import Calypso.Frontend.Starter (Starter, starters)
-import Calypso.Frontend.Starter as Starter
+import Calypso.Frontend.Favorite as Favorite
 import Calypso.Frontend.WsClient as WsClient
+import Calypso.Favorite (Favorite(..))
 import Calypso.Conch
   ( Broadcast(..)
   , ClientMsg(..)
@@ -78,11 +78,6 @@ cellRecOf (Cell c) = { id: c.id, kind: c.kind, source: c.source }
 
 cellOf :: CellRec -> Cell
 cellOf c = Cell { id: c.id, kind: c.kind, source: c.source, form: false }
-
--- | Liftt a starter's cell shape into a CellRec (drops the form flag the
--- | starter never set anyway).
-fromStarterCell :: { id :: String, kind :: String, source :: String } -> CellRec
-fromStarterCell c = { id: c.id, kind: c.kind, source: c.source }
 
 -- | Which of the three main columns are visible in this tab. Each flag
 -- | maps 1:1 to a rendered `pane-*` column. Persisted in the URL as
@@ -172,8 +167,9 @@ type State =
   , cells :: Array CellRec
   , nextCellId :: Int
   , runtime :: String             -- carried for wire-shape compat; "purerl-tidal-ws"
-  , starterKey :: String
-  , starterMenuOpen :: Boolean
+  , favorites :: Array Favorite
+  , favoriteKey :: Maybe String   -- last-loaded favorite, if any
+  , favoriteMenuOpen :: Boolean
   , settingsOpen :: Boolean
   , compiling :: Boolean
   , errors :: Array CompileError
@@ -222,8 +218,9 @@ data Action
   | AddCell
   | RemoveCell String
   | ToggleCellKind String
-  | ToggleStarterMenu
-  | LoadStarter String
+  | ToggleFavoriteMenu
+  | LoadFavorite String
+  | FavoritesLoaded (Array Favorite)
   | ToggleSettings
   | WsOpened
   | WsIncoming String
@@ -238,38 +235,39 @@ data Action
 
 initialState :: forall i. i -> State
 initialState _ =
-  let s = Starter.defaultStarter
-  in { moduleSource: s.moduleSource
-     , cells: map fromStarterCell s.cells
-     , nextCellId: nextIdAfter s.cells
-     , runtime: "purerl-tidal-ws"
-     , starterKey: s.key
-     , starterMenuOpen: false
-     , settingsOpen: false
-     , compiling: false
-     , errors: []
-     , warnings: []
-     , cellRanges: []
-     , transportError: Nothing
-     , runtimeError: Nothing
-     , cellResults: Map.empty
-     , cellTypes: Map.empty
-     , pendingCompile: Nothing
-     , myId: Nothing
-     , conch: { holder: Nothing, lastActivityAt: 0.0 }
-     , requestingConch: false
-     , nextConchRetryAt: Nothing
-     , conchBackoffMs: 250
-     , ws: Nothing
-     , wsSub: Nothing
-     , conchBanner: Nothing
-     , lastSyncedModule: ""
-     , lastSyncedCells: Map.empty
-     , lastSyncedRuntime: ""
-     , visibility: allVisible
-     }
-  where
-  nextIdAfter cs = Array.length cs + 1
+  -- Empty pre-hydration; `Startup` calls `hydrateFromServer` which
+  -- replaces module + cells with whatever the server has persisted.
+  -- No more Atelier-shaped placeholder content.
+  { moduleSource: ""
+  , cells: []
+  , nextCellId: 1
+  , runtime: "purerl-tidal-ws"
+  , favorites: []
+  , favoriteKey: Nothing
+  , favoriteMenuOpen: false
+  , settingsOpen: false
+  , compiling: false
+  , errors: []
+  , warnings: []
+  , cellRanges: []
+  , transportError: Nothing
+  , runtimeError: Nothing
+  , cellResults: Map.empty
+  , cellTypes: Map.empty
+  , pendingCompile: Nothing
+  , myId: Nothing
+  , conch: { holder: Nothing, lastActivityAt: 0.0 }
+  , requestingConch: false
+  , nextConchRetryAt: Nothing
+  , conchBackoffMs: 250
+  , ws: Nothing
+  , wsSub: Nothing
+  , conchBanner: Nothing
+  , lastSyncedModule: ""
+  , lastSyncedCells: Map.empty
+  , lastSyncedRuntime: ""
+  , visibility: allVisible
+  }
 
 debounceMs :: Milliseconds
 debounceMs = Milliseconds 400.0
@@ -295,6 +293,10 @@ handleAction = case _ of
     H.modify_ _ { visibility = visibilityFromHide hide }
     hydrateFromServer
     openWebSocket
+    favs <- H.liftAff Favorite.fetchFavorites
+    handleAction (FavoritesLoaded favs)
+  FavoritesLoaded favs ->
+    H.modify_ _ { favorites = favs }
   ModuleChanged src -> do
     H.modify_ _ { moduleSource = src }
     handleAction ScheduleCompile
@@ -320,20 +322,22 @@ handleAction = case _ of
       , cellTypes = Map.delete id s.cellTypes
       }
     handleAction ScheduleCompile
-  ToggleStarterMenu -> H.modify_ \s -> s { starterMenuOpen = not s.starterMenuOpen }
-  LoadStarter k -> case Starter.findByKey k of
-    Nothing -> pure unit
-    Just starter -> do
-      H.modify_ \s -> s
-        { moduleSource = starter.moduleSource
-        , cells = map fromStarterCell starter.cells
-        , nextCellId = Array.length starter.cells + 1
-        , starterKey = starter.key
-        , starterMenuOpen = false
-        , cellResults = Map.empty
-        , cellTypes = Map.empty
-        }
-      handleAction ScheduleCompile
+  ToggleFavoriteMenu -> H.modify_ \s -> s { favoriteMenuOpen = not s.favoriteMenuOpen }
+  LoadFavorite k -> do
+    s0 <- H.get
+    case Favorite.findByKey k s0.favorites of
+      Nothing -> pure unit
+      Just (Favorite fav) -> do
+        -- A favorite carries only the composition body — cells are
+        -- ephemeral and never bundled.  Slot the body into the
+        -- module source and let ScheduleCompile push it through the
+        -- granular /session/module endpoint.
+        H.modify_ \s -> s
+          { moduleSource = fav.body
+          , favoriteKey = Just fav.key
+          , favoriteMenuOpen = false
+          }
+        handleAction ScheduleCompile
   ToggleSettings -> H.modify_ \s -> s { settingsOpen = not s.settingsOpen }
   ToggleColumn key -> do
     H.modify_ \s -> s { visibility = toggleKey key s.visibility }
@@ -650,13 +654,25 @@ handleIncomingBroadcast raw = case jsonParser raw of
             iHoldNow = case r.conch.holder, s.myId of
               Just h, Just me -> h == me
               _, _ -> false
+            -- A 409 from any mutating call (e.g. LoadFavorite while
+            -- somebody else held the conch) leaves a "conch-held"
+            -- transportError sitting in the error panel.  Once the
+            -- user has the conch the error is stale; clear it (and
+            -- any runtimeError) so the panel mirrors the live state.
+            stale = iHoldNow && isConchHeldError s.transportError
         H.modify_ _
           { conch = r.conch
           , requestingConch = if iHoldNow || (not wasRequesting) then false else s.requestingConch
           , conchBackoffMs = if iHoldNow then 250 else s.conchBackoffMs
           , conchBanner = if iHoldNow then Nothing else s.conchBanner
+          , transportError = if stale then Nothing else s.transportError
+          , runtimeError = if iHoldNow then Nothing else s.runtimeError
           }
         syncEditorsEditable
+        where
+        isConchHeldError = case _ of
+          Just msg -> Str.take 11 msg == "conch-held:"
+          Nothing -> false
 
 syncEditorsEditable
   :: forall o m
@@ -879,7 +895,7 @@ renderHeader state =
     , renderTitleConch state
     , renderViewToggle state
     , HH.div [ HP.class_ (H.ClassName "header-spacer") ] []
-    , renderStarterDropdown state
+    , renderFavoritesDropdown state
     , HH.div [ HP.class_ (H.ClassName "header-spacer") ] []
     ]
 
@@ -944,37 +960,45 @@ viewToggleButton state key =
        ]
        [ HH.text (columnKeyLabel key) ]
 
-renderStarterDropdown :: forall m. State -> H.ComponentHTML Action Slots m
-renderStarterDropdown state =
+renderFavoritesDropdown :: forall m. State -> H.ComponentHTML Action Slots m
+renderFavoritesDropdown state =
   HH.div [ HP.class_ (H.ClassName "starter-dropdown") ]
     [ HH.button
         [ HP.class_ (H.ClassName "starter-btn")
-        , HE.onClick \_ -> ToggleStarterMenu
+        , HE.onClick \_ -> ToggleFavoriteMenu
         ]
         [ HH.text (currentLabel <> " ▾") ]
-    , if state.starterMenuOpen
+    , if state.favoriteMenuOpen
         then HH.div [ HP.class_ (H.ClassName "starter-menu") ]
-          (map (renderStarterOption state) starters)
+          (case state.favorites of
+             [] ->
+               [ HH.div [ HP.class_ (H.ClassName "starter-option") ]
+                   [ HH.div [ HP.class_ (H.ClassName "starter-label muted") ]
+                       [ HH.text "(no favorites yet)" ]
+                   , HH.div [ HP.class_ (H.ClassName "starter-desc") ]
+                       [ HH.text "Drop a .tidal file in ~/.calypso/favorites/" ]
+                   ]
+               ]
+             favs -> map (renderFavoriteOption state) favs)
         else HH.text ""
     ]
   where
-  currentLabel = case Starter.findByKey state.starterKey of
-    Just s -> s.label
-    Nothing -> "Starter ▾"
+  currentLabel = case state.favoriteKey of
+    Just k -> k
+    Nothing -> "Favorites"
 
-renderStarterOption :: forall m. State -> Starter -> H.ComponentHTML Action Slots m
-renderStarterOption state s =
+renderFavoriteOption :: forall m. State -> Favorite -> H.ComponentHTML Action Slots m
+renderFavoriteOption state (Favorite f) =
   HH.button
     [ HP.class_
         ( H.ClassName
             ( "starter-option"
-                <> (if state.starterKey == s.key then " current" else "")
+                <> (if state.favoriteKey == Just f.key then " current" else "")
             )
         )
-    , HE.onClick \_ -> LoadStarter s.key
+    , HE.onClick \_ -> LoadFavorite f.key
     ]
-    [ HH.div [ HP.class_ (H.ClassName "starter-label") ] [ HH.text s.label ]
-    , HH.div [ HP.class_ (H.ClassName "starter-desc") ] [ HH.text s.description ]
+    [ HH.div [ HP.class_ (H.ClassName "starter-label") ] [ HH.text f.label ]
     ]
 
 renderCompositionColumn :: forall m. MonadAff m => State -> H.ComponentHTML Action Slots m

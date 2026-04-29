@@ -54,6 +54,7 @@ import Routing.Duplex.Generic.Syntax ((/), (?))
 import Data.Int as Int
 import Calypso.Server.Conch (ConchStore, RequestResult(..))
 import Calypso.Server.Conch as Conch
+import Calypso.Server.Favorites as Favorites
 import Calypso.Server.Ide as Ide
 import Calypso.Server.Session (EvalRequest, EvalResponse, ModulePatch(..), SessionStore, evalResponseCodec)
 import Calypso.Server.Session as Session
@@ -79,6 +80,7 @@ import Calypso.Conch
   , conchHeldBodyCodec
   )
 import Calypso.Conch as PConch
+import Calypso.Favorite (favoritesCodec)
 import Calypso.Session
   ( Cell
   , CellType
@@ -120,6 +122,9 @@ data Route
   -- runs against an existing workspace; default is `eval-scratch`, a
   -- dedicated ephemeral workspace materialised at boot.
   | Eval
+  -- GET-only listing of `~/.calypso/favorites/*.tidal` — composition-pane
+  -- templates the user keeps cross-machine.  Loaded into the dropdown.
+  | FavoritesRoute
 
 derive instance Generic Route _
 
@@ -142,6 +147,7 @@ route = root $ sum
   , "WorkspacesRoot": "workspaces" / noArgs
   , "WorkspaceOne": "workspaces" / segment
   , "Eval": "eval" / noArgs
+  , "FavoritesRoute": "favorites" / noArgs
   }
 
 -- ============================================================
@@ -613,6 +619,13 @@ noopBroadcast _ = pure unit
 
 main :: ServerM
 main = serveWithHandle { port: 3060, hostname: "0.0.0.0" } \handle -> do
+  -- Ensure ~/.calypso/favorites exists and is seeded with default.tidal
+  -- before the first store gets built — that way the dropdown is
+  -- non-empty on a fresh install and the initial-session seeding has
+  -- something to read from.
+  favDir <- Favorites.favoritesDir
+  Favorites.ensureFavoritesDir favDir
+  defaultBody <- Favorites.loadDefaultBody favDir
   subs <- Subscribers.newSubscribers
   conchStore <- Conch.newStore
   handle.registerChannel (Subscribers.closeAll subs)
@@ -630,6 +643,7 @@ main = serveWithHandle { port: 3060, hostname: "0.0.0.0" } \handle -> do
   mainStore <- Session.newStore
     (workspacePath rootDir mainWorkspaceId)
     (packageNameFor mainWorkspaceId)
+    defaultBody
     broadcastSnapshot
   existing <- listWorkspacesSync rootDir
   -- Atelier created `eval-scratch` on disk at boot so its compile
@@ -644,6 +658,7 @@ main = serveWithHandle { port: 3060, hostname: "0.0.0.0" } \handle -> do
         s <- Session.newStore
           (workspacePath rootDir wid)
           (packageNameFor wid)
+          defaultBody
           noopBroadcast
         pure (Tuple wid s))
     nonMain
@@ -870,14 +885,27 @@ mkRouter ctx req@{ route: r, method, body } =
                     , templateDir: ctx.templateDir
                     , packageName: packageNameFor wid
                     } wid
+                  -- /workspaces POST is slated for retirement (deferred
+                  -- housekeeping); skip the favorites lookup here and
+                  -- use the hardcoded fallback for the new workspace's
+                  -- initial module body.
                   store <- liftEffect $ Session.newStore
                     (workspacePath ctx.rootDir wid)
                     (packageNameFor wid)
+                    Nothing
                     noopBroadcast
                   liftEffect $ Ref.modify_ (Map.insert wid store) ctx.workspaces
                   ok' jsonCors (workspaceCreatedJson (workspaceIdString wid))
         _ -> response' Status.methodNotAllowed jsonCors
           (errorJson "MethodNotAllowed" "/workspaces accepts GET or POST")
+
+      FavoritesRoute -> case method of
+        Get -> do
+          dir <- liftEffect Favorites.favoritesDir
+          favs <- liftAff (Favorites.listFavorites dir)
+          ok' jsonCors (stringify (CA.encode favoritesCodec favs))
+        _ -> response' Status.methodNotAllowed jsonCors
+          (errorJson "MethodNotAllowed" "/favorites accepts GET")
 
       Eval -> case method of
         Post -> do

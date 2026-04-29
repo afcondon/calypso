@@ -128,10 +128,14 @@ type SessionState =
   , lastResponse :: Maybe CompileResponse
   }
 
-initialState :: SessionState
-initialState =
+-- | Build the freshly-booted session state.  The module body comes
+-- | from the caller (typically `~/.calypso/favorites/default.tidal`)
+-- | so the user's chosen default rides the new-session shape; falls
+-- | back to the hardcoded starter if no default body is supplied.
+initialStateFrom :: Maybe String -> SessionState
+initialStateFrom defaultBody =
   { runtime: "purerl-tidal-ws"
-  , "module": UserModule { source: tidalStarterModule }
+  , "module": UserModule { source: fromMaybe tidalStarterModule defaultBody }
   , cells: []
   , nextCellId: 1
   , lastResponse: Nothing
@@ -163,15 +167,17 @@ tidalStarterModule = """-- Calypso composition. Edit freely; cells fire against 
 newStore
   :: String
   -> String
+  -> Maybe String
   -> (CompileResponse -> Aff Unit)
   -> Effect SessionStore
-newStore workspaceDir packageName broadcast = do
+newStore workspaceDir packageName defaultBody broadcast = do
   -- If there's a persisted snapshot on disk, use it as the initial
   -- state so a server restart doesn't wipe the human's work. Fall
-  -- back silently to `initialState` when the file is missing, empty,
-  -- or fails to decode — we don't want boot to crash on stale state.
+  -- back to `initialStateFrom defaultBody` when the file is missing,
+  -- empty, or fails to decode — we don't want boot to crash on stale
+  -- state.
   loaded <- loadPersisted workspaceDir
-  ref <- Ref.new (fromMaybe initialState loaded)
+  ref <- Ref.new (fromMaybe (initialStateFrom defaultBody) loaded)
   -- AVar used as a mutex: initially "full" (contains unit); take
   -- claims the lock, put releases it.
   lock <- EffAVar.new unit
@@ -224,7 +230,10 @@ loadPersisted workspaceDir = do
             <> CA.printJsonDecodeError err
           pure Nothing
         Right p -> pure $ Just $
-          initialState
+          -- The persisted state already carries `module`, so the
+          -- default body is irrelevant on the persisted path.  Pass
+          -- Nothing for clarity.
+          (initialStateFrom Nothing)
             { "module" = p."module"
             , cells = p.cells
             , runtime = p.runtime
