@@ -596,18 +596,34 @@ evalResponseCodec = CAR.object "EvalResponse"
 -- | sources don't carry import declarations.
 evaluate :: SessionStore -> EvalRequest -> Aff EvalResponse
 evaluate _ { source } = do
-  reply <- sendCell source
-  pure
-    { value: Just (AJ.fromString reply.reply)
-    , errors:
-        if reply.ok then []
-        else
+  result <- Aff.try (sendCell source)
+  pure $ case result of
+    Left err ->
+      -- WebSocket connection failed (daemon down, network error). Surface
+      -- as a Transport error in the response rather than a 500 from the
+      -- handler — same shape as Atelier's compile transport errors.
+      { value: Nothing
+      , errors:
           [ CompileError
-              { code: "TidalError"
+              { code: "Transport"
               , filename: Nothing
               , position: Nothing
-              , message: reply.reply
+              , message: "purerl-tidal WS unreachable: " <> Aff.message err
               }
           ]
-    , warnings: []
-    }
+      , warnings: []
+      }
+    Right reply ->
+      { value: Just (AJ.fromString reply.reply)
+      , errors:
+          if reply.ok then []
+          else
+            [ CompileError
+                { code: "TidalError"
+                , filename: Nothing
+                , position: Nothing
+                , message: reply.reply
+                }
+            ]
+      , warnings: []
+      }

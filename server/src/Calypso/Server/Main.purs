@@ -612,7 +612,7 @@ noopBroadcast :: CompileResponse -> Aff Unit
 noopBroadcast _ = pure unit
 
 main :: ServerM
-main = serveWithHandle { port: 3050, hostname: "0.0.0.0" } \handle -> do
+main = serveWithHandle { port: 3060, hostname: "0.0.0.0" } \handle -> do
   subs <- Subscribers.newSubscribers
   conchStore <- Conch.newStore
   handle.registerChannel (Subscribers.closeAll subs)
@@ -632,18 +632,13 @@ main = serveWithHandle { port: 3050, hostname: "0.0.0.0" } \handle -> do
     (packageNameFor mainWorkspaceId)
     broadcastSnapshot
   existing <- listWorkspacesSync rootDir
-  -- Ensure `eval-scratch` exists on disk so `/eval` can compile into
-  -- it immediately. Synchronous so the workspace is ready before the
-  -- HTTP listener accepts requests.
-  when (not (Array.elem evalScratchId existing)) do
-    createWorkspaceSync
-      { rootDir, templateDir, packageName: packageNameFor evalScratchId }
-      evalScratchId
-  let effectiveExisting =
-        if Array.elem evalScratchId existing
-          then existing
-          else Array.snoc existing evalScratchId
-      nonMain = Array.filter (_ /= mainWorkspaceId) effectiveExisting
+  -- Atelier created `eval-scratch` on disk at boot so its compile
+  -- pipeline could materialise compiled JS for `/eval`. Calypso's
+  -- /eval bypasses workspaces entirely (cell text → PurerlTidalWS →
+  -- daemon), so the eval-scratch workspace is no longer needed and
+  -- the createWorkspaceSync template-copy is skipped. Other discovered
+  -- workspaces still get loaded for persistence purposes.
+  let nonMain = Array.filter (_ /= mainWorkspaceId) existing
   nonMainStores <- traverse
     (\wid -> do
         s <- Session.newStore
