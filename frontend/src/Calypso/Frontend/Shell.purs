@@ -668,11 +668,7 @@ evalSource
 evalSource src = do
   let body = stringify
         ( AJ.fromObject
-            ( Object.fromFoldable
-                [ Tuple "source" (AJ.fromString src)
-                , Tuple "imports" (AJ.fromArray [])
-                ]
-            )
+            ( Object.singleton "source" (AJ.fromString src) )
         )
   result <- H.liftAff $ AX.request $ AX.defaultRequest
     { method = Left POST

@@ -583,13 +583,10 @@ setRuntime store runtime = withUpdate store _ { runtime = runtime }
 -- /eval
 -- ============================================================
 
--- | Input shape for a one-shot expression evaluation. `source` is a
--- | PureScript expression (not a module). `imports` are spliced in
--- | verbatim after `import Prelude` — pass either bare module names
--- | ("Data.Array") or full import specs ("Data.Array as Array").
+-- | Input shape for a one-shot expression evaluation.  `source` is
+-- | sent verbatim to the purerl-tidal daemon as a single statement.
 type EvalRequest =
   { source :: String
-  , imports :: Array String
   }
 
 -- | Output shape for `/eval`. `value` is the emit produced by running
@@ -612,12 +609,12 @@ evalResponseCodec = CAR.object "EvalResponse"
   }
 
 -- | Tidal eval is direct: cell text → PurerlTidalWS adapter → daemon
--- | reply. No synthesis, no compile, no preview lock — purerl-tidal
+-- | reply.  No synthesis, no compile, no preview lock — purerl-tidal
 -- | already serialises commands internally, and the cell doesn't
--- | mutate any Calypso-side state. The store argument is ignored
--- | (kept for signature compatibility during the migration); the
--- | imports field of EvalRequest is also a no-op for Tidal — Tidal
--- | sources don't carry import declarations.
+-- | mutate any Calypso-side state.  The store argument is ignored
+-- | (kept for signature stability while we settle the future shape
+-- | of /eval — eventually it may look up per-cell context from the
+-- | session before sending).
 evaluate :: SessionStore -> EvalRequest -> Aff EvalResponse
 evaluate _ { source } = do
   result <- Aff.try (sendCell source)

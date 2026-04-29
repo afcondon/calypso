@@ -5,24 +5,18 @@ import Prelude
 import Data.Argonaut.Core (stringify, toObject)
 import Data.Argonaut.Core as AJ
 import Data.Argonaut.Parser (jsonParser)
-import Data.Array (elem, filter, fromFoldable, snoc, sort) as Array
-import Data.Tuple (Tuple(..))
 import Data.Codec.Argonaut (JsonCodec)
 import Data.Codec.Argonaut as CA
 import Data.Codec.Argonaut.Record as CAR
 import Data.Either (Either(..))
 import Foreign.Object as Object
 import Data.Generic.Rep (class Generic)
-import Data.Map (Map)
-import Data.Map as Map
 import Data.Maybe (Maybe(..))
 import Data.Traversable (traverse)
 import Effect.Aff (Aff)
 import Effect.Aff.Class (liftAff)
 import Effect.Class (liftEffect)
 import Effect.Class.Console as Console
-import Effect.Ref (Ref)
-import Effect.Ref as Ref
 import HTTPurple
   ( Method(..)
   , Request
@@ -39,7 +33,6 @@ import HTTPurple
 import HTTPurple.Status as Status
 import HTTPurple.Headers (ResponseHeaders, headers)
 import HTTPurple.Lookup ((!!))
-import HTTPurple.Query (Query)
 import HTTPurple.WebSocket
   ( Message(..)
   , ServerSocket
@@ -55,22 +48,10 @@ import Data.Int as Int
 import Calypso.Server.Conch (ConchStore, RequestResult(..))
 import Calypso.Server.Conch as Conch
 import Calypso.Server.Favorites as Favorites
-import Calypso.Server.Ide as Ide
 import Calypso.Server.Session (EvalRequest, EvalResponse, ModulePatch(..), SessionStore, evalResponseCodec)
 import Calypso.Server.Session as Session
 import Calypso.Server.Subscribers (Subscribers)
 import Calypso.Server.Subscribers as Subscribers
-import Calypso.Server.WorkspaceMgr
-  ( WorkspaceId(..)
-  , createWorkspace
-  , createWorkspaceSync
-  , deleteWorkspace
-  , listWorkspacesSync
-  , requestWorkspaceId
-  , validateWorkspaceId
-  , workspaceIdString
-  , workspacePath
-  )
 import Data.String as String
 import Calypso.Conch
   ( Broadcast(..)
@@ -83,19 +64,12 @@ import Calypso.Conch as PConch
 import Calypso.Favorite (favoritesCodec)
 import Calypso.Session
   ( Cell
-  , CellType
   , CompileError(..)
   , CompileRequest(..)
   , CompileResponse(..)
-  , IdeHit
-  , IdeQuery(..)
-  , IdeResponse(..)
   , UserModule(..)
-  , cellTypeCodec
   , compileRequestCodec
   , compileResponseCodec
-  , ideQueryCodec
-  , ideResponseCodec
   )
 
 data Route
@@ -106,21 +80,7 @@ data Route
   | SessionModule { preview :: Boolean }
   | SessionCellAppend { preview :: Boolean }
   | SessionCellAt String { preview :: Boolean }
-  | SessionRuntime
-  | SessionTypes
-  | SessionExport
-  | SessionImport
-  | IdeType
-  | IdeComplete
-  | IdeSearch
-  -- Workspace management endpoints (Phase 1b).
-  -- WorkspacesRoot handles GET (list) + POST (create);
-  -- WorkspaceOne handles DELETE at /workspaces/:id.
-  | WorkspacesRoot
-  | WorkspaceOne String
-  -- Ephemeral evaluation (Phase 2). POST only. Optional ?workspace=<id>
-  -- runs against an existing workspace; default is `eval-scratch`, a
-  -- dedicated ephemeral workspace materialised at boot.
+  -- Single-shot eval — POST cell text, get the daemon's reply line.
   | Eval
   -- GET-only listing of `~/.calypso/favorites/*.tidal` — composition-pane
   -- templates the user keeps cross-machine.  Loaded into the dropdown.
@@ -137,15 +97,6 @@ route = root $ sum
   , "SessionModule": "session" / "module" ? { preview: flag }
   , "SessionCellAppend": "session" / "cells" ? { preview: flag }
   , "SessionCellAt": "session" / "cells" / segment ? { preview: flag }
-  , "SessionRuntime": "session" / "runtime" / noArgs
-  , "SessionTypes": "session" / "types" / noArgs
-  , "SessionExport": "session" / "export" / noArgs
-  , "SessionImport": "session" / "import" / noArgs
-  , "IdeType": "ide" / "type" / noArgs
-  , "IdeComplete": "ide" / "complete" / noArgs
-  , "IdeSearch": "ide" / "search" / noArgs
-  , "WorkspacesRoot": "workspaces" / noArgs
-  , "WorkspaceOne": "workspaces" / segment
   , "Eval": "eval" / noArgs
   , "FavoritesRoute": "favorites" / noArgs
   }
@@ -189,9 +140,6 @@ parseCellPatch raw = case jsonParser raw of
     Just v -> case AJ.toBoolean v of
       Just b -> Right (Just b)
       Nothing -> Left ("bad request: " <> key <> " must be a boolean")
-
-runtimeBodyCodec :: JsonCodec { runtime :: String }
-runtimeBodyCodec = CAR.object "RuntimeBody" { runtime: CA.string }
 
 -- | PATCH /session/module body decoder. Body must be a JSON object
 -- | containing exactly one of:
@@ -284,27 +232,6 @@ errorSnapshotJson code msg =
       , cells: []
       }
 
-ideResponseJson :: Array IdeHit -> String
-ideResponseJson hits =
-  stringify (CA.encode ideResponseCodec (IdeResponse { hits }))
-
--- | Narrow "types only" response for `GET /session/types`. Wraps
--- | the existing `cellTypeCodec` array in an object so the shape is
--- | stable regardless of whether we later need to add sibling
--- | fields (e.g. module-level declarations).
-typesResponseJson :: Array CellType -> String
-typesResponseJson types =
-  stringify (CA.encode (CAR.object "TypesResponse" { types: CA.array cellTypeCodec }) { types })
-
--- | Serialise just the *input* slice of the session state as a
--- | CompileRequest — the portable shape that `POST /session/import`
--- | accepts. Derived fields (errors, warnings, js, emits) are
--- | recomputable and intentionally absent from the exported shape.
-compileRequestJson :: UserModule -> Array Cell -> String -> String
-compileRequestJson m cs r =
-  stringify (CA.encode compileRequestCodec
-    (CompileRequest { "module": m, cells: cs, runtime: r }))
-
 parseBody
   :: forall a
    . JsonCodec a
@@ -316,64 +243,20 @@ parseBody codec s = case jsonParser s of
     Left e -> Left ("bad request: " <> CA.printJsonDecodeError e)
     Right a -> Right a
 
--- | Body decoder for `POST /eval`. Accepts
--- | `{"source": "...", "imports": ["Prelude", "Data.Array as Array"]}`.
--- | `imports` is optional (defaults to `[]`); `source` is required.
+-- | Body decoder for `POST /eval`.  Accepts `{"source": "..."}`.
 parseEvalBody :: String -> Either String EvalRequest
 parseEvalBody raw = case jsonParser raw of
   Left e -> Left ("bad JSON: " <> e)
   Right j -> case toObject j of
     Nothing -> Left "expected a JSON object"
-    Just o -> do
-      source <- case Object.lookup "source" o of
-        Nothing -> Left "missing field: source"
-        Just v -> case AJ.toString v of
-          Just s -> Right s
-          Nothing -> Left "source must be a string"
-      imports <- case Object.lookup "imports" o of
-        Nothing -> Right []
-        Just v -> case AJ.toArray v of
-          Nothing -> Left "imports must be an array of strings when present"
-          Just arr -> traverse asImport arr
-      pure { source, imports }
-  where
-  asImport v = case AJ.toString v of
-    Just s -> Right s
-    Nothing -> Left "imports entries must be strings"
-
--- | Body decoder for `POST /workspaces`. Accepts `{"id": "foo"}`
--- | and returns a validated WorkspaceId.
-parseWorkspaceCreateBody :: String -> Either String WorkspaceId
-parseWorkspaceCreateBody raw = case jsonParser raw of
-  Left e -> Left ("bad JSON: " <> e)
-  Right j -> case toObject j of
-    Nothing -> Left "expected a JSON object"
-    Just o -> case Object.lookup "id" o of
-      Nothing -> Left "missing field: id"
+    Just o -> case Object.lookup "source" o of
+      Nothing -> Left "missing field: source"
       Just v -> case AJ.toString v of
-        Nothing -> Left "id must be a string"
-        Just s -> validateWorkspaceId s
+        Just s -> Right { source: s }
+        Nothing -> Left "source must be a string"
 
 evalResponseJson :: EvalResponse -> String
 evalResponseJson = stringify <<< CA.encode evalResponseCodec
-
-workspaceListJson :: Array String -> String
-workspaceListJson ids =
-  stringify $ CA.encode
-    (CAR.object "WorkspaceList" { workspaces: CA.array CA.string })
-    { workspaces: ids }
-
-workspaceCreatedJson :: String -> String
-workspaceCreatedJson id =
-  stringify $ CA.encode
-    (CAR.object "WorkspaceCreated" { created: CA.string })
-    { created: id }
-
-workspaceDeletedJson :: String -> String
-workspaceDeletedJson id =
-  stringify $ CA.encode
-    (CAR.object "WorkspaceDeleted" { deleted: CA.string })
-    { deleted: id }
 
 -- ============================================================
 -- App context + authorisation
@@ -388,80 +271,29 @@ workspaceDeletedJson id =
 -- | reads from it directly, since Phase 1b keeps the browser tabs
 -- | pinned to main (per-subscriber workspace routing is Phase 2).
 -- |
--- | `rootDir` is the filesystem parent under which each workspace
--- | lives as a subdirectory. `templateDir` is the source of truth for
--- | the small set of stable files (spago.yaml, package.json, the
--- | Calypso.Runtime module) that new workspaces inherit.
+-- | Single-store app context.  Calypso runs one session per server
+-- | (no /workspaces partitioning); the broadcast hooks plus the
+-- | conch live alongside it.
 type AppCtx =
-  { workspaces :: Ref (Map WorkspaceId SessionStore)
-  , mainStore :: SessionStore
+  { mainStore :: SessionStore
   , subs :: Subscribers
   , conchStore :: ConchStore
-  , rootDir :: String
-  , templateDir :: String
   }
 
--- | Resolve the target `SessionStore` for a request. Returns an
--- | already-built error response on the Left side: 400 for an invalid
--- | workspace id, 404 when the requested workspace doesn't exist.
--- | Missing `?workspace=` defaults to `main`, preserving the single-
--- | workspace frontend behaviour.
-resolveStore :: AppCtx -> Query -> Aff (Either ResponseOrUpgrade SessionStore)
-resolveStore ctx q = case requestWorkspaceId q of
-  Left msg -> do
-    r <- badRequest' jsonCors (errorJson "BadWorkspaceId" msg)
-    pure (Left r)
-  Right wid -> do
-    m <- liftEffect (Ref.read ctx.workspaces)
-    case Map.lookup wid m of
-      Just store -> pure (Right store)
-      Nothing -> do
-        r <- response' Status.notFound jsonCors
-          (errorJson "NoSuchWorkspace" ("workspace not found: " <> workspaceIdString wid))
-        pure (Left r)
-
--- | Flattener: `withStore ctx req \store -> …` runs the continuation
--- | once a live `SessionStore` has been resolved, otherwise short-
--- | circuits to the already-built 400/404 response. Keeps the nesting
--- | of each handler small now that stores live behind a Ref lookup.
+-- | Flattener for handlers that target the single store.  Kept as a
+-- | helper so the existing call sites read clearly; every endpoint
+-- | resolves to the same store now, but we may grow per-route auth
+-- | concerns here later.
 withStore
   :: AppCtx
   -> Request Route
   -> (SessionStore -> ResponseM)
   -> ResponseM
-withStore ctx req action = do
-  storeResult <- resolveStore ctx req.query
-  case storeResult of
-    Left r -> pure r
-    Right store -> action store
+withStore ctx _req action = action ctx.mainStore
 
--- | /eval's workspace resolver. Differs from `resolveStore` only in
--- | the default: missing `?workspace=` resolves to `eval-scratch`, not
--- | `main`, so /eval doesn't clobber a human's session while
--- | sharing the lock that serialises compiles.
-resolveEvalStore :: AppCtx -> Query -> Aff (Either ResponseOrUpgrade SessionStore)
-resolveEvalStore ctx q = case Object.lookup "workspace" q of
-  Nothing -> lookupKnown mainWorkspaceId
-  Just "" -> lookupKnown mainWorkspaceId
-  Just s -> case validateWorkspaceId s of
-    Left msg -> do
-      r <- badRequest' jsonCors (errorJson "BadWorkspaceId" msg)
-      pure (Left r)
-    Right wid -> lookupKnown wid
-  where
-  lookupKnown wid = do
-    m <- liftEffect (Ref.read ctx.workspaces)
-    case Map.lookup wid m of
-      Just store -> pure (Right store)
-      Nothing -> do
-        r <- response' Status.notFound jsonCors
-          (errorJson "NoSuchWorkspace"
-            ("workspace not found: " <> workspaceIdString wid))
-        pure (Left r)
-
--- | Small `{error, message}` envelope for workspace-level error
--- | responses. These are structurally different from the session-
--- | level errors that ride inside a `CompileResponse`.
+-- | Small `{error, message}` envelope for top-level error responses.
+-- | These are structurally different from the session-level errors
+-- | that ride inside a `CompileResponse`.
 errorJson :: String -> String -> String
 errorJson code message =
   stringify $ CA.encode
@@ -583,39 +415,13 @@ handleConchResult ctx = case _ of
 -- main
 -- ============================================================
 
--- | On-disk location of every workspace under the default runtime
--- | tree. Server/run.js launches this from the repo root, so a
--- | cwd-relative path resolves correctly without knowing where this
--- | module lives on disk.
-defaultRootDir :: String
-defaultRootDir = "runtime-workspace/workspaces"
-
--- | Main workspace id. Reserved: new workspaces cannot overwrite it,
--- | DELETE rejects it, and it's the implicit target when no
--- | `?workspace=` is supplied.
-mainWorkspaceId :: WorkspaceId
-mainWorkspaceId = WorkspaceId "main"
-
--- | Ephemeral `/eval` sandbox id. Materialised at boot so the first
--- | /eval call doesn't pay workspace-creation latency. Like `main`,
--- | it's reserved — accidentally DELETEing it would break /eval.
-evalScratchId :: WorkspaceId
-evalScratchId = WorkspaceId "eval-scratch"
-
--- | Map a workspace id to the spago package name used by its
--- | `spago.yaml`. Must match what `WorkspaceMgr.createWorkspace`
--- | writes, and the legacy `calypso-runtime` name for `main`
--- | (which predates multi-workspace and we haven't renamed).
-packageNameFor :: WorkspaceId -> String
-packageNameFor wid
-  | wid == mainWorkspaceId = "calypso-runtime"
-  | otherwise = "calypso-ws-" <> workspaceIdString wid
-
--- | Noop broadcast used for non-main workspaces. Phase 1b keeps
--- | subscribers pinned to main, so a compile against any other
--- | workspace should not push Snapshot frames to connected tabs.
-noopBroadcast :: CompileResponse -> Aff Unit
-noopBroadcast _ = pure unit
+-- | On-disk location for the single session.  server/run.js launches
+-- | from the repo root, so a cwd-relative path resolves correctly
+-- | without knowing where this module lives on disk.  The legacy
+-- | `runtime-workspace/workspaces/main/` shape is retained so existing
+-- | persisted state (calypso-session.json) doesn't get orphaned.
+sessionDir :: String
+sessionDir = "runtime-workspace/workspaces/main"
 
 main :: ServerM
 main = serveWithHandle { port: 3060, hostname: "0.0.0.0" } \handle -> do
@@ -634,45 +440,12 @@ main = serveWithHandle { port: 3060, hostname: "0.0.0.0" } \handle -> do
         let msg = Snapshot { conch, snapshot: resp }
             encoded = stringify (CA.encode broadcastCodec msg)
         Subscribers.broadcast subs conch.holder (TextMessage encoded)
-      rootDir = defaultRootDir
-      templateDir = rootDir <> "/main"
-  -- Main is eagerly initialised and always present; its SessionStore
-  -- gets the real broadcast. Any other workspaces discovered on disk
-  -- get a noop broadcast. This preserves behaviour against a fresh
-  -- install where only `main` exists.
   mainStore <- Session.newStore
-    (workspacePath rootDir mainWorkspaceId)
-    (packageNameFor mainWorkspaceId)
+    sessionDir
+    "calypso-runtime"
     defaultBody
     broadcastSnapshot
-  existing <- listWorkspacesSync rootDir
-  -- Atelier created `eval-scratch` on disk at boot so its compile
-  -- pipeline could materialise compiled JS for `/eval`. Calypso's
-  -- /eval bypasses workspaces entirely (cell text → PurerlTidalWS →
-  -- daemon), so the eval-scratch workspace is no longer needed and
-  -- the createWorkspaceSync template-copy is skipped. Other discovered
-  -- workspaces still get loaded for persistence purposes.
-  let nonMain = Array.filter (_ /= mainWorkspaceId) existing
-  nonMainStores <- traverse
-    (\wid -> do
-        s <- Session.newStore
-          (workspacePath rootDir wid)
-          (packageNameFor wid)
-          defaultBody
-          noopBroadcast
-        pure (Tuple wid s))
-    nonMain
-  let initialMap = Map.fromFoldable
-        ([ Tuple mainWorkspaceId mainStore ] <> nonMainStores)
-  workspaces <- Ref.new initialMap
-  let ctx =
-        { workspaces
-        , mainStore
-        , subs
-        , conchStore
-        , rootDir
-        , templateDir
-        }
+  let ctx = { mainStore, subs, conchStore }
   pure
     { route
     , router: mkRouter ctx
@@ -805,100 +578,6 @@ mkRouter ctx req@{ route: r, method, body } =
                       ok' jsonCors (snapshotJson resp)
         _ -> ok' jsonCors (errorSnapshotJson "MethodNotAllowed" "cell endpoint accepts PATCH or DELETE")
 
-      SessionRuntime -> withStore ctx req \store -> do
-        authResult <- requireConch ctx req
-        case authResult of
-          Left r' -> pure r'
-          Right sid -> do
-            bodyStr <- toString body
-            case parseBody runtimeBodyCodec bodyStr of
-              Left msg -> ok' jsonCors (errorSnapshotJson "BadRequest" msg)
-              Right { runtime } -> do
-                resp <- liftAff (Session.setRuntime store runtime)
-                liftEffect $ Conch.heartbeat ctx.conchStore sid
-                ok' jsonCors (snapshotJson resp)
-
-      SessionTypes -> withStore ctx req \store -> do
-        CompileResponse rr <- liftEffect (Session.get store)
-        ok' jsonCors (typesResponseJson rr.types)
-
-      SessionExport -> withStore ctx req \store -> do
-        CompileResponse rr <- liftEffect (Session.get store)
-        ok' jsonCors (compileRequestJson rr."module" rr.cells rr.runtime)
-
-      SessionImport -> withStore ctx req \store -> do
-        authResult <- requireConch ctx req
-        case authResult of
-          Left r' -> pure r'
-          Right sid -> do
-            bodyStr <- toString body
-            case parseBody compileRequestCodec bodyStr of
-              Left msg -> ok' jsonCors (errorSnapshotJson "BadRequest" msg)
-              Right rq -> do
-                resp <- liftAff (Session.replaceAll store rq)
-                liftEffect $ Conch.heartbeat ctx.conchStore sid
-                ok' jsonCors (snapshotJson resp)
-
-      IdeType -> do
-        bodyStr <- toString body
-        case parseBody ideQueryCodec bodyStr of
-          Left _ -> ok' jsonCors (ideResponseJson [])
-          Right (IdeQuery { query }) -> do
-            hits <- liftAff (Ide.queryType query)
-            ok' jsonCors (ideResponseJson hits)
-
-      IdeComplete -> do
-        bodyStr <- toString body
-        case parseBody ideQueryCodec bodyStr of
-          Left _ -> ok' jsonCors (ideResponseJson [])
-          Right (IdeQuery { query }) -> do
-            hits <- liftAff (Ide.queryComplete query)
-            ok' jsonCors (ideResponseJson hits)
-
-      IdeSearch -> do
-        bodyStr <- toString body
-        case parseBody ideQueryCodec bodyStr of
-          Left _ -> ok' jsonCors (ideResponseJson [])
-          Right (IdeQuery { query }) -> do
-            hits <- liftAff (Ide.querySearch query)
-            ok' jsonCors (ideResponseJson hits)
-
-      WorkspacesRoot -> case method of
-        Get -> do
-          m <- liftEffect (Ref.read ctx.workspaces)
-          let ids = Array.sort
-                (map workspaceIdString (Array.fromFoldable (Map.keys m)))
-          ok' jsonCors (workspaceListJson ids)
-        Post -> do
-          bodyStr <- toString body
-          case parseWorkspaceCreateBody bodyStr of
-            Left msg -> badRequest' jsonCors (errorJson "BadRequest" msg)
-            Right wid -> do
-              m <- liftEffect (Ref.read ctx.workspaces)
-              case Map.lookup wid m of
-                Just _ -> conflict' jsonCors
-                  (errorJson "WorkspaceExists"
-                    ("workspace already exists: " <> workspaceIdString wid))
-                Nothing -> do
-                  liftAff $ createWorkspace
-                    { rootDir: ctx.rootDir
-                    , templateDir: ctx.templateDir
-                    , packageName: packageNameFor wid
-                    } wid
-                  -- /workspaces POST is slated for retirement (deferred
-                  -- housekeeping); skip the favorites lookup here and
-                  -- use the hardcoded fallback for the new workspace's
-                  -- initial module body.
-                  store <- liftEffect $ Session.newStore
-                    (workspacePath ctx.rootDir wid)
-                    (packageNameFor wid)
-                    Nothing
-                    noopBroadcast
-                  liftEffect $ Ref.modify_ (Map.insert wid store) ctx.workspaces
-                  ok' jsonCors (workspaceCreatedJson (workspaceIdString wid))
-        _ -> response' Status.methodNotAllowed jsonCors
-          (errorJson "MethodNotAllowed" "/workspaces accepts GET or POST")
-
       FavoritesRoute -> case method of
         Get -> do
           dir <- liftEffect Favorites.favoritesDir
@@ -913,36 +592,7 @@ mkRouter ctx req@{ route: r, method, body } =
           case parseEvalBody bodyStr of
             Left msg -> badRequest' jsonCors (errorJson "BadRequest" msg)
             Right req' -> do
-              storeResult <- resolveEvalStore ctx req.query
-              case storeResult of
-                Left r' -> pure r'
-                Right store -> do
-                  resp <- liftAff (Session.evaluate store req')
-                  ok' jsonCors (evalResponseJson resp)
+              resp <- liftAff (Session.evaluate ctx.mainStore req')
+              ok' jsonCors (evalResponseJson resp)
         _ -> response' Status.methodNotAllowed jsonCors
           (errorJson "MethodNotAllowed" "/eval accepts POST")
-
-      WorkspaceOne idStr -> case method of
-        Delete -> case validateWorkspaceId idStr of
-          Left msg -> badRequest' jsonCors (errorJson "BadWorkspaceId" msg)
-          Right wid
-            | wid == mainWorkspaceId ->
-                response' Status.forbidden jsonCors
-                  (errorJson "MainWorkspaceLocked"
-                    "the 'main' workspace cannot be deleted")
-            | wid == evalScratchId ->
-                response' Status.forbidden jsonCors
-                  (errorJson "EvalScratchLocked"
-                    "the 'eval-scratch' workspace is reserved for /eval and cannot be deleted")
-            | otherwise -> do
-                m <- liftEffect (Ref.read ctx.workspaces)
-                case Map.lookup wid m of
-                  Nothing -> response' Status.notFound jsonCors
-                    (errorJson "NoSuchWorkspace"
-                      ("workspace not found: " <> workspaceIdString wid))
-                  Just _ -> do
-                    liftAff $ deleteWorkspace ctx.rootDir wid
-                    liftEffect $ Ref.modify_ (Map.delete wid) ctx.workspaces
-                    ok' jsonCors (workspaceDeletedJson (workspaceIdString wid))
-        _ -> response' Status.methodNotAllowed jsonCors
-          (errorJson "MethodNotAllowed" "/workspaces/:id accepts DELETE")
