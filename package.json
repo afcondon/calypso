@@ -1,0 +1,26 @@
+{
+  "name": "purescript-playground",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "A browser-based PureScript scratchpad with live re-evaluation and per-cell inline types + values. See PLAN.md.",
+  "scripts": {
+    "build": "spago build",
+    "bundle:frontend": "spago bundle -p playground-frontend",
+    "serve:frontend": "npx http-server frontend/public -p 3051 -c-1 --cors",
+    "serve:backend": "node server/run.js"
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.6.0",
+    "@codemirror/language": "^6.10.0",
+    "@codemirror/legacy-modes": "^6.4.0",
+    "@codemirror/state": "^6.4.0",
+    "@codemirror/view": "^6.26.0",
+    "@lezer/highlight": "^1.2.3",
+    "d3-force": "^3.0.0"
+  },
+  "devDependencies": {
+    "http-server": "^14.1.1",
+    "purs-backend-erl": "^0.0.3"
+  }
+}

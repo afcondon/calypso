@@ -1,0 +1,18 @@
+workspace:
+  packageSet:
+    registry: 73.3.0
+  extraPackages:
+    httpurple:
+      path: ../purescript-httpurple-ws
+    hylograph-graph:
+      path: ../purescript-hylograph-libs/purescript-hylograph-graph
+    hylograph-layout:
+      path: ../purescript-hylograph-libs/purescript-hylograph-layout
+    hylograph-selection:
+      path: ../purescript-hylograph-libs/purescript-hylograph-selection
+    hylograph-simulation:
+      path: ../purescript-hylograph-libs/purescript-hylograph-simulation
+    hylograph-simulation-core:
+      path: ../purescript-hylograph-libs/purescript-hylograph-simulation-core
+    hylograph-transitions:
+      path: ../purescript-hylograph-libs/purescript-hylograph-transitions

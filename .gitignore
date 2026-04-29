@@ -1,0 +1,28 @@
+output/
+output-erl/
+ebin/
+*.beam
+.spago/
+node_modules/
+dist/
+*.log
+.DS_Store
+
+# Ephemeral /eval sandbox. Materialised at boot by the server from the
+# main-workspace template, rewritten on every /eval call — not worth
+# tracking as source.
+runtime-workspace/workspaces/eval-scratch/
+
+# Per-workspace persisted session state (module + cells + runtime).
+# Written on every session mutation so restarts don't lose the human's
+# work; regenerates cleanly from /session/* activity and is not source.
+runtime-workspace/workspaces/*/atelier-session.json
+
+# Local Claude Code settings (per-machine permission grants) and the
+# runtime file purs ide writes next to the project root.
+.claude/settings.local.json
+.psc-ide-port
+
+# Spago lock files: commit to library repos, not to app repos with fast-moving deps.
+# For now we keep them committed; remove from tracking later if they churn.
+*.pdf

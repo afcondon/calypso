@@ -1,0 +1,15 @@
+package:
+  name: playground-shared
+  description: Request/response codecs shared by the Playground frontend and server.
+  dependencies:
+    - prelude
+    - argonaut-codecs
+    - argonaut-core
+    - either
+    - maybe
+    - arrays
+    - strings
+    - codec-argonaut
+    - codec
+    - foreign-object
+    - tuples

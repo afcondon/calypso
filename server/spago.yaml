@@ -1,0 +1,23 @@
+package:
+  name: playground-server
+  description: HTTPurple backend — synthesises Main.purs from (module + cells), proxies to trypurescript, manages the purs ide sidecar.
+  dependencies:
+    - aff
+    - aff-promise
+    - argonaut-codecs
+    - argonaut-core
+    - arrays
+    - avar
+    - console
+    - effect
+    - either
+    - foldable-traversable
+    - httpurple
+    - maybe
+    - node-buffer
+    - node-fs
+    - playground-shared
+    - prelude
+    - strings
+    - transformers
+    - tuples

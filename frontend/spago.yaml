@@ -1,0 +1,38 @@
+package:
+  name: playground-frontend
+  description: Halogen frontend — module editor, playground cells, value+type gutter.
+  bundle:
+    module: Playground.Frontend.Main
+    outfile: public/bundle.js
+    platform: browser
+  dependencies:
+    - aff
+    - affjax
+    - affjax-web
+    - argonaut-codecs
+    - argonaut-core
+    - arrays
+    - codec
+    - codec-argonaut
+    - console
+    - effect
+    - either
+    - foldable-traversable
+    - foreign
+    - halogen
+    - http-methods
+    - hylograph-simulation
+    - nullable
+    - numbers
+    - ordered-collections
+    - transformers
+    - maybe
+    - playground-shared
+    - prelude
+    - sigil
+    - strings
+    - tuples
+    - web-dom
+    - web-events
+    - web-html
+    - web-uievents
