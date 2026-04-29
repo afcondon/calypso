@@ -755,6 +755,13 @@ handleIncomingBroadcast raw = case jsonParser raw of
         let CompileResponse snap = r.snapshot
         applyRemote snap
         syncEditorsEditable
+        -- Auto-claim the conch if nobody holds it.  Algorave-shaped
+        -- live coding is usually one-person-one-rig; the click-to-
+        -- take friction is pure tax.  If somebody else already
+        -- holds it (the rare collab case) we leave them alone.
+        case r.conch.holder of
+          Nothing -> handleAction RequestConchAction
+          Just _ -> pure unit
       Snapshot r -> do
         H.modify_ _ { conch = r.conch }
         s <- H.get
