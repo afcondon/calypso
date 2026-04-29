@@ -1,8 +1,8 @@
 package:
-  name: playground-frontend
+  name: calypso-frontend
   description: Halogen frontend — module editor, playground cells, value+type gutter.
   bundle:
-    module: Playground.Frontend.Main
+    module: Calypso.Frontend.Main
     outfile: public/bundle.js
     platform: browser
   dependencies:
@@ -27,7 +27,7 @@ package:
     - ordered-collections
     - transformers
     - maybe
-    - playground-shared
+    - calypso-shared
     - prelude
     - sigil
     - strings

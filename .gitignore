@@ -8,6 +8,9 @@ dist/
 *.log
 .DS_Store
 
+# Generated frontend bundle — regenerate via `make bundle`.
+frontend/public/bundle.js
+
 # Ephemeral /eval sandbox. Materialised at boot by the server from the
 # main-workspace template, rewritten on every /eval call — not worth
 # tracking as source.

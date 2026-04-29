@@ -1,12 +1,12 @@
 {
-  "name": "purescript-playground",
+  "name": "calypso",
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "A browser-based PureScript scratchpad with live re-evaluation and per-cell inline types + values. See PLAN.md.",
+  "description": "Live-coding webapp for purerl-tidal — workshop on water. Three-pane editor: composition (durable .tidal module) + cells (live-runnable expressions) + Hylograph (pattern visualization). Forked from Atelier.",
   "scripts": {
     "build": "spago build",
-    "bundle:frontend": "spago bundle -p playground-frontend",
+    "bundle:frontend": "spago bundle -p calypso-frontend",
     "serve:frontend": "npx http-server frontend/public -p 3051 -c-1 --cors",
     "serve:backend": "node server/run.js"
   },

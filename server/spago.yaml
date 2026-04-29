@@ -1,5 +1,5 @@
 package:
-  name: playground-server
+  name: calypso-server
   description: HTTPurple backend — synthesises Main.purs from (module + cells), proxies to trypurescript, manages the purs ide sidecar.
   dependencies:
     - aff
@@ -16,7 +16,7 @@ package:
     - maybe
     - node-buffer
     - node-fs
-    - playground-shared
+    - calypso-shared
     - prelude
     - strings
     - transformers

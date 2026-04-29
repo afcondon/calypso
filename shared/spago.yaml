@@ -1,6 +1,6 @@
 package:
-  name: playground-shared
-  description: Request/response codecs shared by the Playground frontend and server.
+  name: calypso-shared
+  description: Request/response codecs shared by the Calypso frontend and server.
   dependencies:
     - prelude
     - argonaut-codecs
