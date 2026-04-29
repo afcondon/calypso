@@ -340,13 +340,16 @@ handleAction = case _ of
       Right reply ->
         H.modify_ \s -> s { cellResults = Map.insert cellId reply s.cellResults }
   FireComposition src -> do
-    -- Composition fire is all-or-nothing: send the whole module body
-    -- as a single eval.  The reply lives in compositionStatus (header-
-    -- adjacent), separate from per-cell replies.
-    result <- evalSource src
-    case result of
-      Left err -> H.modify_ _ { transportError = Just err }
-      Right reply -> H.modify_ _ { compositionStatus = Just reply }
+    -- Composition is "all or nothing" but the daemon parses one
+    -- statement per /eval call, so we split by line, drop blanks and
+    -- `--` comments (the directive comments aren't for the daemon),
+    -- and fire each statement in sequence.  Stop on the first error
+    -- and report which line failed.
+    let stmts = compositionStatements src
+    H.modify_ _ { compositionStatus = Nothing, transportError = Nothing }
+    if Array.null stmts
+      then H.modify_ _ { compositionStatus = Just "(no statements to fire)" }
+      else fireStatements stmts
   ToggleFavoriteMenu -> H.modify_ \s -> s { favoriteMenuOpen = not s.favoriteMenuOpen }
   LoadFavorite k -> do
     s0 <- H.get
@@ -614,6 +617,44 @@ encodeJsonObject pairs =
   AJ.fromObject (Object.fromFoldable (map encodeEntry pairs))
   where
   encodeEntry (Tuple k v) = Tuple k (AJ.fromString v)
+
+-- | Split the composition body into fire-able statements.  Drops
+-- | blank lines and `--`-prefixed comments (including the
+-- | typographic-layer @-directives, which are for the renderer not
+-- | the daemon).  Each entry carries its 1-based source-line number
+-- | so error messages can point at the right line.
+compositionStatements :: String -> Array { lineNum :: Int, source :: String }
+compositionStatements src =
+  let lines = Str.split (Pattern "\n") src
+      indexed = mapWithIndex (\i s -> { lineNum: i + 1, source: s }) lines
+      isCommentLine s =
+        let trimmed = Str.trim s
+        in Str.null trimmed || Str.take 2 trimmed == "--"
+  in Array.filter (\e -> not (isCommentLine e.source)) indexed
+
+-- | Fire a list of statements in order against /eval.  Stops on the
+-- | first error and reports the failing line; on full success reports
+-- | the count.  Status lands in `compositionStatus`.
+fireStatements
+  :: forall o m
+   . MonadAff m
+  => Array { lineNum :: Int, source :: String }
+  -> H.HalogenM State Action Slots o m Unit
+fireStatements = go 0
+  where
+  go fired remaining = case Array.uncons remaining of
+    Nothing ->
+      H.modify_ _
+        { compositionStatus = Just ("OK: fired " <> show fired <> " statements") }
+    Just { head: e, tail } -> do
+      result <- evalSource e.source
+      case result of
+        Left err ->
+          H.modify_ _
+            { compositionStatus = Just
+                ("ERR at line " <> show e.lineNum <> ": " <> err)
+            }
+        Right _reply -> go (fired + 1) tail
 
 -- | POST `{source, imports: []}` to /eval.  Returns the daemon's
 -- | reply line on success, a human transport error on failure.  The
