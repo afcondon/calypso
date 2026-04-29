@@ -29,7 +29,8 @@ foreign import _createEditor
   :: Element
   -> String
   -> EffectFn1 String Unit       -- doc-change callback
-  -> EffectFn1 String String     -- type-string -> Sigil HTML (for hover)
+  -> EffectFn1 String Unit       -- submit callback (Mod-Enter)
+  -> EffectFn1 String String     -- type-string -> tooltip HTML (unused)
   -> Effect EditorView
 
 foreign import _getContent :: EditorView -> Effect String
@@ -49,10 +50,12 @@ createEditor
   :: Element
   -> String
   -> (String -> Effect Unit)
+  -> (String -> Effect Unit)
   -> Effect EditorView
-createEditor el initialDoc onChange =
+createEditor el initialDoc onChange onSubmit =
   _createEditor el initialDoc
     (mkEffectFn1 onChange)
+    (mkEffectFn1 onSubmit)
     (mkEffectFn1 (\s -> pure ("<code class=\"cm-tooltip-fallback\">" <> s <> "</code>")))
 
 setErrors :: EditorView -> Array ErrorSpan -> Effect Unit

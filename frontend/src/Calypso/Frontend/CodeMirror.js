@@ -99,15 +99,29 @@ export const _setErrors = (view) => (errors) => () => {
   view.dispatch({ effects: setErrorsEffect.of(buildErrorDecos(view, errors)) });
 };
 
-// Creates a CodeMirror 6 view mounted into `parent`. `onChange` fires
-// every time the document is edited, with the full new document content.
-// Returns the EditorView so callers can query/destroy it later.
+// Creates a CodeMirror 6 view mounted into `parent`.
+//   onChange  fires on every edit with the full doc content
+//   onSubmit  fires on the explicit fire gesture (Mod-Enter on Mac;
+//             Ctrl-Enter on others) with the full doc content
 //
 // `_renderType` is unused — Calypso has no types to render in hover
 // tooltips.  Kept on the FFI surface so the PureScript signature
 // stays stable while we settle on what tooltip content (if any) the
 // composition pane wants.
-export const _createEditor = (parent) => (initialDoc) => (onChange) => (_renderType) => () => {
+export const _createEditor = (parent) => (initialDoc) => (onChange) => (onSubmit) => (_renderType) => () => {
+  // Tidal-style fire gesture: Cmd-Enter (Mac) / Ctrl-Enter (others)
+  // sends the current document up to the parent component, which
+  // POSTs to /eval.  Returns true so CM swallows the keystroke
+  // (no newline insertion).
+  const submitKeymap = keymap.of([
+    {
+      key: 'Mod-Enter',
+      run: (v) => {
+        onSubmit(v.state.doc.toString());
+        return true;
+      },
+    },
+  ]);
   const view = new EditorView({
     parent,
     state: EditorState.create({
@@ -118,6 +132,7 @@ export const _createEditor = (parent) => (initialDoc) => (onChange) => (_renderT
         history(),
         bracketMatching(),
         indentOnInput(),
+        submitKeymap,
         keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
         // Haskell's lexer is close enough for Tidal mini-notation
         // surface syntax; a Tidal-aware grammar lands as a later

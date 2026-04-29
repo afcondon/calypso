@@ -182,6 +182,11 @@ type State =
   -- mini-notation AST + ok/err split) so the hylograph pane can render
   -- patterns; for now we just show the line.
   , cellResults :: Map String String
+  -- Latest reply from firing the composition pane (Mod-Enter on the
+  -- LHS).  Surfaced in the header so the human gets feedback that
+  -- the daemon received the body without the reply line cluttering
+  -- the composition itself.  Cleared on next fire.
+  , compositionStatus :: Maybe String
   , cellTypes :: Map String String
   , pendingCompile :: Maybe H.ForkId
   -- Conch + WebSocket transport, unchanged from Atelier.
@@ -218,6 +223,8 @@ data Action
   | AddCell
   | RemoveCell String
   | ToggleCellKind String
+  | FireCell String String        -- cell id, current source
+  | FireComposition String        -- current composition source
   | ToggleFavoriteMenu
   | LoadFavorite String
   | FavoritesLoaded (Array Favorite)
@@ -253,6 +260,7 @@ initialState _ =
   , transportError: Nothing
   , runtimeError: Nothing
   , cellResults: Map.empty
+  , compositionStatus: Nothing
   , cellTypes: Map.empty
   , pendingCompile: Nothing
   , myId: Nothing
@@ -322,6 +330,23 @@ handleAction = case _ of
       , cellTypes = Map.delete id s.cellTypes
       }
     handleAction ScheduleCompile
+  FireCell cellId src -> do
+    -- Tidal-style fire: Mod-Enter on a cell sends just that cell's
+    -- text via /eval to the daemon.  The daemon's reply line lands
+    -- in cellResults; errors land in transportError.
+    result <- evalSource src
+    case result of
+      Left err -> H.modify_ _ { transportError = Just err }
+      Right reply ->
+        H.modify_ \s -> s { cellResults = Map.insert cellId reply s.cellResults }
+  FireComposition src -> do
+    -- Composition fire is all-or-nothing: send the whole module body
+    -- as a single eval.  The reply lives in compositionStatus (header-
+    -- adjacent), separate from per-cell replies.
+    result <- evalSource src
+    case result of
+      Left err -> H.modify_ _ { transportError = Just err }
+      Right reply -> H.modify_ _ { compositionStatus = Just reply }
   ToggleFavoriteMenu -> H.modify_ \s -> s { favoriteMenuOpen = not s.favoriteMenuOpen }
   LoadFavorite k -> do
     s0 <- H.get
@@ -589,6 +614,52 @@ encodeJsonObject pairs =
   AJ.fromObject (Object.fromFoldable (map encodeEntry pairs))
   where
   encodeEntry (Tuple k v) = Tuple k (AJ.fromString v)
+
+-- | POST `{source, imports: []}` to /eval.  Returns the daemon's
+-- | reply line on success, a human transport error on failure.  The
+-- | server's EvalResponse wraps the reply text as `value`; an
+-- | error-shaped response surfaces in `errors[0].message`.
+evalSource
+  :: forall o m
+   . MonadAff m
+  => String
+  -> H.HalogenM State Action Slots o m (Either String String)
+evalSource src = do
+  let body = stringify
+        ( AJ.fromObject
+            ( Object.fromFoldable
+                [ Tuple "source" (AJ.fromString src)
+                , Tuple "imports" (AJ.fromArray [])
+                ]
+            )
+        )
+  result <- H.liftAff $ AX.request $ AX.defaultRequest
+    { method = Left POST
+    , url = backendUrl <> "/eval"
+    , responseFormat = RF.json
+    , content = Just (RB.string body)
+    }
+  pure case result of
+    Left err -> Left (AX.printError err)
+    Right r
+      | r.status == AX.StatusCode 200 -> case AJ.toObject r.body of
+          Nothing -> Left "eval: response not an object"
+          Just o ->
+            let valueText = case Object.lookup "value" o of
+                  Just v -> AJ.toString v
+                  Nothing -> Nothing
+                errorText = do
+                  errsJ <- Object.lookup "errors" o
+                  errs <- AJ.toArray errsJ
+                  first <- Array.head errs
+                  firstO <- AJ.toObject first
+                  msgJ <- Object.lookup "message" firstO
+                  AJ.toString msgJ
+            in case valueText, errorText of
+                 Just s, _ -> Right s
+                 Nothing, Just e -> Left ("ERR: " <> e)
+                 Nothing, Nothing -> Left "eval: empty response"
+      | otherwise -> Left ("HTTP " <> show r.status)
 
 hydrateFromServer
   :: forall o m
@@ -1004,10 +1075,27 @@ renderFavoriteOption state (Favorite f) =
 renderCompositionColumn :: forall m. MonadAff m => State -> H.ComponentHTML Action Slots m
 renderCompositionColumn state =
   HH.section [ HP.class_ (H.ClassName "pane pane-composition") ]
-    [ HH.slot _moduleEditor unit Editor.component
+    [ HH.div [ HP.class_ (H.ClassName "pane-toolbar") ]
+        [ HH.button
+            [ HP.class_ (H.ClassName "fire-btn")
+            , HE.onClick \_ -> FireComposition state.moduleSource
+            , HP.title "Fire the whole composition (Mod-Enter inside the editor)"
+            ]
+            [ HH.text "▶ fire" ]
+        , case state.compositionStatus of
+            Just msg ->
+              HH.span [ HP.class_ (H.ClassName "fire-status") ]
+                [ HH.text msg ]
+            Nothing -> HH.text ""
+        ]
+    , HH.slot _moduleEditor unit Editor.component
         { initialDoc: state.moduleSource, tag: "module" }
-        (\(Editor.Changed src) -> ModuleChanged src)
+        compositionOutput
     ]
+  where
+  compositionOutput = case _ of
+    Editor.Changed src -> ModuleChanged src
+    Editor.Submitted src -> FireComposition src
 
 renderCellsColumn :: forall m. MonadAff m => State -> H.ComponentHTML Action Slots m
 renderCellsColumn state =
@@ -1049,6 +1137,12 @@ renderCellRow _state idx c =
             ]
             [ HH.text c.kind ]
         , HH.button
+            [ HP.class_ (H.ClassName "fire-btn fire-btn-cell")
+            , HE.onClick \_ -> FireCell c.id c.source
+            , HP.title "Fire this cell (Mod-Enter inside the editor)"
+            ]
+            [ HH.text "▶" ]
+        , HH.button
             [ HP.class_ (H.ClassName "remove-cell-btn")
             , HE.onClick \_ -> RemoveCell c.id
             , HP.title "Remove cell"
@@ -1057,8 +1151,12 @@ renderCellRow _state idx c =
         ]
     , HH.slot _cellEditor c.id Editor.component
         { initialDoc: c.source, tag: "cell" }
-        (\(Editor.Changed src) -> CellChanged c.id src)
+        (cellOutput c.id)
     ]
+  where
+  cellOutput cid = case _ of
+    Editor.Changed src -> CellChanged cid src
+    Editor.Submitted src -> FireCell cid src
 
 -- | Hylograph pane (placeholder).  Until the mini-notation parser and
 -- | pattern-visualisation primitives land, we mirror the cells column

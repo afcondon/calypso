@@ -21,8 +21,13 @@ import Calypso.Frontend.CodeMirror as CM
 
 type Input = { initialDoc :: String, tag :: String }
 
--- | The editor raises this on every document change. Parents debounce.
-data Output = Changed String
+-- | Editor outputs.  `Changed` fires on every document edit (parent
+-- | typically debounces and persists).  `Submitted` fires on the
+-- | explicit fire gesture (Mod-Enter): the cell or composition body
+-- | should be sent to the daemon.
+data Output
+  = Changed String
+  | Submitted String
 
 -- | External queries: replace content (unused now), push a list of
 -- | inline error spans to be decorated on the editor, toggle
@@ -37,6 +42,7 @@ data Action
   | Finalise
   | UpdateInput Input
   | HandleChange String
+  | HandleSubmit String
 
 -- `currentDoc` tracks what we believe is presently in the CM6 view so
 -- we can distinguish 'parent re-rendered with the source we already
@@ -85,10 +91,14 @@ handleAction = case _ of
       Nothing -> pure unit
       Just htmlEl -> do
         let el = toElement htmlEl
-        { emitter, listener } <- liftEffect HS.create
-        _ <- H.subscribe (HandleChange <$> emitter)
+        { emitter: changeEmitter, listener: changeListener } <- liftEffect HS.create
+        _ <- H.subscribe (HandleChange <$> changeEmitter)
+        { emitter: submitEmitter, listener: submitListener } <- liftEffect HS.create
+        _ <- H.subscribe (HandleSubmit <$> submitEmitter)
         view <- liftEffect $
-          CM.createEditor el state.input.initialDoc (HS.notify listener)
+          CM.createEditor el state.input.initialDoc
+            (HS.notify changeListener)
+            (HS.notify submitListener)
         H.modify_ _ { view = Just view }
   Finalise -> do
     state <- H.get
@@ -116,6 +126,8 @@ handleAction = case _ of
   HandleChange content -> do
     H.modify_ _ { currentDoc = content }
     H.raise (Changed content)
+  HandleSubmit content ->
+    H.raise (Submitted content)
 
 handleQuery
   :: forall m a
