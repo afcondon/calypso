@@ -23,34 +23,33 @@ const programmaticAnnotation = Annotation.define();
 // find the compartment within each view's own state.
 const editableCompartment = new Compartment();
 
-// Light syntax-highlight theme keyed to the page palette.
-// Swiss-style: a small, muted set of hues that carry meaning without
-// shouting. Keywords and operators in petrol, types in teal,
-// comments in slate, strings in terracotta, numbers in the body
-// colour so they stand out as literals.
+// Matrix CRT highlight theme — phosphor green primary, brighter
+// green for keywords, cyan for types/strings, amber for numbers,
+// dim green for chrome (comments, punctuation).  Foreground hues
+// match the body palette in style.css.
 const playgroundHighlightStyle = HighlightStyle.define([
-  { tag: t.comment,       color: '#6b7a8a', fontStyle: 'italic' },
-  { tag: t.lineComment,   color: '#6b7a8a', fontStyle: 'italic' },
-  { tag: t.blockComment,  color: '#6b7a8a', fontStyle: 'italic' },
-  { tag: t.keyword,       color: '#2b5f75', fontWeight: '600' },
-  { tag: t.controlKeyword,color: '#2b5f75', fontWeight: '600' },
-  { tag: t.definitionKeyword, color: '#2b5f75', fontWeight: '600' },
-  { tag: t.operatorKeyword,color: '#2b5f75' },
-  { tag: t.operator,      color: '#1d1d1b' },
-  { tag: t.string,        color: '#9e5a3c' },
-  { tag: t.number,        color: '#1d1d1b' },
-  { tag: t.bool,          color: '#6b4c8a', fontWeight: '600' },
-  { tag: t.null,          color: '#6b4c8a', fontStyle: 'italic' },
-  { tag: t.className,     color: '#3d7a72', fontWeight: '600' },
-  { tag: t.typeName,      color: '#3d7a72', fontWeight: '600' },
-  { tag: t.variableName,  color: '#1d1d1b' },
-  { tag: t.function(t.variableName), color: '#1d1d1b' },
-  { tag: t.propertyName,  color: '#1d1d1b' },
-  { tag: t.labelName,     color: '#8a6a2b' },
-  { tag: t.meta,          color: '#6b7a8a' },
-  { tag: t.punctuation,   color: '#6b6b66' },
-  { tag: t.bracket,       color: '#6b6b66' },
-  { tag: t.namespace,     color: '#3d7a72' },
+  { tag: t.comment,            color: '#1f6e3a', fontStyle: 'italic' },
+  { tag: t.lineComment,        color: '#1f6e3a', fontStyle: 'italic' },
+  { tag: t.blockComment,       color: '#1f6e3a', fontStyle: 'italic' },
+  { tag: t.keyword,            color: '#9bffb6', fontWeight: '600' },
+  { tag: t.controlKeyword,     color: '#9bffb6', fontWeight: '600' },
+  { tag: t.definitionKeyword,  color: '#9bffb6', fontWeight: '600' },
+  { tag: t.operatorKeyword,    color: '#9bffb6' },
+  { tag: t.operator,           color: '#9bffb6' },
+  { tag: t.string,             color: '#4afff0' },
+  { tag: t.number,             color: '#ffb84a' },
+  { tag: t.bool,               color: '#ffb84a', fontWeight: '600' },
+  { tag: t.null,               color: '#ffb84a', fontStyle: 'italic' },
+  { tag: t.className,          color: '#4afff0', fontWeight: '600' },
+  { tag: t.typeName,           color: '#4afff0', fontWeight: '600' },
+  { tag: t.variableName,       color: '#41ff7c' },
+  { tag: t.function(t.variableName), color: '#41ff7c' },
+  { tag: t.propertyName,       color: '#41ff7c' },
+  { tag: t.labelName,          color: '#ffb84a' },
+  { tag: t.meta,               color: '#1f6e3a' },
+  { tag: t.punctuation,        color: '#1f6e3a' },
+  { tag: t.bracket,            color: '#1f6e3a' },
+  { tag: t.namespace,          color: '#4afff0' },
 ]);
 
 // --- Inline error decoration -----------------------------------
@@ -157,7 +156,7 @@ export const _createEditor = (parent) => (initialDoc) => (onChange) => (onSubmit
         }),
         EditorView.theme({
           '&': { height: '100%' },
-          '.cm-scroller': { fontFamily: 'var(--mono)', fontSize: '13px', lineHeight: '1.5' },
+          '.cm-scroller': { fontFamily: 'var(--mono-code)', fontSize: '16px', lineHeight: '1.4' },
           '.cm-content': { padding: '6px 0' },
         }),
       ],
