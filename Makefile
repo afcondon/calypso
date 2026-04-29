@@ -40,7 +40,7 @@ bundle:
 
 start: bootstrap
 	@echo "Starting backend on :$(BACKEND_PORT) and frontend on :$(FRONTEND_PORT)"
-	@node server/run.js > /tmp/calypso-backend.log 2>&1 &
+	@BACKEND_PORT=$(BACKEND_PORT) node server/run.js > /tmp/calypso-backend.log 2>&1 &
 	@npx http-server frontend/public -p $(FRONTEND_PORT) -c-1 --cors > /tmp/calypso-frontend.log 2>&1 &
 	@sleep 1
 	@echo "Backend log:  /tmp/calypso-backend.log"

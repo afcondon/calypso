@@ -48,6 +48,8 @@ import Routing.Duplex.Generic (noArgs, sum)
 import Routing.Duplex.Generic.Syntax ((/), (?))
 
 import Data.Int as Int
+import Effect (Effect)
+import Node.Process as Process
 import Calypso.Server.Pen (PenStore, RequestResult(..))
 import Calypso.Server.Pen as Pen
 import Calypso.Server.Favorites as Favorites
@@ -592,8 +594,25 @@ handlePenResult ctx = case _ of
 sessionDir :: String
 sessionDir = "runtime-workspace/workspaces/main"
 
+-- | Resolve the listen port from `$BACKEND_PORT`, falling back to
+-- | 3060.  Honours SDI's lazy-spawn protocol (SDI rewrites the
+-- | literal port in the registered startCommand to an internal port
+-- | and exports it as `$BACKEND_PORT` so the server binds where SDI
+-- | expects to proxy it).
+resolvePort :: Effect Int
+resolvePort = do
+  raw <- Process.lookupEnv "BACKEND_PORT"
+  pure case raw >>= Int.fromString of
+    Just p -> p
+    Nothing -> 3060
+
 main :: ServerM
-main = serveWithHandle { port: 3060, hostname: "0.0.0.0" } \handle -> do
+main = do
+  port <- liftEffect resolvePort
+  serveOn port
+
+serveOn :: Int -> ServerM
+serveOn port = serveWithHandle { port, hostname: "0.0.0.0" } \handle -> do
   -- Ensure ~/.calypso/favorites exists and is seeded with default.tidal
   -- before the first store gets built — that way the dropdown is
   -- non-empty on a fresh install and the initial-session seeding has
