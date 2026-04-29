@@ -20,6 +20,7 @@ import Data.HTTP.Method (Method(..))
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Int (toNumber)
+import Data.Int as Int
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.String.Pattern (Pattern(..))
 import Data.Traversable (for)
@@ -35,7 +36,7 @@ import Halogen.HTML.Properties as HP
 import Halogen.Subscription as HS
 import Type.Proxy (Proxy(..))
 
-import Data.Foldable (for_)
+import Data.Foldable (for_, foldr)
 
 import Calypso.Frontend.CodeMirror (ErrorSpan)
 import Calypso.Frontend.Config (backendUrl, readHideParam, writeHideParam, wsBackendUrl)
@@ -801,7 +802,18 @@ proposalAction verb pid idx = do
               Nothing -> "proposal " <> verb <> " rejected"
         H.modify_ _ { transportError = Just ("pen-held: " <> banner) }
       AX.StatusCode code
-        | code >= 200 && code < 300 -> pure unit  -- broadcast handles UI
+        -- On accept, the server's WebSocket Snapshot broadcast
+        -- excludes the pen holder (existing behavior to avoid echo
+        -- on typed edits).  But the pen holder triggered this
+        -- accept and they need to see the new source too — so apply
+        -- the response body locally instead of waiting for a frame
+        -- that won't arrive.  Reject endpoints don't mutate source
+        -- so they don't need this fast-path.
+        | code >= 200 && code < 300 ->
+            when (verb == "accept") $
+              case CA.decode compileResponseCodec r.body of
+                Right (CompileResponse snap) -> applyRemote snap
+                Left _ -> pure unit
         | otherwise -> H.modify_ _
             { transportError = Just ("proposal " <> verb <> " failed: HTTP " <> show code) }
 
@@ -1007,9 +1019,16 @@ applyRemote r = do
         ( map (\(CellEmit e) -> Tuple e.id e.value) r.emits )
       syncedCells = Map.fromFoldable
         ( map (\(Cell c) -> Tuple c.id { source: c.source, kind: c.kind }) r.cells )
+      -- Pull the highest-numbered cell from the snapshot so a fresh
+      -- AddCell never collides with a pre-existing id.  Cell ids
+      -- match `c<N>`; anything else is treated as 0 (still safe —
+      -- max with the existing local counter keeps it monotonic).
+      maxRemoteN = foldr max 0
+        ( Array.mapMaybe (\(Cell c) -> parseCellNumber c.id) r.cells )
   H.modify_ \s -> s
     { moduleSource = rm.source
     , cells = cellRecs
+    , nextCellId = max s.nextCellId (maxRemoteN + 1)
     , runtime = r.runtime
     , cellTypes = typesMap
     , cellResults = Map.union resultsMap s.cellResults
@@ -1021,6 +1040,9 @@ applyRemote r = do
     , lastSyncedRuntime = r.runtime
     }
   decorateErrors r.errors r.cellLines
+
+parseCellNumber :: String -> Maybe Int
+parseCellNumber s = Str.stripPrefix (Pattern "c") s >>= Int.fromString
 
 decorateErrors
   :: forall o m
