@@ -40,6 +40,7 @@ data Output
   | Submitted String
   | AcceptHunkO ProposalId Int
   | RejectHunkO ProposalId Int
+  | MoveRequested                -- Mod-Shift-Enter: parent decides move semantics
 
 -- | External queries: replace content (unused now), push a list of
 -- | inline error spans to be decorated on the editor, toggle whether
@@ -51,6 +52,7 @@ data Query a
   | SetEditable Boolean a
   | SetProposals (Array Proposal) a
   | SetVocabulary (Array Completion) a
+  | GetCursorLineText (Maybe { lineNum :: Int, text :: String } -> a)
 
 data Action
   = Initialise
@@ -60,6 +62,7 @@ data Action
   | HandleSubmit String
   | HandleAccept ProposalId Int
   | HandleReject ProposalId Int
+  | HandleMove
 
 -- `currentDoc` tracks what we believe is presently in the CM6 view so
 -- we can distinguish 'parent re-rendered with the source we already
@@ -116,12 +119,15 @@ handleAction = case _ of
         _ <- H.subscribe ((\(Tuple pid idx) -> HandleAccept pid idx) <$> acceptEmitter)
         { emitter: rejectEmitter, listener: rejectListener } <- liftEffect HS.create
         _ <- H.subscribe ((\(Tuple pid idx) -> HandleReject pid idx) <$> rejectEmitter)
+        { emitter: moveEmitter, listener: moveListener } <- liftEffect HS.create
+        _ <- H.subscribe ((\_ -> HandleMove) <$> moveEmitter)
         view <- liftEffect $
           CM.createEditor el state.input.initialDoc
             (HS.notify changeListener)
             (HS.notify submitListener)
             (\pid idx -> HS.notify acceptListener (Tuple pid idx))
             (\pid idx -> HS.notify rejectListener (Tuple pid idx))
+            (HS.notify moveListener unit)
         liftEffect (CM.setVocabulary view state.input.vocabulary)
         H.modify_ _ { view = Just view }
   Finalise -> do
@@ -163,6 +169,7 @@ handleAction = case _ of
     H.raise (Submitted content)
   HandleAccept pid idx -> H.raise (AcceptHunkO pid idx)
   HandleReject pid idx -> H.raise (RejectHunkO pid idx)
+  HandleMove -> H.raise MoveRequested
 
 handleQuery
   :: forall m a
@@ -205,3 +212,11 @@ handleQuery = case _ of
         liftEffect (CM.setVocabulary view completions)
         pure (Just next)
       Nothing -> pure (Just next)
+  GetCursorLineText reply -> do
+    state <- H.get
+    case state.view of
+      Just view -> do
+        n <- liftEffect (CM.getCursorLine view)
+        t <- liftEffect (CM.getLineText view n)
+        pure (Just (reply (Just { lineNum: n, text: t })))
+      Nothing -> pure (Just (reply Nothing))

@@ -14,6 +14,7 @@ import Data.Argonaut.Parser (jsonParser)
 import Data.Array (filter, findIndex, mapWithIndex, modifyAt, snoc)
 import Data.Array as Array
 import Data.String as Str
+import Data.String.CodeUnits (takeRight) as Str.CU
 import Data.Codec.Argonaut as CA
 import Data.Either (Either(..))
 import Data.HTTP.Method (Method(..))
@@ -272,6 +273,8 @@ data Action
   | AddCell
   | RemoveCell String
   | ToggleCellKind String
+  | PromoteCellToCode String         -- append cell source to composition, then remove cell
+  | DemoteCursorLineToCell           -- copy cursor line in moduleEditor into a new cell
   | FireCell String String        -- cell id, current source
   | FireComposition String        -- current composition source
   | AcceptHunk ProposalId Int     -- POST /proposals/:id/hunks/:idx/accept
@@ -396,15 +399,64 @@ handleAction = case _ of
       , cellTypes = Map.delete id s.cellTypes
       }
     handleAction ScheduleCompile
+  PromoteCellToCode cellId -> do
+    -- Append the cell's current source onto the end of the composition,
+    -- then drop the cell.  Both happen in one local-state mutation; the
+    -- subsequent ScheduleCompile sees a different cell-count and runs
+    -- runFullCompile, which POSTs the whole new state to /session/compile.
+    s0 <- H.get
+    case Array.find (\c -> c.id == cellId) s0.cells of
+      Nothing -> pure unit
+      Just c -> do
+        H.modify_ \s ->
+          let sep = if Str.null s.moduleSource then ""
+                    else if Str.CU.takeRight 1 s.moduleSource == "\n" then ""
+                    else "\n"
+              newModule = s.moduleSource <> sep <> c.source
+                <> (if Str.CU.takeRight 1 c.source == "\n" then "" else "\n")
+          in s
+            { moduleSource = newModule
+            , cells = filter (_.id >>> (_ /= cellId)) s.cells
+            , cellResults = Map.delete cellId s.cellResults
+            , cellTypes = Map.delete cellId s.cellTypes
+            }
+        -- Push the new content into the live moduleEditor view so the
+        -- code-pane editor reflects the promoted text immediately;
+        -- without this the parent state has the new source but the
+        -- CodeMirror view still shows the old.
+        st <- H.get
+        _ <- H.tell _moduleEditor unit (Editor.ReplaceContent st.moduleSource)
+        handleAction ScheduleCompile
+  DemoteCursorLineToCell -> do
+    -- Ask the module editor for its current cursor line and that line's
+    -- text, then add a new cell whose source is that text.  The line in
+    -- the composition is left untouched.
+    result <- H.request _moduleEditor unit Editor.GetCursorLineText
+    case result of
+      Just (Just { text }) | not (Str.null (Str.trim text)) -> do
+        H.modify_ \s ->
+          let newId = "c" <> show s.nextCellId
+              newCell = { id: newId, kind: "expr", source: text }
+          in s { cells = snoc s.cells newCell, nextCellId = s.nextCellId + 1 }
+        handleAction ScheduleCompile
+      _ -> pure unit
   FireCell cellId src -> do
     -- Tidal-style fire: Mod-Enter on a cell sends just that cell's
     -- text via /eval to the daemon.  The daemon's reply line lands
-    -- in cellResults; errors land in transportError.
-    result <- evalSource src
-    case result of
-      Left err -> H.modify_ _ { transportError = Just err }
-      Right reply ->
-        H.modify_ \s -> s { cellResults = Map.insert cellId reply s.cellResults }
+    -- in cellResults; errors land in transportError.  Strip blank
+    -- lines and `--` comments first (same rule as the composition
+    -- pane) so users can park notes inline.
+    let stmts = compositionStatements src
+        cleaned = Str.joinWith "\n" (map _.source stmts)
+    if Str.null cleaned
+      then H.modify_ \s -> s
+        { cellResults = Map.insert cellId "(no statements)" s.cellResults }
+      else do
+        result <- evalSource cleaned
+        case result of
+          Left err -> H.modify_ _ { transportError = Just err }
+          Right reply ->
+            H.modify_ \s -> s { cellResults = Map.insert cellId reply s.cellResults }
   FireComposition src -> do
     -- Composition is "all or nothing" but the daemon parses one
     -- statement per /eval call, so we split by line, drop blanks and
@@ -664,11 +716,21 @@ httpJson method url bodyJson = do
     Left err -> pure (Left (AX.printError err))
     Right r -> case r.status of
       AX.StatusCode 409 -> do
-        let banner = case CA.decode penHeldBodyCodec r.body of
-              Left _ -> "Another viewer holds the pen."
-              Right held -> penHeldMessage held
-        H.modify_ _ { penBanner = Just banner, compiling = false }
-        pure (Left ("pen-held: " <> banner))
+        s <- H.get
+        if iHoldPen s
+          then do
+            -- Stale 409: this request was sent before our pen claim
+            -- landed.  The banner from `penHeldMessage` would falsely
+            -- say "Pen is unclaimed", overwriting the cleared state
+            -- we just got from the PenUpdate broadcast.
+            H.modify_ _ { compiling = false }
+            pure (Left "pen-held: stale (we now hold the pen)")
+          else do
+            let banner = case CA.decode penHeldBodyCodec r.body of
+                  Left _ -> "Another viewer holds the pen."
+                  Right held -> penHeldMessage held
+            H.modify_ _ { penBanner = Just banner, compiling = false }
+            pure (Left ("pen-held: " <> banner))
       AX.StatusCode code
         | code >= 200 && code < 300 -> case CA.decode compileResponseCodec r.body of
             Left decodeErr -> pure (Left ("decode: " <> CA.printJsonDecodeError decodeErr))
@@ -691,14 +753,21 @@ encodeJsonObject pairs =
 -- | typographic-layer @-directives, which are for the renderer not
 -- | the daemon).  Each entry carries its 1-based source-line number
 -- | so error messages can point at the right line.
+-- | Drop everything from the first `--` onwards and trim trailing
+-- | whitespace.  Whole-line `--` comments collapse to "".  Mini-notation
+-- | uses single-`-` tokens (binding names like `live-tick`) but never
+-- | `--`, so this is unambiguous.
+stripLineComment :: String -> String
+stripLineComment line = case Str.indexOf (Pattern "--") line of
+  Just i -> Str.trim (Str.take i line)
+  Nothing -> Str.trim line
+
 compositionStatements :: String -> Array { lineNum :: Int, source :: String }
 compositionStatements src =
   let lines = Str.split (Pattern "\n") src
-      indexed = mapWithIndex (\i s -> { lineNum: i + 1, source: s }) lines
-      isCommentLine s =
-        let trimmed = Str.trim s
-        in Str.null trimmed || Str.take 2 trimmed == "--"
-  in Array.filter (\e -> not (isCommentLine e.source)) indexed
+      indexed = mapWithIndex
+        (\i s -> { lineNum: i + 1, source: stripLineComment s }) lines
+  in Array.filter (\e -> not (Str.null e.source)) indexed
 
 -- | Fire a list of statements in order against /eval.  Stops on the
 -- | first error and reports the failing line; on full success reports
@@ -1308,17 +1377,26 @@ renderCompositionColumn state =
     Editor.Submitted src -> FireComposition src
     Editor.AcceptHunkO pid idx -> AcceptHunk pid idx
     Editor.RejectHunkO pid idx -> RejectHunk pid idx
+    Editor.MoveRequested -> DemoteCursorLineToCell
 
 renderCellsColumn :: forall m. MonadAff m => State -> H.ComponentHTML Action Slots m
 renderCellsColumn state =
   HH.section [ HP.class_ (H.ClassName "pane pane-cells") ]
     ( mapWithIndex (renderCellRow state) state.cells
         <>
-          [ HH.button
-              [ HP.class_ (H.ClassName "add-cell-btn")
-              , HE.onClick \_ -> AddCell
+          [ HH.div [ HP.class_ (H.ClassName "cells-toolbar") ]
+              [ HH.button
+                  [ HP.class_ (H.ClassName "add-cell-btn")
+                  , HE.onClick \_ -> AddCell
+                  ]
+                  [ HH.text "+ add cell" ]
+              , HH.button
+                  [ HP.class_ (H.ClassName "demote-cell-btn")
+                  , HE.onClick \_ -> DemoteCursorLineToCell
+                  , HP.title "Demote: copy the code-pane cursor line into a new cell (line stays)"
+                  ]
+                  [ HH.text "↧ demote line" ]
               ]
-              [ HH.text "+ add cell" ]
           ]
     )
 
@@ -1355,6 +1433,12 @@ renderCellRow state idx c =
             ]
             [ HH.text "▶" ]
         , HH.button
+            [ HP.class_ (H.ClassName "promote-cell-btn")
+            , HE.onClick \_ -> PromoteCellToCode c.id
+            , HP.title "Promote: append this cell's text to the composition and remove the cell"
+            ]
+            [ HH.text "↥" ]
+        , HH.button
             [ HP.class_ (H.ClassName "remove-cell-btn")
             , HE.onClick \_ -> RemoveCell c.id
             , HP.title "Remove cell"
@@ -1374,6 +1458,7 @@ renderCellRow state idx c =
     Editor.Submitted src -> FireCell cid src
     Editor.AcceptHunkO pid idx -> AcceptHunk pid idx
     Editor.RejectHunkO pid idx -> RejectHunk pid idx
+    Editor.MoveRequested -> PromoteCellToCode cid
 
 -- | Hylograph pane.  Currently a tabbed reference panel: the
 -- | vocabulary parsed from purerl-tidal's setup files, a primer for

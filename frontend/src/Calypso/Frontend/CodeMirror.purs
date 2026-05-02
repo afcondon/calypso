@@ -9,6 +9,8 @@ module Calypso.Frontend.CodeMirror
   , setEditable
   , setProposals
   , setVocabulary
+  , getCursorLine
+  , getLineText
   ) where
 
 import Prelude
@@ -54,6 +56,7 @@ foreign import _createEditor
   -> EffectFn1 String Unit       -- submit callback (Mod-Enter)
   -> EffectFn2 String Int Unit   -- accept-hunk callback (proposalId, hunkIdx)
   -> EffectFn2 String Int Unit   -- reject-hunk callback
+  -> Effect Unit                 -- move callback (Mod-Shift-Enter)
   -> EffectFn1 String String     -- type-string -> tooltip HTML (unused)
   -> Effect EditorView
 
@@ -71,8 +74,18 @@ foreign import _setProposals :: EditorView -> Array HunkView -> Effect Unit
 
 foreign import _setVocabulary :: EditorView -> Array Completion -> Effect Unit
 
+foreign import _getCursorLine :: EditorView -> Effect Int
+
+foreign import _getLineText :: EditorView -> Int -> Effect String
+
 setVocabulary :: EditorView -> Array Completion -> Effect Unit
 setVocabulary = _setVocabulary
+
+getCursorLine :: EditorView -> Effect Int
+getCursorLine = _getCursorLine
+
+getLineText :: EditorView -> Int -> Effect String
+getLineText = _getLineText
 
 createEditor
   :: Element
@@ -81,13 +94,15 @@ createEditor
   -> (String -> Effect Unit)
   -> (ProposalId -> Int -> Effect Unit)
   -> (ProposalId -> Int -> Effect Unit)
+  -> Effect Unit
   -> Effect EditorView
-createEditor el initialDoc onChange onSubmit onAccept onReject =
+createEditor el initialDoc onChange onSubmit onAccept onReject onMove =
   _createEditor el initialDoc
     (mkEffectFn1 onChange)
     (mkEffectFn1 onSubmit)
     (mkEffectFn2 (\pidStr idx -> onAccept (ProposalId pidStr) idx))
     (mkEffectFn2 (\pidStr idx -> onReject (ProposalId pidStr) idx))
+    onMove
     (mkEffectFn1 (\s -> pure ("<code class=\"cm-tooltip-fallback\">" <> s <> "</code>")))
 
 setErrors :: EditorView -> Array ErrorSpan -> Effect Unit

@@ -7,7 +7,7 @@ import {
 } from '@codemirror/language';
 import { haskell } from '@codemirror/legacy-modes/mode/haskell';
 import { tags as t } from '@lezer/highlight';
-import { autocompletion } from '@codemirror/autocomplete';
+import { autocompletion, completionKeymap, acceptCompletion } from '@codemirror/autocomplete';
 
 // Marks transactions we originate from PureScript (setContent /
 // setErrors) so the updateListener below can distinguish them from
@@ -338,7 +338,7 @@ export const _setVocabulary = (view) => (completions) => () => {
 // composition pane wants.
 export const _createEditor =
   (parent) => (initialDoc) => (onChange) => (onSubmit) =>
-  (onAccept) => (onReject) => (_renderType) => () => {
+  (onAccept) => (onReject) => (onMove) => (_renderType) => () => {
   // Tidal-style fire gesture: Cmd-Enter (Mac) / Ctrl-Enter (others)
   // sends the current document up to the parent component, which
   // POSTs to /eval.  Returns true so CM swallows the keystroke
@@ -351,6 +351,24 @@ export const _createEditor =
         return true;
       },
     },
+    // Mod-Shift-Enter: PureScript decides what "move" means here based
+    // on which editor instance fired (cell → promote, module → demote).
+    // The FFI just signals the gesture and stays neutral.
+    {
+      key: 'Mod-Shift-Enter',
+      run: () => {
+        onMove();
+        return true;
+      },
+    },
+    // Tab accepts an active completion; falls through to indentWithTab
+    // (registered later in the stack) when no completion is open.
+    // acceptCompletion returns false in that case, which CM treats as
+    // "didn't handle it" and tries the next binding.
+    { key: 'Tab', run: acceptCompletion },
+    // Enter / arrows / Esc for the completion popup.  Enter falls
+    // through to defaultKeymap's newline when no completion is open.
+    ...completionKeymap,
   ]);
   const view = new EditorView({
     parent,
@@ -411,6 +429,22 @@ export const _createEditor =
 };
 
 export const _getContent = (view) => () => view.state.doc.toString();
+
+// Returns the 1-indexed line number of the primary cursor position.
+// Used by code-pane → cell demotion: the user's current cursor line is
+// the source of the new cell.
+export const _getCursorLine = (view) => () => {
+  const head = view.state.selection.main.head;
+  return view.state.doc.lineAt(head).number;
+};
+
+// Returns the text of the line at `lineNum` (1-indexed), without the
+// trailing newline. Out-of-range returns "".
+export const _getLineText = (view) => (lineNum) => () => {
+  const doc = view.state.doc;
+  if (lineNum < 1 || lineNum > doc.lines) return '';
+  return doc.line(lineNum).text;
+};
 
 export const _setContent = (view) => (content) => () => {
   // Clear error decorations in the SAME transaction as the content
