@@ -762,12 +762,42 @@ stripLineComment line = case Str.indexOf (Pattern "--") line of
   Just i -> Str.trim (Str.take i line)
   Nothing -> Str.trim line
 
+-- | Join continuation lines into the previous logical line.  A
+-- | continuation is any (already-comment-stripped, non-blank) line
+-- | whose first character is `#`.  Used to support the multi-line
+-- | parameter-join shape:
+-- |
+-- | ```
+-- | lap "c3 e3 g3 c4"
+-- |   # vel "100 60 80 50"
+-- |   # laplace-resonator-strength "0.2 0.7"
+-- | ```
+-- |
+-- | …flattens to one statement before being sent to the daemon, which
+-- | already handles single-line ` # ` segments.  The line number on
+-- | the joined entry stays at the structure line, so error reports
+-- | point at where the user's intent began.
+joinContinuations
+  :: Array { lineNum :: Int, source :: String }
+  -> Array { lineNum :: Int, source :: String }
+joinContinuations = Array.foldl step []
+  where
+  step acc entry =
+    if Str.take 1 entry.source == "#"
+      then case Array.unsnoc acc of
+        Just { init, last } ->
+          init <> [ last { source = last.source <> " " <> entry.source } ]
+        Nothing -> [ entry ]  -- orphan `# …` with no preceding line; let
+                              -- the parser emit its own error
+      else acc <> [ entry ]
+
 compositionStatements :: String -> Array { lineNum :: Int, source :: String }
 compositionStatements src =
   let lines = Str.split (Pattern "\n") src
       indexed = mapWithIndex
         (\i s -> { lineNum: i + 1, source: stripLineComment s }) lines
-  in Array.filter (\e -> not (Str.null e.source)) indexed
+      nonBlank = Array.filter (\e -> not (Str.null e.source)) indexed
+  in joinContinuations nonBlank
 
 -- | Fire a list of statements in order against /eval.  Stops on the
 -- | first error and reports the failing line; on full success reports
