@@ -1,6 +1,6 @@
 import { EditorView, keymap, lineNumbers, drawSelection, Decoration, WidgetType } from '@codemirror/view';
 import { EditorState, StateField, StateEffect, Annotation, Compartment } from '@codemirror/state';
-import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
+import { defaultKeymap, history, historyKeymap, indentWithTab, toggleLineComment } from '@codemirror/commands';
 import {
   bracketMatching, indentOnInput, StreamLanguage,
   syntaxHighlighting, HighlightStyle,
@@ -381,7 +381,14 @@ export const _createEditor =
         bracketMatching(),
         indentOnInput(),
         submitKeymap,
-        keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
+        // Mod-/ toggles `--` line comments. Haskell stream-mode doesn't
+        // register `commentTokens` itself, so declare them explicitly
+        // for `toggleLineComment` to find via `state.languageDataAt`.
+        EditorState.languageData.of(() => [{ commentTokens: { line: '--' } }]),
+        keymap.of([
+          { key: 'Mod-/', run: toggleLineComment },
+          ...defaultKeymap, ...historyKeymap, indentWithTab,
+        ]),
         // Haskell's lexer is close enough for Tidal mini-notation
         // surface syntax; a Tidal-aware grammar lands as a later
         // upgrade once the mini-notation parser exists on the

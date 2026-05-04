@@ -276,9 +276,27 @@ body::before {
 }
 .pane:last-child { border-right: none; }
 
-.pane-composition { background: var(--bg); }
-.pane-cells       { background: var(--bg-deep); }
-.pane-hylograph   { background: var(--bg-panel); }
+.pane-composition   { background: var(--bg); }
+.pane-cells         { background: var(--bg-deep); }
+.pane-replies       { background: var(--bg-deep); }
+.pane-vocabulary    { background: var(--bg-panel); }
+.pane-mini-notation { background: var(--bg-panel); }
+.pane-hylograph     { background: var(--bg-panel); }
+
+.hylograph-placeholder {
+  padding: 1.2rem 1rem;
+  font-family: var(--mono);
+}
+.hylograph-placeholder-title {
+  color: var(--fg);
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 0.4rem;
+}
+.hylograph-placeholder-body {
+  font-size: 0.85rem;
+}
 
 /* Pane toolbar (composition's ▶ fire + status) ---------------------------- */
 .pane-toolbar {
@@ -289,6 +307,9 @@ body::before {
   border-bottom: 1px solid var(--fg-rule);
   font-size: 0.95rem;
   background: var(--bg-deep);
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 
 .fire-btn {
@@ -352,6 +373,7 @@ body::before {
 
 .cell-kind-btn,
 .remove-cell-btn,
+.promote-cell-btn,
 .fire-btn-cell {
   font: inherit;
   font-family: var(--mono);
@@ -369,6 +391,7 @@ body::before {
 
 .cell-kind-btn:hover,
 .remove-cell-btn:hover,
+.promote-cell-btn:hover,
 .fire-btn-cell:hover {
   color: var(--fg-bright);
   border-color: var(--fg-bright);
@@ -378,6 +401,7 @@ body::before {
 .cell-kind-expr { color: var(--fg); }
 
 .fire-btn-cell { color: var(--fg); }
+.promote-cell-btn { color: var(--fg); }
 .remove-cell-btn { color: var(--fg-dim); }
 .remove-cell-btn:hover { color: var(--red); border-color: var(--red); }
 
@@ -492,6 +516,64 @@ body::before {
 }
 
 .muted { color: var(--fg-dim); }
+
+/* ===== Replies pane sections ============================================ */
+.replies-section {
+  padding: 0.5rem 0.6rem 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  border-bottom: 1px solid var(--fg-rule);
+}
+.replies-section:last-child { border-bottom: none; }
+
+.replies-section-header {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  margin-bottom: 0.2rem;
+}
+
+.replies-fire-row {
+  display: grid;
+  grid-template-columns: 2.5rem 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 0.5rem;
+  row-gap: 0.15rem;
+  padding: 0.3rem 0.5rem;
+  border-left: 3px solid var(--fg-dim);
+  background: rgba(65, 255, 124, 0.03);
+}
+.replies-fire-ok  { border-left-color: var(--fg); }
+.replies-fire-err { border-left-color: var(--red); background: rgba(255, 80, 80, 0.05); }
+
+.replies-fire-linenum {
+  font-family: var(--mono-code);
+  color: var(--fg-dim);
+  font-size: 0.85rem;
+  text-align: right;
+  align-self: start;
+}
+.replies-fire-source {
+  font-family: var(--mono-code);
+  color: var(--fg);
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  align-self: start;
+}
+.replies-fire-reply {
+  margin: 0;
+  grid-column: 2;
+  font-family: var(--mono-code);
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg-bright);
+}
+.replies-fire-err .replies-fire-reply { color: var(--red); }
 
 /* ===== Error panel ====================================================== */
 .error-panel {

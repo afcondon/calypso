@@ -36,6 +36,12 @@ import Halogen.HTML.Events as HE
 import Halogen.HTML.Properties as HP
 import Halogen.Subscription as HS
 import Type.Proxy (Proxy(..))
+import Web.Event.Event as WEvent
+import Web.Event.EventTarget as WEvtTarget
+import Web.HTML (window) as Web
+import Web.HTML.Window as WWindow
+import Web.UIEvent.KeyboardEvent as WKey
+import Web.UIEvent.KeyboardEvent.EventTypes as WKeyTypes
 
 import Data.Foldable (for_, foldr)
 
@@ -93,104 +99,149 @@ cellRecOf (Cell c) = { id: c.id, kind: c.kind, source: c.source }
 cellOf :: CellRec -> Cell
 cellOf c = Cell { id: c.id, kind: c.kind, source: c.source, form: false }
 
--- | Which of the three main columns are visible in this tab. Each flag
--- | maps 1:1 to a rendered `pane-*` column. Persisted in the URL as
--- | `?hide=composition,cells,hylograph` (omitted when everything shows).
+-- | The six top-level panes. Each is independently toggleable
+-- | via the view-toggle bar or via Cmd-1..Cmd-6 (Ctrl on non-Mac).
+-- | Layout is left-to-right in the order declared here. Persisted
+-- | in the URL as `?hide=cells,replies,…` (omitted when all show).
 -- |
--- | The composition pane shows the durable `.tidal` module — between
--- | config and score; the cells pane runs live expressions; the
--- | hylograph pane will eventually visualise patterns (currently shows
--- | the latest reply text per cell).
-data ColumnKey = KeyComposition | KeyCells | KeyHylograph
+-- | Replies / Vocabulary / Mini-notation were previously sub-tabs of
+-- | the Hylograph pane; promoted to top-level so quick lookups
+-- | don't displace the editing surface.
+-- |
+-- | Hylograph stays the rightmost slot for the eventual pattern
+-- | visualiser; until that lands its render is a placeholder.
+data ColumnKey
+  = KeyComposition
+  | KeyCells
+  | KeyReplies
+  | KeyVocabulary
+  | KeyMiniNotation
+  | KeyHylograph
 
 derive instance Eq ColumnKey
 
--- | Which tab is active inside the Hylograph (third) pane.  Until
--- | the pattern visualiser lands, this pane doubles as the
--- | reference panel: a browsable index of devices/bindings parsed
--- | from the purerl-tidal setup files (`Vocabulary`), a primer for
--- | mini-notation operators (`MiniNotation`), and the existing
--- | per-cell daemon-reply readout (`Replies`).
-data HylographTab = TabVocabulary | TabMiniNotation | TabReplies
-
-derive instance Eq HylographTab
-
-hylographTabLabel :: HylographTab -> String
-hylographTabLabel = case _ of
-  TabVocabulary -> "Vocabulary"
-  TabMiniNotation -> "Mini-notation"
-  TabReplies -> "Replies"
-
-allHylographTabs :: Array HylographTab
-allHylographTabs = [ TabVocabulary, TabMiniNotation, TabReplies ]
+-- | Order panes appear left-to-right in the row, and the index
+-- | bound to Cmd-N (Cmd-1 = first, Cmd-6 = last).
+allColumnKeys :: Array ColumnKey
+allColumnKeys =
+  [ KeyComposition
+  , KeyCells
+  , KeyReplies
+  , KeyVocabulary
+  , KeyMiniNotation
+  , KeyHylograph
+  ]
 
 type ColumnVisibility =
   { showComposition :: Boolean
   , showCells :: Boolean
+  , showReplies :: Boolean
+  , showVocabulary :: Boolean
+  , showMiniNotation :: Boolean
   , showHylograph :: Boolean
   }
 
 allVisible :: ColumnVisibility
 allVisible =
-  { showComposition: true, showCells: true, showHylograph: true }
+  { showComposition: true
+  , showCells: true
+  , showReplies: true
+  , showVocabulary: true
+  , showMiniNotation: true
+  , showHylograph: true
+  }
+
+-- | Initial visibility on a fresh load: editor + replies on, the
+-- | three reference panes off (Cmd-4/5/6 to bring them in).  Even
+-- | on big monitors all six side-by-side is too cramped — better
+-- | to summon what you want, when you want.
+defaultVisibility :: ColumnVisibility
+defaultVisibility =
+  { showComposition: true
+  , showCells: true
+  , showReplies: true
+  , showVocabulary: false
+  , showMiniNotation: false
+  , showHylograph: false
+  }
 
 isVisible :: ColumnKey -> ColumnVisibility -> Boolean
 isVisible = case _ of
   KeyComposition -> _.showComposition
   KeyCells -> _.showCells
+  KeyReplies -> _.showReplies
+  KeyVocabulary -> _.showVocabulary
+  KeyMiniNotation -> _.showMiniNotation
   KeyHylograph -> _.showHylograph
 
 toggleKey :: ColumnKey -> ColumnVisibility -> ColumnVisibility
 toggleKey k v = case k of
   KeyComposition -> v { showComposition = not v.showComposition }
   KeyCells -> v { showCells = not v.showCells }
+  KeyReplies -> v { showReplies = not v.showReplies }
+  KeyVocabulary -> v { showVocabulary = not v.showVocabulary }
+  KeyMiniNotation -> v { showMiniNotation = not v.showMiniNotation }
   KeyHylograph -> v { showHylograph = not v.showHylograph }
 
 columnKeyLabel :: ColumnKey -> String
 columnKeyLabel = case _ of
   KeyComposition -> "Composition"
   KeyCells -> "Cells"
+  KeyReplies -> "Replies"
+  KeyVocabulary -> "Vocabulary"
+  KeyMiniNotation -> "Mini-notation"
   KeyHylograph -> "Hylograph"
 
 columnKeyToken :: ColumnKey -> String
 columnKeyToken = case _ of
   KeyComposition -> "composition"
   KeyCells -> "cells"
+  KeyReplies -> "replies"
+  KeyVocabulary -> "vocabulary"
+  KeyMiniNotation -> "mini-notation"
   KeyHylograph -> "hylograph"
 
--- | Decode `?hide=` value. Unknown tokens are ignored; "module"/"values"/
--- | "render" are accepted as legacy aliases for backward compatibility
--- | with shared URLs from the Atelier era.
+-- | Decode the `?hide=` query value into a `ColumnVisibility`.
+-- |
+-- | The URL param name is `hide` for legacy compatibility, but its
+-- | semantics are now "panes whose visibility differs from default".
+-- | An empty param yields `defaultVisibility` (1/2/3 on, 4/5/6 off).
+-- | A token for an on-by-default pane (composition / cells / replies)
+-- | hides it; a token for an off-by-default pane (vocabulary / mini-
+-- | notation / hylograph) shows it.  Unknown tokens are ignored;
+-- | "module"/"values"/"render"/"gutter" are accepted as legacy
+-- | aliases from the Atelier era.
 visibilityFromHide :: String -> ColumnVisibility
 visibilityFromHide hide =
   let tokens = if hide == "" then [] else Str.split (Pattern ",") hide
       has t = Array.any (_ == t) tokens
   in
+    -- On-by-default: visible unless an explicit hide-token appears.
     { showComposition: not (has "composition" || has "module")
     , showCells: not (has "cells")
-    , showHylograph: not (has "hylograph" || has "render" || has "values" || has "gutter")
+    , showReplies: not (has "replies")
+    -- Off-by-default: hidden unless an explicit show-token appears.
+    , showVocabulary: has "vocabulary"
+    , showMiniNotation: has "mini-notation" || has "mininotation"
+    , showHylograph: has "hylograph" || has "render" || has "values" || has "gutter"
     }
 
 hideFromVisibility :: ColumnVisibility -> String
 hideFromVisibility v =
-  let hidden = Array.catMaybes
-        [ if v.showComposition then Nothing else Just (columnKeyToken KeyComposition)
-        , if v.showCells then Nothing else Just (columnKeyToken KeyCells)
-        , if v.showHylograph then Nothing else Just (columnKeyToken KeyHylograph)
-        ]
-  in Str.joinWith "," hidden
+  let entries = Array.catMaybes $
+        map (\k -> if isVisible k v == isVisible k defaultVisibility
+                     then Nothing
+                     else Just (columnKeyToken k)) allColumnKeys
+  in Str.joinWith "," entries
 
 -- | Grid-template-columns string for the visible panes.  Equal-share
--- | columns: 50/50 with two visible, 33/33/33 with three.  Long
--- | proposal hunks fit by horizontal-scrolling within their pane,
--- | not by stretching the column.
+-- | columns: 1fr per visible pane, "1fr" fallback when nothing is on
+-- | (the layout block still renders the empty grid container so the
+-- | toolbar / view-toggle stay anchored).
 gridTemplateForVisibility :: ColumnVisibility -> String
 gridTemplateForVisibility v =
-  let parts = Array.catMaybes
-        [ if v.showComposition then Just "1fr" else Nothing
-        , if v.showCells then Just "1fr" else Nothing
-        , if v.showHylograph then Just "1fr" else Nothing
-        ]
+  let parts = Array.catMaybes $
+        map (\k -> if isVisible k v then Just "1fr" else Nothing) allColumnKeys
   in case Array.length parts of
        0 -> "1fr"
        1 -> "1fr"
@@ -210,7 +261,6 @@ type State =
   -- completion list (for the editor's autocompletion source).
   , vocabulary :: Vocabulary
   , completions :: Array Completion
-  , hylographTab :: HylographTab
   , settingsOpen :: Boolean
   , compiling :: Boolean
   , errors :: Array CompileError
@@ -228,6 +278,11 @@ type State =
   -- the daemon received the body without the reply line cluttering
   -- the composition itself.  Cleared on next fire.
   , compositionStatus :: Maybe String
+  -- Per-statement results from the most recent composition fire.
+  -- Empty between fires.  Surfaced in the Replies pane so "no sound
+  -- came out" becomes diagnosable line-by-line — every statement's
+  -- daemon reply is captured, including ones past the first error.
+  , compositionFireLines :: Array { lineNum :: Int, source :: String, reply :: Either String String }
   , cellTypes :: Map String String
   , pendingCompile :: Maybe H.ForkId
   -- Pen + WebSocket transport.  The Pen is the descendant of
@@ -283,7 +338,7 @@ data Action
   | LoadFavorite String
   | FavoritesLoaded (Array Favorite)
   | VocabularyLoaded Vocabulary
-  | SwitchHylographTab HylographTab
+  | KeyboardShortcut Int     -- Cmd-N pressed at the window level; toggles a column
   | ToggleSettings
   | WsOpened
   | WsIncoming String
@@ -310,7 +365,6 @@ initialState _ =
   , favoriteMenuOpen: false
   , vocabulary: Vocabulary.emptyVocabulary
   , completions: []
-  , hylographTab: TabVocabulary
   , settingsOpen: false
   , compiling: false
   , errors: []
@@ -320,6 +374,7 @@ initialState _ =
   , runtimeError: Nothing
   , cellResults: Map.empty
   , compositionStatus: Nothing
+  , compositionFireLines: []
   , cellTypes: Map.empty
   , pendingCompile: Nothing
   , myId: Nothing
@@ -334,7 +389,7 @@ initialState _ =
   , lastSyncedModule: ""
   , lastSyncedCells: Map.empty
   , lastSyncedRuntime: ""
-  , visibility: allVisible
+  , visibility: defaultVisibility
   }
 
 debounceMs :: Milliseconds
@@ -357,6 +412,7 @@ handleAction
   -> H.HalogenM State Action Slots o m Unit
 handleAction = case _ of
   Startup -> do
+    subscribeWindowShortcuts
     hide <- H.liftEffect readHideParam
     H.modify_ _ { visibility = visibilityFromHide hide }
     hydrateFromServer
@@ -372,8 +428,10 @@ handleAction = case _ of
       { vocabulary = vocab
       , completions = completionsFromVocabulary vocab
       }
-  SwitchHylographTab tab ->
-    H.modify_ _ { hylographTab = tab }
+  KeyboardShortcut digit ->
+    case Array.index allColumnKeys (digit - 1) of
+      Nothing -> pure unit
+      Just key -> handleAction (ToggleColumn key)
   ModuleChanged src -> do
     H.modify_ _ { moduleSource = src }
     handleAction ScheduleCompile
@@ -464,7 +522,7 @@ handleAction = case _ of
     -- and fire each statement in sequence.  Stop on the first error
     -- and report which line failed.
     let stmts = compositionStatements src
-    H.modify_ _ { compositionStatus = Nothing, transportError = Nothing }
+    H.modify_ _ { compositionStatus = Nothing, compositionFireLines = [], transportError = Nothing }
     if Array.null stmts
       then H.modify_ _ { compositionStatus = Just "(no statements to fire)" }
       else fireStatements stmts
@@ -807,21 +865,32 @@ fireStatements
    . MonadAff m
   => Array { lineNum :: Int, source :: String }
   -> H.HalogenM State Action Slots o m Unit
-fireStatements = go 0
+fireStatements stmts = go [] stmts
   where
-  go fired remaining = case Array.uncons remaining of
-    Nothing ->
+  -- Run every statement.  Past the first error we *keep going* — the
+  -- previous behaviour stopped on the first failure, which left the
+  -- user blind to subsequent ones (yesterday's "all three bind lines
+  -- failed but only the first one's reported" gap).  Each per-line
+  -- reply lands in `compositionFireLines`; the summary in
+  -- `compositionStatus` reports total / errors so the composition
+  -- toolbar still shows a glanceable count.
+  go acc remaining = case Array.uncons remaining of
+    Nothing -> do
+      let total = Array.length acc
+          errs = Array.length (Array.filter isErr acc)
+          summary = case errs of
+            0 -> "OK: fired " <> show total <> " statements"
+            n -> "ERR: " <> show n <> " of " <> show total <> " failed"
       H.modify_ _
-        { compositionStatus = Just ("OK: fired " <> show fired <> " statements") }
+        { compositionFireLines = acc
+        , compositionStatus = Just summary
+        }
     Just { head: e, tail } -> do
       result <- evalSource e.source
-      case result of
-        Left err ->
-          H.modify_ _
-            { compositionStatus = Just
-                ("ERR at line " <> show e.lineNum <> ": " <> err)
-            }
-        Right _reply -> go (fired + 1) tail
+      go (Array.snoc acc { lineNum: e.lineNum, source: e.source, reply: result }) tail
+  isErr r = case r.reply of
+    Left _ -> true
+    Right _ -> false
 
 -- | POST `{source, imports: []}` to /eval.  Returns the daemon's
 -- | reply line on success, a human transport error on failure.  The
@@ -938,6 +1007,45 @@ hydrateFromServer = do
           else applyRemote r
   where
   pristineServerModule = "module Scratch where\n\nimport Prelude\n"
+
+-- | Wire a window-level keydown listener that fires `KeyboardShortcut`
+-- | for Cmd-1..Cmd-6 (Ctrl-1..6 on non-Mac). preventDefault stops Chrome
+-- | from swallowing Cmd-N as tab-switch on macOS.  Editor-level keymaps
+-- | (CodeMirror's Mod-/, Mod-Enter, etc.) still get the event first if
+-- | focus is in an editor — we only act when the modifier+digit shape
+-- | matches, not on every keystroke.
+subscribeWindowShortcuts
+  :: forall o m
+   . MonadAff m
+  => H.HalogenM State Action Slots o m Unit
+subscribeWindowShortcuts = do
+  { emitter, listener } <- H.liftEffect HS.create
+  H.liftEffect do
+    target <- WWindow.toEventTarget <$> Web.window
+    cb <- WEvtTarget.eventListener \evt ->
+      case WKey.fromEvent evt of
+        Nothing -> pure unit
+        Just kev -> do
+          let mod = WKey.metaKey kev || WKey.ctrlKey kev
+          when mod do
+            case digitFor (WKey.key kev) of
+              Nothing -> pure unit
+              Just d -> do
+                WEvent.preventDefault evt
+                HS.notify listener (KeyboardShortcut d)
+    WEvtTarget.addEventListener WKeyTypes.keydown cb false target
+  _ <- H.subscribe emitter
+  pure unit
+  where
+    digitFor :: String -> Maybe Int
+    digitFor = case _ of
+      "1" -> Just 1
+      "2" -> Just 2
+      "3" -> Just 3
+      "4" -> Just 4
+      "5" -> Just 5
+      "6" -> Just 6
+      _   -> Nothing
 
 openWebSocket
   :: forall o m
@@ -1222,6 +1330,9 @@ render state =
         ]
         ( (if state.visibility.showComposition then [ renderCompositionColumn state ] else [])
             <> (if state.visibility.showCells then [ renderCellsColumn state ] else [])
+            <> (if state.visibility.showReplies then [ renderRepliesColumn state ] else [])
+            <> (if state.visibility.showVocabulary then [ renderVocabularyColumn state ] else [])
+            <> (if state.visibility.showMiniNotation then [ renderMiniNotationColumn state ] else [])
             <> (if state.visibility.showHylograph then [ renderHylographColumn state ] else [])
         )
     , renderErrorPanel state
@@ -1320,7 +1431,7 @@ renderTitlePen state =
 renderViewToggle :: forall m. State -> H.ComponentHTML Action Slots m
 renderViewToggle state =
   HH.div [ HP.class_ (H.ClassName "view-toggle") ]
-    ( map (viewToggleButton state) [ KeyComposition, KeyCells, KeyHylograph ] )
+    ( map (viewToggleButton state) allColumnKeys )
 
 viewToggleButton :: forall m. State -> ColumnKey -> H.ComponentHTML Action Slots m
 viewToggleButton state key =
@@ -1388,6 +1499,12 @@ renderCompositionColumn state =
             , HP.title "Fire the whole composition (Mod-Enter inside the editor)"
             ]
             [ HH.text "▶ fire" ]
+        , HH.button
+            [ HP.class_ (H.ClassName "fire-btn")
+            , HE.onClick \_ -> DemoteCursorLineToCell
+            , HP.title "Make the line under the cursor into a new cell (line stays in composition)"
+            ]
+            [ HH.text "↧ make cell" ]
         , case state.compositionStatus of
             Just msg ->
               HH.span [ HP.class_ (H.ClassName "fire-status") ]
@@ -1420,12 +1537,6 @@ renderCellsColumn state =
                   , HE.onClick \_ -> AddCell
                   ]
                   [ HH.text "+ add cell" ]
-              , HH.button
-                  [ HP.class_ (H.ClassName "demote-cell-btn")
-                  , HE.onClick \_ -> DemoteCursorLineToCell
-                  , HP.title "Demote: copy the code-pane cursor line into a new cell (line stays)"
-                  ]
-                  [ HH.text "↧ demote line" ]
               ]
           ]
     )
@@ -1465,9 +1576,9 @@ renderCellRow state idx c =
         , HH.button
             [ HP.class_ (H.ClassName "promote-cell-btn")
             , HE.onClick \_ -> PromoteCellToCode c.id
-            , HP.title "Promote: append this cell's text to the composition and remove the cell"
+            , HP.title "Save cell — append source to composition and remove this cell"
             ]
-            [ HH.text "↥" ]
+            [ HH.text "↩" ]
         , HH.button
             [ HP.class_ (H.ClassName "remove-cell-btn")
             , HE.onClick \_ -> RemoveCell c.id
@@ -1490,45 +1601,85 @@ renderCellRow state idx c =
     Editor.RejectHunkO pid idx -> RejectHunk pid idx
     Editor.MoveRequested -> PromoteCellToCode cid
 
--- | Hylograph pane.  Currently a tabbed reference panel: the
--- | vocabulary parsed from purerl-tidal's setup files, a primer for
--- | mini-notation, and the existing per-cell daemon replies.  When
--- | the pattern visualiser lands, it'll likely become its own tab
--- | too — Asteroids/Battlezone vector aesthetic, per the user's
--- | direction.
+-- | Hylograph pane.  Reserved for the upcoming pattern visualiser
+-- | (Asteroids/Battlezone vector aesthetic).  Placeholder until that
+-- | lands — the previous reference-panel content (Vocabulary, Mini-
+-- | notation, Replies) has been promoted to top-level panes of its
+-- | own, addressable via Cmd-3..5.
 renderHylographColumn :: forall m. State -> H.ComponentHTML Action Slots m
-renderHylographColumn state =
+renderHylographColumn _ =
   HH.section [ HP.class_ (H.ClassName "pane pane-hylograph") ]
-    [ HH.div [ HP.class_ (H.ClassName "hylograph-tabs") ]
-        (map (renderTab state.hylographTab) allHylographTabs)
-    , HH.div [ HP.class_ (H.ClassName "hylograph-tab-body") ]
-        [ case state.hylographTab of
-            TabVocabulary -> renderVocabularyTab state
-            TabMiniNotation -> Primer.renderMiniNotation
-            TabReplies -> renderRepliesTab state
+    [ HH.div [ HP.class_ (H.ClassName "hylograph-placeholder") ]
+        [ HH.div [ HP.class_ (H.ClassName "hylograph-placeholder-title") ]
+            [ HH.text "Hylograph" ]
+        , HH.div [ HP.class_ (H.ClassName "hylograph-placeholder-body muted") ]
+            [ HH.text "Pattern visualiser coming soon." ]
         ]
     ]
-  where
-  renderTab active tab =
-    HH.button
-      [ HP.classes
-          [ H.ClassName "hylograph-tab"
-          , H.ClassName (if active == tab then "hylograph-tab-active" else "")
-          ]
-      , HE.onClick \_ -> SwitchHylographTab tab
-      ]
-      [ HH.text (hylographTabLabel tab) ]
 
-renderRepliesTab :: forall m. State -> H.ComponentHTML Action Slots m
-renderRepliesTab state =
-  HH.div [ HP.class_ (H.ClassName "hylograph-rows") ]
-    (Array.catMaybes (mapWithIndex maybeRow state.cells))
+-- | Replies pane — per-cell most-recent reply from the daemon, plus
+-- | the most recent composition fire's per-statement results.
+-- | Was a tab inside Hylograph; promoted to a top-level pane (Cmd-3)
+-- | so you can keep an eye on firings without displacing the editor.
+renderRepliesColumn :: forall m. State -> H.ComponentHTML Action Slots m
+renderRepliesColumn state =
+  HH.section [ HP.class_ (H.ClassName "pane pane-replies") ]
+    ( compositionSection <> cellsSection )
   where
+  compositionSection =
+    if Array.null state.compositionFireLines
+      then []
+      else
+        [ HH.div [ HP.class_ (H.ClassName "replies-section") ]
+            ( [ HH.div [ HP.class_ (H.ClassName "replies-section-header") ]
+                  [ HH.text "▶ composition" ]
+              ] <> map renderFireLine state.compositionFireLines
+            )
+        ]
+  cellsSection =
+    [ HH.div [ HP.class_ (H.ClassName "replies-section") ]
+        ( [ HH.div [ HP.class_ (H.ClassName "replies-section-header") ]
+              [ HH.text "cells" ]
+          ] <> Array.catMaybes (mapWithIndex maybeRow state.cells)
+        )
+    ]
   maybeRow idx c =
     if c.kind == "expr" then Just (renderHylographRow state idx c) else Nothing
 
-renderVocabularyTab :: forall m. State -> H.ComponentHTML Action Slots m
-renderVocabularyTab state =
+-- | One row in the composition fire results — line number, source
+-- | preview, and the daemon's reply (or transport error) coloured
+-- | green for success, red for failure.
+renderFireLine
+  :: forall m
+   . { lineNum :: Int, source :: String, reply :: Either String String }
+  -> H.ComponentHTML Action Slots m
+renderFireLine r =
+  let
+    cls = case r.reply of
+      Right _ -> "replies-fire-row replies-fire-ok"
+      Left _ -> "replies-fire-row replies-fire-err"
+    replyText = case r.reply of
+      Right s -> s
+      Left e -> e
+  in
+    HH.div [ HP.class_ (H.ClassName cls) ]
+      [ HH.span [ HP.class_ (H.ClassName "replies-fire-linenum") ]
+          [ HH.text (show r.lineNum) ]
+      , HH.span [ HP.class_ (H.ClassName "replies-fire-source") ]
+          [ HH.text r.source ]
+      , HH.pre [ HP.class_ (H.ClassName "replies-fire-reply") ]
+          [ HH.text replyText ]
+      ]
+
+-- | Vocabulary pane — devices and bindings parsed from purerl-tidal's
+-- | setup/*.tidal files.  Browsable reference for the live-coder.
+renderVocabularyColumn :: forall m. State -> H.ComponentHTML Action Slots m
+renderVocabularyColumn state =
+  HH.section [ HP.class_ (H.ClassName "pane pane-vocabulary") ]
+    [ renderVocabularyBody state ]
+
+renderVocabularyBody :: forall m. State -> H.ComponentHTML Action Slots m
+renderVocabularyBody state =
   let CV.Vocabulary v = state.vocabulary
   in case v.setupFiles of
        [] ->
@@ -1537,6 +1688,13 @@ renderVocabularyTab state =
        sfs ->
          HH.div [ HP.class_ (H.ClassName "vocabulary-list") ]
            (map renderSetupFile sfs)
+
+-- | Mini-notation pane — operator primer (Primer.renderMiniNotation
+-- | is the lifted markup; this just wraps it in a pane shell).
+renderMiniNotationColumn :: forall m. State -> H.ComponentHTML Action Slots m
+renderMiniNotationColumn _ =
+  HH.section [ HP.class_ (H.ClassName "pane pane-mini-notation") ]
+    [ Primer.renderMiniNotation ]
 
 renderSetupFile :: forall m. CV.SetupFile -> H.ComponentHTML Action Slots m
 renderSetupFile (CV.SetupFile sf) =

@@ -137,8 +137,8 @@ initialStateFrom :: Maybe String -> SessionState
 initialStateFrom defaultBody =
   { runtime: "purerl-tidal-ws"
   , "module": UserModule { source: fromMaybe tidalStarterModule defaultBody }
-  , cells: []
-  , nextCellId: 1
+  , cells: [ Cell { id: "c1", kind: "expr", source: "hush", form: false } ]
+  , nextCellId: 2
   , lastResponse: Nothing
   }
 
