@@ -102,6 +102,47 @@ body::before {
 .settings-btn:hover { color: var(--fg); border-color: var(--fg); }
 .settings-btn.active { color: var(--fg-bright); border-color: var(--fg-bright); }
 
+/* Topbar BPM widget — number input + label, sits between title and
+   view-toggle.  Styling matches the rest of the green-vector chrome:
+   transparent background, --fg-rule border, --fg text. */
+.topbar-bpm {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: 0.6rem;
+}
+.topbar-bpm-input {
+  width: 4.5rem;
+  padding: 0.15rem 0.3rem;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 0.95rem;
+  text-align: right;
+  background: transparent;
+  border: 1px solid var(--fg-rule);
+  color: var(--fg);
+  -moz-appearance: textfield;
+}
+.topbar-bpm-input::-webkit-outer-spin-button,
+.topbar-bpm-input::-webkit-inner-spin-button {
+  /* Suppress the native spinner — keeps the widget visually quiet.
+     Editing is via direct typing + Enter/blur to commit. */
+  -webkit-appearance: none;
+  margin: 0;
+}
+.topbar-bpm-input:focus {
+  outline: none;
+  border-color: var(--fg-bright);
+  color: var(--fg-bright);
+}
+.topbar-bpm-label {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--fg-dim);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 /* ===== Title / pen indicator ========================================== */
 .title-pen {
   font: inherit;
@@ -282,6 +323,43 @@ body::before {
 .pane-vocabulary    { background: var(--bg-panel); }
 .pane-mini-notation { background: var(--bg-panel); }
 .pane-hylograph     { background: var(--bg-panel); }
+.pane-config        { background: var(--bg-deep); }
+
+.config-toolbar {
+  display: flex;
+  align-items: center;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--fg-rule);
+  background: var(--bg-deep);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.config-refresh-btn {
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  padding: 0.15rem 0.6rem;
+  background: transparent;
+  border: 1px solid var(--fg-dim);
+  color: var(--fg);
+  cursor: pointer;
+  text-transform: lowercase;
+  letter-spacing: 0.05em;
+}
+.config-refresh-btn:hover {
+  color: var(--fg-bright);
+  border-color: var(--fg-bright);
+}
+.config-body {
+  margin: 0;
+  padding: 0.8rem 0.8rem 1rem;
+  font-family: var(--mono-code);
+  font-size: 0.8rem;
+  color: var(--fg);
+  white-space: pre;
+  overflow-x: auto;
+}
 
 .hylograph-placeholder {
   padding: 1.2rem 1rem;

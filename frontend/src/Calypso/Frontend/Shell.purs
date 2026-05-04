@@ -23,6 +23,7 @@ import Data.Map as Map
 import Data.Int (toNumber)
 import Data.Int as Int
 import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Number as Number
 import Data.String.Pattern (Pattern(..))
 import Data.Traversable (for)
 import Data.Tuple (Tuple(..))
@@ -46,7 +47,7 @@ import Web.UIEvent.KeyboardEvent.EventTypes as WKeyTypes
 import Data.Foldable (for_, foldr)
 
 import Calypso.Frontend.CodeMirror (ErrorSpan)
-import Calypso.Frontend.Config (backendUrl, readHideParam, writeHideParam, wsBackendUrl)
+import Calypso.Frontend.Config (backendUrl, formatNumber, prettyPrintJson, readHideParam, writeHideParam, wsBackendUrl)
 import Calypso.Frontend.Completion (Completion, completionsFromVocabulary)
 import Calypso.Frontend.Editor as Editor
 import Calypso.Frontend.Favorite as Favorite
@@ -117,11 +118,12 @@ data ColumnKey
   | KeyVocabulary
   | KeyMiniNotation
   | KeyHylograph
+  | KeyConfig
 
 derive instance Eq ColumnKey
 
 -- | Order panes appear left-to-right in the row, and the index
--- | bound to Cmd-N (Cmd-1 = first, Cmd-6 = last).
+-- | bound to Cmd-N (Cmd-1 = first, Cmd-7 = last).
 allColumnKeys :: Array ColumnKey
 allColumnKeys =
   [ KeyComposition
@@ -130,6 +132,7 @@ allColumnKeys =
   , KeyVocabulary
   , KeyMiniNotation
   , KeyHylograph
+  , KeyConfig
   ]
 
 type ColumnVisibility =
@@ -139,6 +142,7 @@ type ColumnVisibility =
   , showVocabulary :: Boolean
   , showMiniNotation :: Boolean
   , showHylograph :: Boolean
+  , showConfig :: Boolean
   }
 
 allVisible :: ColumnVisibility
@@ -149,11 +153,12 @@ allVisible =
   , showVocabulary: true
   , showMiniNotation: true
   , showHylograph: true
+  , showConfig: true
   }
 
 -- | Initial visibility on a fresh load: editor + replies on, the
--- | three reference panes off (Cmd-4/5/6 to bring them in).  Even
--- | on big monitors all six side-by-side is too cramped — better
+-- | reference panes off (Cmd-4/5/6/7 to bring them in).  Even on
+-- | big monitors all seven side-by-side is too cramped — better
 -- | to summon what you want, when you want.
 defaultVisibility :: ColumnVisibility
 defaultVisibility =
@@ -163,6 +168,7 @@ defaultVisibility =
   , showVocabulary: false
   , showMiniNotation: false
   , showHylograph: false
+  , showConfig: false
   }
 
 isVisible :: ColumnKey -> ColumnVisibility -> Boolean
@@ -173,6 +179,7 @@ isVisible = case _ of
   KeyVocabulary -> _.showVocabulary
   KeyMiniNotation -> _.showMiniNotation
   KeyHylograph -> _.showHylograph
+  KeyConfig -> _.showConfig
 
 toggleKey :: ColumnKey -> ColumnVisibility -> ColumnVisibility
 toggleKey k v = case k of
@@ -182,6 +189,7 @@ toggleKey k v = case k of
   KeyVocabulary -> v { showVocabulary = not v.showVocabulary }
   KeyMiniNotation -> v { showMiniNotation = not v.showMiniNotation }
   KeyHylograph -> v { showHylograph = not v.showHylograph }
+  KeyConfig -> v { showConfig = not v.showConfig }
 
 columnKeyLabel :: ColumnKey -> String
 columnKeyLabel = case _ of
@@ -191,6 +199,7 @@ columnKeyLabel = case _ of
   KeyVocabulary -> "Vocabulary"
   KeyMiniNotation -> "Mini-notation"
   KeyHylograph -> "Hylograph"
+  KeyConfig -> "Config"
 
 columnKeyToken :: ColumnKey -> String
 columnKeyToken = case _ of
@@ -200,6 +209,7 @@ columnKeyToken = case _ of
   KeyVocabulary -> "vocabulary"
   KeyMiniNotation -> "mini-notation"
   KeyHylograph -> "hylograph"
+  KeyConfig -> "config"
 
 -- | Decode the `?hide=` query value into a `ColumnVisibility`.
 -- |
@@ -224,6 +234,7 @@ visibilityFromHide hide =
     , showVocabulary: has "vocabulary"
     , showMiniNotation: has "mini-notation" || has "mininotation"
     , showHylograph: has "hylograph" || has "render" || has "values" || has "gutter"
+    , showConfig: has "config"
     }
 
 hideFromVisibility :: ColumnVisibility -> String
@@ -283,6 +294,15 @@ type State =
   -- came out" becomes diagnosable line-by-line — every statement's
   -- daemon reply is captured, including ones past the first error.
   , compositionFireLines :: Array { lineNum :: Int, source :: String, reply :: Either String String }
+  -- Most recent purerl-tidal state snapshot, fetched via the `state`
+  -- WS verb (read from the StateBus ETS table).  Refreshed on demand
+  -- from the Config pane.  Pretty-printed before render.
+  , configSnapshot :: Maybe String
+  -- Last known BPM, displayed in the topbar widget.  Updated when
+  -- the Config pane refreshes or when BpmCommit fires.  Initial
+  -- value is the Main.purs default (120) until the first refresh
+  -- proves otherwise.
+  , bpmDisplay :: Number
   , cellTypes :: Map String String
   , pendingCompile :: Maybe H.ForkId
   -- Pen + WebSocket transport.  The Pen is the descendant of
@@ -339,6 +359,9 @@ data Action
   | FavoritesLoaded (Array Favorite)
   | VocabularyLoaded Vocabulary
   | KeyboardShortcut Int     -- Cmd-N pressed at the window level; toggles a column
+  | RefreshConfigState       -- Config pane: ask purerl-tidal for its state snapshot
+  | BpmCommit Number         -- topbar BPM widget: commit a new tempo via Link
+  | BpmInputChanged String   -- intermediate: text typed in the BPM input
   | ToggleSettings
   | WsOpened
   | WsIncoming String
@@ -375,6 +398,8 @@ initialState _ =
   , cellResults: Map.empty
   , compositionStatus: Nothing
   , compositionFireLines: []
+  , configSnapshot: Nothing
+  , bpmDisplay: 120.0
   , cellTypes: Map.empty
   , pendingCompile: Nothing
   , myId: Nothing
@@ -432,6 +457,27 @@ handleAction = case _ of
     case Array.index allColumnKeys (digit - 1) of
       Nothing -> pure unit
       Just key -> handleAction (ToggleColumn key)
+  RefreshConfigState -> do
+    -- Send the `state` verb through /eval; purerl-tidal returns the
+    -- StateBus snapshot as the reply.  Stored verbatim; rendered with
+    -- a JSON pretty-printer at draw time.  Also extracts bpm so the
+    -- topbar widget reflects what the rig actually thinks tempo is.
+    result <- evalSource "state"
+    case result of
+      Left err -> H.modify_ _ { configSnapshot = Just ("ERR: " <> err) }
+      Right snap -> H.modify_ \s -> s
+        { configSnapshot = Just snap
+        , bpmDisplay = fromMaybe s.bpmDisplay (extractBpmFromSnapshot snap)
+        }
+  BpmInputChanged _ -> pure unit  -- live-input updates are observed via the input element's value
+  BpmCommit n -> do
+    -- Send `bpm <n>` to purerl-tidal, which forwards `/link/set-tempo`
+    -- to link-spike, which broadcasts via Link to all peers.
+    -- Optimistically update bpmDisplay so the input snaps to the
+    -- committed value before the round-trip completes.
+    H.modify_ _ { bpmDisplay = n }
+    _ <- evalSource ("bpm " <> show n)
+    pure unit
   ModuleChanged src -> do
     H.modify_ _ { moduleSource = src }
     handleAction ScheduleCompile
@@ -1045,6 +1091,7 @@ subscribeWindowShortcuts = do
       "4" -> Just 4
       "5" -> Just 5
       "6" -> Just 6
+      "7" -> Just 7
       _   -> Nothing
 
 openWebSocket
@@ -1334,6 +1381,7 @@ render state =
             <> (if state.visibility.showVocabulary then [ renderVocabularyColumn state ] else [])
             <> (if state.visibility.showMiniNotation then [ renderMiniNotationColumn state ] else [])
             <> (if state.visibility.showHylograph then [ renderHylographColumn state ] else [])
+            <> (if state.visibility.showConfig then [ renderConfigColumn state ] else [])
         )
     , renderErrorPanel state
     ]
@@ -1381,10 +1429,45 @@ renderHeader state =
         ]
         [ HH.text "⚙" ]
     , renderTitlePen state
+    , renderBpmWidget state
     , renderViewToggle state
     , HH.div [ HP.class_ (H.ClassName "header-spacer") ] []
     , renderFavoritesDropdown state
     , HH.div [ HP.class_ (H.ClassName "header-spacer") ] []
+    ]
+
+-- | Pull `config.bpm` out of a StateBus JSON snapshot.  Returns
+-- | Nothing if the snapshot doesn't parse, isn't an object, lacks
+-- | the expected nested keys, or has a non-numeric bpm.  Used to
+-- | sync the topbar BPM widget with what purerl-tidal thinks the
+-- | tempo is.
+extractBpmFromSnapshot :: String -> Maybe Number
+extractBpmFromSnapshot raw = case jsonParser raw of
+  Left _ -> Nothing
+  Right j -> do
+    obj <- AJ.toObject j
+    cfgJ <- Object.lookup "config" obj
+    cfgObj <- AJ.toObject cfgJ
+    bpmJ <- Object.lookup "bpm" cfgObj
+    AJ.toNumber bpmJ
+
+-- | Topbar BPM widget — number input that fires `bpm <n>` over WS
+-- | on commit (Enter or blur).  The value reflects the most-recent
+-- | StateBus snapshot (see RefreshConfigState); editing is direct.
+-- | DAW convention puts BPM in the top toolbar; this is the same.
+renderBpmWidget :: forall m. State -> H.ComponentHTML Action Slots m
+renderBpmWidget state =
+  HH.div [ HP.class_ (H.ClassName "topbar-bpm") ]
+    [ HH.input
+        [ HP.type_ HP.InputNumber
+        , HP.value (formatNumber state.bpmDisplay)
+        , HP.title "BPM (Enter to commit; broadcasts via Link to all peers)"
+        , HP.class_ (H.ClassName "topbar-bpm-input")
+        , HE.onValueChange \v -> case Number.fromString v of
+            Just n -> BpmCommit n
+            Nothing -> BpmInputChanged v
+        ]
+    , HH.span [ HP.class_ (H.ClassName "topbar-bpm-label") ] [ HH.text "bpm" ]
     ]
 
 renderTitlePen :: forall m. State -> H.ComponentHTML Action Slots m
@@ -1695,6 +1778,30 @@ renderMiniNotationColumn :: forall m. State -> H.ComponentHTML Action Slots m
 renderMiniNotationColumn _ =
   HH.section [ HP.class_ (H.ClassName "pane pane-mini-notation") ]
     [ Primer.renderMiniNotation ]
+
+-- | Config pane — read-only inspector for purerl-tidal's runtime
+-- | state.  Pulls a JSON snapshot via the `state` WS verb (which
+-- | reads from the StateBus ETS table on the server).  Refresh is
+-- | manual via the button: state changes happen on every cell-fire,
+-- | but the pane shouldn't repaint on every event — that's noise.
+renderConfigColumn :: forall m. State -> H.ComponentHTML Action Slots m
+renderConfigColumn state =
+  HH.section [ HP.class_ (H.ClassName "pane pane-config") ]
+    [ HH.div [ HP.class_ (H.ClassName "config-toolbar") ]
+        [ HH.button
+            [ HP.class_ (H.ClassName "config-refresh-btn")
+            , HE.onClick \_ -> RefreshConfigState
+            , HP.title "Re-fetch state from purerl-tidal"
+            ]
+            [ HH.text "↻ refresh" ]
+        ]
+    , HH.pre [ HP.class_ (H.ClassName "config-body") ]
+        [ HH.text body ]
+    ]
+  where
+    body = case state.configSnapshot of
+      Nothing -> "(no snapshot yet — click ↻ refresh)"
+      Just s -> prettyPrintJson s
 
 renderSetupFile :: forall m. CV.SetupFile -> H.ComponentHTML Action Slots m
 renderSetupFile (CV.SetupFile sf) =

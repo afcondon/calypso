@@ -31,3 +31,19 @@ export const writeHideParam = (value) => () => {
   }
   window.history.replaceState(null, '', url.toString());
 };
+
+// Pretty-print JSON.  Returns the input verbatim if it doesn't parse
+// (e.g. an "ERR: ..." reply from purerl-tidal, or an empty boot-window
+// snapshot).  Indentation is 2 spaces — readable in a 0.85rem mono pane.
+export const prettyPrintJson = (s) => {
+  try {
+    return JSON.stringify(JSON.parse(s), null, 2);
+  } catch (_) {
+    return s;
+  }
+};
+
+// Format a Number — JS native String() produces the short-form a user
+// expects ("120", "119.5") rather than PureScript's purerl scientific
+// notation. Used for the topbar BPM widget.
+export const formatNumber = (n) => String(n);

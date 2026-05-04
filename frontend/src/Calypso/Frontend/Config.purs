@@ -4,6 +4,8 @@ module Calypso.Frontend.Config
   , nowMs
   , readHideParam
   , writeHideParam
+  , prettyPrintJson
+  , formatNumber
   ) where
 
 import Prelude
@@ -30,3 +32,14 @@ foreign import readHideParam :: Effect String
 -- | `history.replaceState` — no navigation. Empty string removes the
 -- | param.
 foreign import writeHideParam :: String -> Effect Unit
+
+-- | Pretty-print a JSON string with 2-space indentation.  Falls back
+-- | to the input verbatim if the string isn't parseable as JSON.
+foreign import prettyPrintJson :: String -> String
+
+-- | Format a Number using JS's native `String(n)` — produces "120"
+-- | for 120.0, "119.5" for fractional, etc.  PureScript's `show` on
+-- | Number emits scientific notation in purerl, which doesn't apply
+-- | here (browser side) but the same convenient short form is what
+-- | a user wants to see.
+foreign import formatNumber :: Number -> String
