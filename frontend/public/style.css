@@ -449,6 +449,22 @@ body::before {
   margin-right: 0.2rem;
 }
 
+/* Small dot indicating the cell came from an external API caller (an
+ * agent, a tutorial script, a jam-partner) rather than the helm.
+ * Tooltip on hover names the author; no inline label keeps the cells
+ * pane dense. */
+.cell-author-dot {
+  display: inline-block;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: var(--cell-bar, var(--fg-dim));
+  opacity: 0.8;
+  margin-right: 0.15rem;
+  flex-shrink: 0;
+  cursor: help;
+}
+
 .cell-kind-btn,
 .remove-cell-btn,
 .promote-cell-btn,

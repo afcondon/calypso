@@ -36,6 +36,7 @@ newtype Cell = Cell
   , kind :: String
   , source :: String
   , form :: Boolean
+  , author :: Maybe String
   }
 
 cellCodec :: JsonCodec Cell
@@ -45,17 +46,21 @@ cellCodec = CA.prismaticCodec "Cell" toCell fromCell $
     , kind: CA.string
     , source: CA.string
     , form: CAR.optional CA.boolean
+    , author: CAR.optional CA.string
     }
   where
-  -- Missing `form` decodes as false so old snapshots keep working.
-  toCell r = Just $ Cell { id: r.id, kind: r.kind, source: r.source, form: fromMaybe false r.form }
-  -- Encode `form: true` only when set; omit the field otherwise to keep
-  -- exports minimal and snapshots that round-trip cleanly.
+  -- Missing `form` / `author` decode as false / Nothing so old snapshots keep working.
+  toCell r = Just $ Cell
+    { id: r.id, kind: r.kind, source: r.source
+    , form: fromMaybe false r.form, author: r.author
+    }
+  -- Encode `form: true` and `author` only when set; omit otherwise.
   fromCell (Cell r) =
     { id: r.id
     , kind: r.kind
     , source: r.source
     , form: if r.form then Just true else Nothing
+    , author: r.author
     }
 
 -- | What the frontend submits on each compile.

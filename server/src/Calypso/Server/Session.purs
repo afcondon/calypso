@@ -137,7 +137,7 @@ initialStateFrom :: Maybe String -> SessionState
 initialStateFrom defaultBody =
   { runtime: "purerl-tidal-ws"
   , "module": UserModule { source: fromMaybe tidalStarterModule defaultBody }
-  , cells: [ Cell { id: "c1", kind: "expr", source: "hush", form: false } ]
+  , cells: [ Cell { id: "c1", kind: "expr", source: "hush", form: false, author: Nothing } ]
   , nextCellId: 2
   , lastResponse: Nothing
   }
@@ -513,20 +513,28 @@ replaceLineRange startLine endLine text src
                  inserted = Str.split (Pattern "\n") text
              in Right $ Str.joinWith "\n" (before <> inserted <> after)
 
-appendCell :: SessionStore -> { source :: String, kind :: String } -> Aff CompileResponse
-appendCell store { source, kind } = withUpdate store (appendCellState { source, kind })
+appendCell
+  :: SessionStore
+  -> { source :: String, kind :: String, author :: Maybe String }
+  -> Aff CompileResponse
+appendCell store body = withUpdate store (appendCellState body)
 
-appendCellState :: { source :: String, kind :: String } -> SessionState -> SessionState
-appendCellState { source, kind } s =
+appendCellState
+  :: { source :: String, kind :: String, author :: Maybe String }
+  -> SessionState
+  -> SessionState
+appendCellState { source, kind, author } s =
   let newId = "c" <> show s.nextCellId
-      newCell = Cell { id: newId, kind, source, form: false }
+      newCell = Cell { id: newId, kind, source, form: false, author }
   in s { cells = snoc s.cells newCell, nextCellId = s.nextCellId + 1 }
 
 -- | Trial-apply a cell append — compile against the resulting cells
 -- | but don't persist or broadcast. Counterpart to `appendCell` for
 -- | POST /session/cells?preview=true.
 previewAppendCell
-  :: SessionStore -> { source :: String, kind :: String } -> Aff CompileResponse
+  :: SessionStore
+  -> { source :: String, kind :: String, author :: Maybe String }
+  -> Aff CompileResponse
 previewAppendCell store body = withPreview store (appendCellState body)
 
 updateCell
@@ -551,6 +559,7 @@ updateCellState cellId patch s = s { cells = applyPatch s.cells }
     , source: fromMaybe c.source p.source
     , kind: fromMaybe c.kind p.kind
     , form: fromMaybe c.form p.form
+    , author: c.author
     }
 
 -- | Trial-apply a cell update — compile against the resulting cells

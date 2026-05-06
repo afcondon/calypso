@@ -142,10 +142,11 @@ route = root $ sum
 moduleBodyCodec :: JsonCodec { source :: String }
 moduleBodyCodec = CAR.object "ModuleBody" { source: CA.string }
 
-cellAppendBodyCodec :: JsonCodec { source :: String, kind :: String }
+cellAppendBodyCodec :: JsonCodec { source :: String, kind :: String, author :: Maybe String }
 cellAppendBodyCodec = CAR.object "CellAppendBody"
   { source: CA.string
   , kind: CA.string
+  , author: CAR.optional CA.string
   }
 
 -- | PATCH-body decoder: fields are genuinely optional (missing key
@@ -726,13 +727,15 @@ mkRouter ctx req@{ route: r, method, body } =
                 resp <- liftAff (Session.previewAppendCell store rq)
                 ok' jsonCors (snapshotJson resp)
               else do
-                authResult <- requirePen ctx req
-                case authResult of
-                  Left r' -> pure r'
-                  Right sid -> do
-                    resp <- liftAff (Session.appendCell store rq)
-                    liftEffect $ Pen.heartbeat ctx.penStore sid
-                    ok' jsonCors (snapshotJson resp)
+                -- Append-cell does NOT require the pen: a freshly-appended cell
+                -- has form: false and is therefore inert (not part of the
+                -- playing composition). The helm gesture that DOES affect what's
+                -- playing — PATCH …/cells/:id { form: true } — keeps its pen
+                -- check below. This is the lane that lets agents and tutorial
+                -- scripts drop suggestions into the cells pane without holding
+                -- the pen; the helm picks them up by promoting.
+                resp <- liftAff (Session.appendCell store rq)
+                ok' jsonCors (snapshotJson resp)
 
       SessionCellAt cellId { preview } -> withStore ctx req \store -> case method of
         Delete ->

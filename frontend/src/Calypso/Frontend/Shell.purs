@@ -92,13 +92,19 @@ import Calypso.Session
 -- | Local cell shape. Mirrors the wire `Cell` minus the `form` field
 -- | (carried as `false` on the wire for back-compat until the wire shape
 -- | is trimmed in the deferred housekeeping pass).
-type CellRec = { id :: String, kind :: String, source :: String }
+-- |
+-- | `author` is preserved from the wire — non-Nothing means the cell was
+-- | dropped in by an external API caller (an agent, a tutorial script, a
+-- | jam-partner) rather than authored at the helm. The cells pane shows a
+-- | small marker for those; on PromoteCellToCode the author becomes a
+-- | comment in the composition source.
+type CellRec = { id :: String, kind :: String, source :: String, author :: Maybe String }
 
 cellRecOf :: Cell -> CellRec
-cellRecOf (Cell c) = { id: c.id, kind: c.kind, source: c.source }
+cellRecOf (Cell c) = { id: c.id, kind: c.kind, source: c.source, author: c.author }
 
 cellOf :: CellRec -> Cell
-cellOf c = Cell { id: c.id, kind: c.kind, source: c.source, form: false }
+cellOf c = Cell { id: c.id, kind: c.kind, source: c.source, form: false, author: c.author }
 
 -- | The six top-level panes. Each is independently toggleable
 -- | via the view-toggle bar or via Cmd-1..Cmd-6 (Ctrl on non-Mac).
@@ -487,7 +493,7 @@ handleAction = case _ of
   AddCell -> do
     H.modify_ \s ->
       let newId = "c" <> show s.nextCellId
-          newCell = { id: newId, kind: "expr", source: "" }
+          newCell = { id: newId, kind: "expr", source: "", author: Nothing }
       in s { cells = snoc s.cells newCell, nextCellId = s.nextCellId + 1 }
     handleAction ScheduleCompile
   RemoveCell id -> do
@@ -516,7 +522,10 @@ handleAction = case _ of
           let sep = if Str.null s.moduleSource then ""
                     else if Str.CU.takeRight 1 s.moduleSource == "\n" then ""
                     else "\n"
-              newModule = s.moduleSource <> sep <> c.source
+              attribution = case c.author of
+                Just a -> "-- from: " <> a <> "\n"
+                Nothing -> ""
+              newModule = s.moduleSource <> sep <> attribution <> c.source
                 <> (if Str.CU.takeRight 1 c.source == "\n" then "" else "\n")
           in s
             { moduleSource = newModule
@@ -540,7 +549,7 @@ handleAction = case _ of
       Just (Just { text }) | not (Str.null (Str.trim text)) -> do
         H.modify_ \s ->
           let newId = "c" <> show s.nextCellId
-              newCell = { id: newId, kind: "expr", source: text }
+              newCell = { id: newId, kind: "expr", source: text, author: Nothing }
           in s { cells = snoc s.cells newCell, nextCellId = s.nextCellId + 1 }
         handleAction ScheduleCompile
       _ -> pure unit
@@ -1640,6 +1649,13 @@ renderCellRow state idx c =
     ]
     [ HH.div [ HP.class_ (H.ClassName "cell-meta") ]
         [ HH.span [ HP.class_ (H.ClassName "cell-id") ] [ HH.text c.id ]
+        , case c.author of
+            Just a -> HH.span
+              [ HP.class_ (H.ClassName "cell-author-dot")
+              , HP.title ("From " <> a)
+              ]
+              []
+            Nothing -> HH.text ""
         , HH.button
             [ HP.class_ (H.ClassName ("cell-kind-btn cell-kind-" <> c.kind))
             , HE.onClick \_ -> ToggleCellKind c.id
