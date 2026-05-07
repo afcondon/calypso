@@ -629,7 +629,15 @@ serveOn port = serveWithHandle { port, hostname: "0.0.0.0" } \handle -> do
         pen <- liftEffect $ Pen.getState penStore
         let msg = Snapshot { pen, snapshot: resp }
             encoded = stringify (CA.encode broadcastCodec msg)
-        Subscribers.broadcast subs pen.holder (TextMessage encoded)
+        -- Broadcast to ALL subscribers, including the pen holder. The
+        -- previous behaviour excluded the pen holder on the assumption
+        -- they'd already have the result from their own HTTP/WS call;
+        -- but that breaks the new permissionless cell-append lane,
+        -- where a non-pen-holder writes and the pen holder needs the
+        -- snapshot to see the new cell appear. Snapshot apply is
+        -- idempotent so the redundant frame to a self-initiating
+        -- pen-holder is harmless.
+        Subscribers.broadcast subs Nothing (TextMessage encoded)
   mainStore <- Session.newStore
     sessionDir
     "calypso-runtime"
