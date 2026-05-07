@@ -420,6 +420,25 @@ body::before {
   opacity: 1.0;
 }
 
+/* Cells-pane accordion section headers.  Visually distinct from cell
+   rows: smaller, all-caps, dim, with a left border colour-coded by
+   section.  Always visible so the structure is readable at a glance
+   even when sections are empty. */
+.cells-section-header {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--fg-dim);
+  padding: 0.3rem 0.6rem 0.2rem 0.5rem;
+  margin-top: 0.4rem;
+  border-left: 3px solid var(--fg-dim);
+  border-bottom: 1px solid rgba(120, 120, 120, 0.15);
+}
+.cells-section-config { border-left-color: #6699cc; }   /* slate-blue */
+.cells-section-voices { border-left-color: #99cc66; }   /* sage-green */
+.cells-section-patterns { border-left-color: #cc6699; } /* dusty-pink */
+
 .fire-status {
   margin-left: auto;
   color: var(--fg-bright);

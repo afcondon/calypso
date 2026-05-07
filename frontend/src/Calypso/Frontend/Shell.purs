@@ -106,6 +106,45 @@ cellRecOf (Cell c) = { id: c.id, kind: c.kind, source: c.source, author: c.autho
 cellOf :: CellRec -> Cell
 cellOf c = Cell { id: c.id, kind: c.kind, source: c.source, form: false, author: c.author }
 
+-- | Infer which section a cell belongs to, by inspecting its source's
+-- | leading word.  Used to group cells in the accordion: `bind …` cells
+-- | go to Voices, `bpm`/`midi-device`/etc. to Config, everything else
+-- | (the live patterns) to Patterns.  This is *display-only*
+-- | classification — the cell itself stores no section tag.
+cellSection :: CellRec -> Section
+cellSection c =
+  let
+    -- Extract the first whitespace-delimited word of the first
+    -- non-empty, non-`--`-comment line.
+    lines = Str.split (Pattern "\n") c.source
+    firstStmt = Array.find (\l -> not (Str.null (stripLineComment l))) lines
+    firstWord = case firstStmt of
+      Nothing -> ""
+      Just l -> case Str.split (Pattern " ") (stripLineComment l) of
+        ws -> fromMaybe "" (Array.head (Array.filter (not <<< Str.null) ws))
+  in
+    if firstWord == "bind" || firstWord == "unbind"
+      then SecVoices
+      else if Array.elem firstWord configVerbs
+        then SecConfig
+        else SecPatterns
+  where
+    configVerbs =
+      [ "bpm"
+      , "midi-device"
+      , "log-level"
+      , "look-ahead-ms"
+      , "gate-enabled"
+      , "note-duration"
+      , "cv-lead-ms"
+      , "gate-duration"
+      , "channel-offset"
+      , "load"
+      , "save"
+      , "fh2-envelope"
+      , "config"
+      ]
+
 -- | The six top-level panes. Each is independently toggleable
 -- | via the view-toggle bar or via Cmd-1..Cmd-6 (Ctrl on non-Mac).
 -- | Layout is left-to-right in the order declared here. Persisted
@@ -1710,7 +1749,9 @@ renderCompositionColumn state =
 renderCellsColumn :: forall m. MonadAff m => State -> H.ComponentHTML Action Slots m
 renderCellsColumn state =
   HH.section [ HP.class_ (H.ClassName "pane pane-cells") ]
-    ( mapWithIndex (renderCellRow state) state.cells
+    ( renderSection SecConfig "config"
+        <> renderSection SecVoices "voices"
+        <> renderSection SecPatterns "patterns"
         <>
           [ HH.div [ HP.class_ (H.ClassName "cells-toolbar") ]
               [ HH.button
@@ -1721,6 +1762,26 @@ renderCellsColumn state =
               ]
           ]
     )
+  where
+    -- Each accordion section renders only the cells whose inferred
+    -- kind matches.  Empty sections still get a header so the user
+    -- sees the structure even with no cells active.  Cells keep their
+    -- absolute index in `state.cells` (the basis for cellColorClass)
+    -- so colour stripes don't shift when sections expand/collapse.
+    indexedCells = mapWithIndex (\i c -> { idx: i, cell: c }) state.cells
+    cellsInSection sec =
+      Array.filter (\e -> cellSection e.cell == sec) indexedCells
+    renderSection sec label =
+      let cs = cellsInSection sec
+          countLabel = case Array.length cs of
+            0 -> ""
+            n -> " (" <> show n <> ")"
+      in
+        [ HH.div
+            [ HP.class_ (H.ClassName ("cells-section-header cells-section-" <> label)) ]
+            [ HH.text (label <> countLabel) ]
+        ]
+        <> map (\e -> renderCellRow state e.idx e.cell) cs
 
 cellColorClass :: Int -> String
 cellColorClass idx = "cell-color-" <> show (idx `mod` 8)
