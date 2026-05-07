@@ -408,6 +408,18 @@ body::before {
   background: rgba(65, 255, 124, 0.06);
 }
 
+.fire-btn-section {
+  /* Visually softer than the main "▶ fire" — these are scoped fires
+     for one section only.  Slightly dimmer border + slightly smaller
+     so the eye reads them as secondary actions. */
+  border-color: var(--fg-dim);
+  opacity: 0.85;
+  font-size: 0.9rem;
+}
+.fire-btn-section:hover {
+  opacity: 1.0;
+}
+
 .fire-status {
   margin-left: auto;
   color: var(--fg-bright);

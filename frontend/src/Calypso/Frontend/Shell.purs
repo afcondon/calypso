@@ -22,7 +22,7 @@ import Data.Map (Map)
 import Data.Map as Map
 import Data.Int (toNumber)
 import Data.Int as Int
-import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Maybe (Maybe(..), fromMaybe, isNothing)
 import Data.Number as Number
 import Data.String.Pattern (Pattern(..))
 import Data.Traversable (for)
@@ -358,6 +358,7 @@ data Action
   | DemoteCursorLineToCell           -- copy cursor line in moduleEditor into a new cell
   | FireCell String String        -- cell id, current source
   | FireComposition String        -- current composition source
+  | FireSection Section String    -- fire only one section's statements
   | AcceptHunk ProposalId Int     -- POST /proposals/:id/hunks/:idx/accept
   | RejectHunk ProposalId Int     -- POST .../reject
   | ToggleFavoriteMenu
@@ -580,6 +581,16 @@ handleAction = case _ of
     H.modify_ _ { compositionStatus = Nothing, compositionFireLines = [], transportError = Nothing }
     if Array.null stmts
       then H.modify_ _ { compositionStatus = Just "(no statements to fire)" }
+      else fireStatements stmts
+  FireSection sec src -> do
+    -- Fire only the statements in `sec`.  Useful for "boot voices",
+    -- "set up config", "start patterns" as separate gestures during
+    -- a session.  Statements before any section marker (SecDefault)
+    -- are NOT included — the user opted out of taxonomy for those.
+    let stmts = Array.filter (\e -> e.section == sec) (compositionStatements src)
+    H.modify_ _ { compositionStatus = Nothing, compositionFireLines = [], transportError = Nothing }
+    if Array.null stmts
+      then H.modify_ _ { compositionStatus = Just $ "(no statements in section '" <> sectionLabel sec <> "')" }
       else fireStatements stmts
   AcceptHunk pid idx -> proposalAction "accept" pid idx
   RejectHunk pid idx -> proposalAction "reject" pid idx
@@ -875,6 +886,38 @@ stripLineComment line = case Str.indexOf (Pattern "--") line of
   Just i -> Str.trim (Str.take i line)
   Nothing -> Str.trim line
 
+-- | Composition sections — the structural taxonomy the code pane is
+-- | organised by.  Lines after a `# config` / `# voices` / `# patterns`
+-- | marker (until the next marker) belong to that section.  Lines
+-- | before any marker are `SecDefault`, fired alongside everything by
+-- | the all-fire path; per-section fire skips them.
+data Section
+  = SecConfig
+  | SecVoices
+  | SecPatterns
+  | SecDefault
+
+derive instance eqSection :: Eq Section
+
+-- | Render a section for log / UI strings.
+sectionLabel :: Section -> String
+sectionLabel = case _ of
+  SecConfig -> "config"
+  SecVoices -> "voices"
+  SecPatterns -> "patterns"
+  SecDefault -> "(unsectioned)"
+
+-- | Recognise a section header line.  `# config`, `# voices`, or
+-- | `# patterns` (after comment-strip + trim) returns the section;
+-- | anything else returns Nothing.  Distinct from `# vel "…"` (the
+-- | parameter-join shape) because the section names are a closed set.
+sectionOfLine :: String -> Maybe Section
+sectionOfLine line = case Str.trim line of
+  "# config" -> Just SecConfig
+  "# voices" -> Just SecVoices
+  "# patterns" -> Just SecPatterns
+  _ -> Nothing
+
 -- | Join continuation lines into the previous logical line.  A
 -- | continuation is any (already-comment-stripped, non-blank) line
 -- | whose first character is `#`.  Used to support the multi-line
@@ -890,13 +933,17 @@ stripLineComment line = case Str.indexOf (Pattern "--") line of
 -- | already handles single-line ` # ` segments.  The line number on
 -- | the joined entry stays at the structure line, so error reports
 -- | point at where the user's intent began.
+-- |
+-- | Section header lines (`# config`, `# voices`, `# patterns`) are
+-- | NOT continuations — they're separator markers that propagate the
+-- | section tag forward through the next statements.
 joinContinuations
-  :: Array { lineNum :: Int, source :: String }
-  -> Array { lineNum :: Int, source :: String }
+  :: Array { lineNum :: Int, source :: String, section :: Section }
+  -> Array { lineNum :: Int, source :: String, section :: Section }
 joinContinuations = Array.foldl step []
   where
   step acc entry =
-    if Str.take 1 entry.source == "#"
+    if Str.take 1 entry.source == "#" && isNothing (sectionOfLine entry.source)
       then case Array.unsnoc acc of
         Just { init, last } ->
           init <> [ last { source = last.source <> " " <> entry.source } ]
@@ -904,13 +951,37 @@ joinContinuations = Array.foldl step []
                               -- the parser emit its own error
       else acc <> [ entry ]
 
-compositionStatements :: String -> Array { lineNum :: Int, source :: String }
+-- | Parse the composition source into a flat array of statements,
+-- | each tagged with the section it falls under.  Section markers
+-- | themselves are dropped from the output (they're navigational, not
+-- | executable).  Lines before any marker get `SecDefault`.
+compositionStatements
+  :: String
+  -> Array { lineNum :: Int, source :: String, section :: Section }
 compositionStatements src =
   let lines = Str.split (Pattern "\n") src
       indexed = mapWithIndex
         (\i s -> { lineNum: i + 1, source: stripLineComment s }) lines
       nonBlank = Array.filter (\e -> not (Str.null e.source)) indexed
-  in joinContinuations nonBlank
+      tagged = tagSections SecDefault nonBlank
+      -- Drop the section marker rows themselves; they're
+      -- presentational, not statements to fire.
+      noMarkers = Array.filter (\e -> isNothing (sectionOfLine e.source)) tagged
+  in joinContinuations noMarkers
+  where
+  tagSections current xs = case Array.uncons xs of
+    Nothing -> []
+    Just { head, tail } -> case sectionOfLine head.source of
+      Just sec ->
+        -- Marker line itself carries the new section so it can be
+        -- found and shown if needed; subsequent lines inherit.
+        Array.cons
+          { lineNum: head.lineNum, source: head.source, section: sec }
+          (tagSections sec tail)
+      Nothing ->
+        Array.cons
+          { lineNum: head.lineNum, source: head.source, section: current }
+          (tagSections current tail)
 
 -- | Fire a list of statements in order against /eval.  Stops on the
 -- | first error and reports the failing line; on full success reports
@@ -918,7 +989,7 @@ compositionStatements src =
 fireStatements
   :: forall o m
    . MonadAff m
-  => Array { lineNum :: Int, source :: String }
+  => Array { lineNum :: Int, source :: String, section :: Section }
   -> H.HalogenM State Action Slots o m Unit
 fireStatements stmts = go [] stmts
   where
@@ -1591,6 +1662,24 @@ renderCompositionColumn state =
             , HP.title "Fire the whole composition (Mod-Enter inside the editor)"
             ]
             [ HH.text "▶ fire" ]
+        , HH.button
+            [ HP.class_ (H.ClassName "fire-btn fire-btn-section")
+            , HE.onClick \_ -> FireSection SecConfig state.moduleSource
+            , HP.title "Fire only statements under '# config'"
+            ]
+            [ HH.text "▶ config" ]
+        , HH.button
+            [ HP.class_ (H.ClassName "fire-btn fire-btn-section")
+            , HE.onClick \_ -> FireSection SecVoices state.moduleSource
+            , HP.title "Fire only statements under '# voices'"
+            ]
+            [ HH.text "▶ voices" ]
+        , HH.button
+            [ HP.class_ (H.ClassName "fire-btn fire-btn-section")
+            , HE.onClick \_ -> FireSection SecPatterns state.moduleSource
+            , HP.title "Fire only statements under '# patterns'"
+            ]
+            [ HH.text "▶ patterns" ]
         , HH.button
             [ HP.class_ (H.ClassName "fire-btn")
             , HE.onClick \_ -> DemoteCursorLineToCell
