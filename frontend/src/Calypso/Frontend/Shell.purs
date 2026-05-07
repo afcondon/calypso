@@ -398,6 +398,7 @@ data Action
   | FireCell String String        -- cell id, current source
   | FireComposition String        -- current composition source
   | FireSection Section String    -- fire only one section's statements
+  | WipeAndRestore                -- clear all cells, re-fire code pane
   | AcceptHunk ProposalId Int     -- POST /proposals/:id/hunks/:idx/accept
   | RejectHunk ProposalId Int     -- POST .../reject
   | ToggleFavoriteMenu
@@ -630,6 +631,26 @@ handleAction = case _ of
     H.modify_ _ { compositionStatus = Nothing, compositionFireLines = [], transportError = Nothing }
     if Array.null stmts
       then H.modify_ _ { compositionStatus = Just $ "(no statements in section '" <> sectionLabel sec <> "')" }
+      else fireStatements stmts
+  WipeAndRestore -> do
+    -- The Bret-Victor safety net: clear all cells (so the cells pane
+    -- shows no overrides), then re-fire the prepared code-pane
+    -- content (so the rig snaps back to the prepared session state).
+    -- Distinct from `hush` (which silences everything) — restore
+    -- returns the running rig to its prepared state, not silence.
+    s0 <- H.get
+    H.modify_ _
+      { cells = []
+      , cellResults = Map.empty
+      , cellTypes = Map.empty
+      , compositionStatus = Just "(cells wiped — restoring from code pane)"
+      , compositionFireLines = []
+      , transportError = Nothing
+      }
+    handleAction ScheduleCompile
+    let stmts = compositionStatements s0.moduleSource
+    if Array.null stmts
+      then H.modify_ _ { compositionStatus = Just "(cells wiped — code pane is empty)" }
       else fireStatements stmts
   AcceptHunk pid idx -> proposalAction "accept" pid idx
   RejectHunk pid idx -> proposalAction "reject" pid idx
@@ -1759,6 +1780,12 @@ renderCellsColumn state =
                   , HE.onClick \_ -> AddCell
                   ]
                   [ HH.text "+ add cell" ]
+              , HH.button
+                  [ HP.class_ (H.ClassName "wipe-restore-btn")
+                  , HE.onClick \_ -> WipeAndRestore
+                  , HP.title "Clear all cells and re-fire the code pane (snap back to prepared session state)"
+                  ]
+                  [ HH.text "↺ wipe & restore" ]
               ]
           ]
     )

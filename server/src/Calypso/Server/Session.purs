@@ -54,6 +54,7 @@ import Node.FS.Aff as FSA
 import Node.FS.Sync as FSS
 
 import Calypso.Server.Adapter.PurerlTidalWS (sendCell)
+import Calypso.Server.FireLog as FireLog
 import Calypso.Server.Hash (sha1Hex)
 import Data.Argonaut.Core (fromString) as AJ
 import Calypso.Session
@@ -636,6 +637,17 @@ evalResponseCodec = CAR.object "EvalResponse"
 evaluate :: SessionStore -> EvalRequest -> Aff EvalResponse
 evaluate _ { source } = do
   result <- Aff.try (sendCell source)
+  -- Append every fire to the cell-fire log before returning.  The
+  -- log is the safety net for "wipe & restore" — anything fired but
+  -- not promoted to the code pane is recoverable from this file.
+  -- Failures inside the log path are swallowed so a logging error
+  -- never breaks the user's actual fire dispatch.
+  case result of
+    Left err ->
+      FireLog.appendFire
+        { source, ok: false, reply: "transport: " <> Aff.message err }
+    Right reply ->
+      FireLog.appendFire { source, ok: reply.ok, reply: reply.reply }
   pure $ case result of
     Left err ->
       -- WebSocket connection failed (daemon down, network error). Surface

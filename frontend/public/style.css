@@ -439,6 +439,27 @@ body::before {
 .cells-section-voices { border-left-color: #99cc66; }   /* sage-green */
 .cells-section-patterns { border-left-color: #cc6699; } /* dusty-pink */
 
+/* The wipe & restore button: same primary-button styling as add-cell,
+   slightly softer so it doesn't dominate.  Sits to its right in the
+   cells-toolbar. */
+.wipe-restore-btn {
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  padding: 0.15rem 0.6rem;
+  margin-left: 0.5rem;
+  background: transparent;
+  border: 1px solid var(--fg-dim);
+  color: var(--fg-dim);
+  cursor: pointer;
+  letter-spacing: 0.05em;
+}
+.wipe-restore-btn:hover {
+  color: var(--fg-bright);
+  border-color: var(--fg-bright);
+  background: rgba(255, 200, 100, 0.06);
+}
+
 .fire-status {
   margin-left: auto;
   color: var(--fg-bright);

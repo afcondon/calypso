@@ -54,6 +54,7 @@ import Calypso.Server.Pen (PenStore, RequestResult(..))
 import Calypso.Server.Pen as Pen
 import Calypso.Server.Favorites as Favorites
 import Calypso.Server.Hash (sha1Hex)
+import Calypso.Server.FireLog as FireLog
 import Calypso.Server.Proposals (ProposalStore)
 import Calypso.Server.Proposals as Proposals
 import Calypso.Server.Vocabulary as Vocabulary
@@ -114,6 +115,10 @@ data Route
   | ProposalOne String
   | ProposalHunkAccept String String  -- proposal id, hunk index (parsed in handler)
   | ProposalHunkReject String String
+  -- Read-only fire-log query: returns the most recent N entries from
+  -- `~/.calypso/fire-log.jsonl`.  Used by the (eventual) Log pane to
+  -- recover patterns wiped from the cells pane.
+  | FireLogRoute
 
 derive instance Generic Route _
 
@@ -133,6 +138,7 @@ route = root $ sum
   , "ProposalOne": "proposals" / segment
   , "ProposalHunkAccept": "proposals" / segment / "hunks" / segment / "accept"
   , "ProposalHunkReject": "proposals" / segment / "hunks" / segment / "reject"
+  , "FireLogRoute": "log" / noArgs
   }
 
 -- ============================================================
@@ -865,3 +871,13 @@ mkRouter ctx req@{ route: r, method, body } =
               Right sid -> handleProposalReject ctx sid (ProposalId idStr) idx
         _ -> response' Status.methodNotAllowed jsonCors
           (errorJson "MethodNotAllowed" "/proposals/:id/hunks/:idx/reject accepts POST")
+
+      FireLogRoute -> case method of
+        Get -> do
+          -- Default: last 200 entries.  Trivially overrideable later
+          -- with a query param if it ever matters; 200 is plenty for
+          -- one performance session's worth of recovery.
+          entries <- liftAff (FireLog.readRecent 200)
+          ok' jsonCors (stringify (CA.encode (CA.array FireLog.entryCodec) entries))
+        _ -> response' Status.methodNotAllowed jsonCors
+          (errorJson "MethodNotAllowed" "/log accepts GET")
