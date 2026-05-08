@@ -1185,3 +1185,116 @@ body::before {
   color: var(--cyan);
   opacity: 0.9;
 }
+
+/* ==========================================================================
+   Voice Cells pane (Cmd-8) — prototype of the voice-oriented redesign.
+   See docs/voice-cells-design.md.
+   ========================================================================== */
+
+.pane-voice-cells {
+  background: var(--bg-deep);
+  padding: 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.voice-cells-zone {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-content: flex-start;
+  padding: 0.3rem 0.2rem 0.5rem 0.2rem;
+  border: 1px solid var(--fg-rule);
+  border-radius: 2px;
+  min-height: 4rem;
+}
+
+/* Config zone is fixed / never pivoted — render it tighter, less */
+/* prominent.  Music zone is the canvas where the action happens. */
+.voice-cells-config-zone {
+  background: rgba(255, 184, 74, 0.04);   /* tint amber for "setup" feel */
+  border-color: rgba(255, 184, 74, 0.15);
+}
+.voice-cells-music-zone {
+  background: rgba(65, 255, 124, 0.03);   /* tint phosphor for "live" */
+  flex: 1 1 auto;
+}
+
+.voice-cells-zone-header {
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  color: var(--fg-dim);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: 0.2rem;
+  padding-left: 0.2rem;
+}
+
+/* Card itself — thin outlined rectangle, vector-graphics look. */
+.voice-card {
+  display: flex;
+  flex-direction: column;
+  width: 9rem;
+  min-height: 3.5rem;
+  padding: 0.35rem 0.45rem;
+  background: var(--bg);
+  border: 1px solid var(--fg-dim);
+  border-radius: 2px;
+  cursor: pointer;
+  transition: border-color 80ms linear,
+              box-shadow 80ms linear,
+              transform 60ms ease-out;
+  user-select: none;
+  font-family: var(--mono);
+}
+
+.voice-card:hover {
+  border-color: var(--fg);
+  box-shadow: var(--glow);
+}
+
+.voice-card:active {
+  transform: translateY(1px);
+  box-shadow: 0 0 8px rgba(155, 255, 182, 0.9);
+}
+
+.voice-card-config {
+  /* Slightly recessed look: dimmer text, no fill colour from palette. */
+  border-style: dashed;
+  opacity: 0.85;
+}
+
+.voice-card-name {
+  font-size: 1rem;
+  color: var(--fg-bright);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  margin-bottom: 0.2rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.voice-card-body {
+  font-family: var(--mono-code);
+  font-size: 0.78rem;
+  color: var(--fg-dim);
+  line-height: 1.2;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* Per-name colour tint on the card stripe (left edge).  Same eight */
+/* swatches as cell-color-N for visual continuity with the cells pane. */
+.voice-card.voice-color-0 { border-left: 3px solid #41ff7c; }
+.voice-card.voice-color-1 { border-left: 3px solid #ffb84a; }
+.voice-card.voice-color-2 { border-left: 3px solid #4afff0; }
+.voice-card.voice-color-3 { border-left: 3px solid #b6ff5c; }
+.voice-card.voice-color-4 { border-left: 3px solid #ff8a65; }
+.voice-card.voice-color-5 { border-left: 3px solid #9bffb6; }
+.voice-card.voice-color-6 { border-left: 3px solid #6affc8; }
+.voice-card.voice-color-7 { border-left: 3px solid #ffe066; }

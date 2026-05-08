@@ -197,45 +197,54 @@ So:
 All three project onto the same underlying graph of
 (cell-id, hash, content) triples.
 
-## Open questions
+## Decisions (2026-05-08, follow-up)
 
-These need resolution before code lands:
+1. **Cell ↔ voice cardinality.** Cell is the *authoring* unit; voice
+   is the *runtime* unit. Usually 1:1, but 1:N is supported for
+   drum-machine-class devices (Patterning, Rample, QuadDrum, Digitakt,
+   SuperDirt). A multi-voice cell is just a multi-statement block
+   between pragma headers; one cell id, multiple `tidal_voice`
+   gen_servers fire from it. Hash + Time Machine operate at cell
+   granularity (flipping back rolls all the drum tracks together —
+   correct for kit programming).
 
-1. **Cell ↔ voice cardinality.** Does a cell stay tied to a single
-   voice (one cell = one binding name = one tidal_voice gen_server)?
-   Or can a cell author multiple voices at once (a "drums" cell that
-   fires `kick`, `snare`, `hh` together)?
-   - First is cleaner architecturally; aligns 1:1 with the
-     supervision tree.
-   - Second is closer to how live-coders write today (multi-statement
-     cells, `do`-blocks).
-   - May depend on whether the bundle abstraction subsumes the
-     "multi-voice cell" use case (bundle = the multi-voice unit;
-     cell stays single-voice).
+2. **Compile latency.** ~1.5s acceptable with cue-and-play; below
+   ~500ms unlocks type-and-fire. Drives the compile pipeline design
+   in purerl-tidal but doesn't gate the UI prototype.
 
-2. **Compile-and-hot-reload latency budget.** Andrew is OK with
-   ~1.5s if there's a cue-and-play system to mask it. The compile
-   pipeline's design depends on this budget. Below 500ms unlocks
-   "just type and fire"; above ~2s mandates explicit cue.
+3. **Pragma minimalism.** Just `@id` and `@bundle`. Kind + machine
+   re-derived from the binding's PrimAction / device alias. For
+   multi-voice cells, kind/machine become summaries ("mostly
+   triggers, all FH-2"); slight fuzz, workable.
 
-3. **Pragma minimalism.** Voice kind + machine are derivable from
-   the binding. Should they be stored as pragmas anyway (denormalized
-   for parser simplicity), or always re-derived (single source of
-   truth in the binding spec)? Probably re-derived — but the cost
-   shows up at parse time.
+4. **Free positioning + decks; layout NOT persisted.** Cells sit on
+   a 2D canvas, free positioning. Decks (stack-in-space) compose
+   alongside Time Machine (stack-in-time); both use the card
+   metaphor, both are about cards-on-a-desktop. Long-term:
+   Tarot Music integration — tarot cards as their own deck on the
+   same surface, performance-projection-friendly. **Layout is
+   in-session only for now**: positions don't persist between
+   sessions, and don't survive a pivot/cluster. Sidecar / pragma
+   persistence is deferred until prototype use surfaces the actual
+   needs.
 
-4. **Grid layout vs free positioning.** Once cells are visual
-   objects, do they sit in an auto-layout grid (row by row in
-   cluster order), or can the user drag them around freely?
-   Auto-layout is simpler; free positioning gives more "rig as
-   physical instrument" feel but adds complexity (positions need
-   to persist somewhere — pragmas in the .tidal? sidecar?).
+5. **New view, no deletion.** Voice-cells lands as an additional
+   top-level pane (Cmd-8 or similar). Existing seven panes
+   (composition, cells, Vocabulary, Mini-notation, Replies, Config,
+   Hylograph) all stay. We migrate features INTO voice-cells over
+   time rather than out-and-then-back.
 
-5. **The relationship between cells and the existing seven panes.**
-   Calypso currently has composition / cells / Vocabulary / Mini-
-   notation / Replies / Config / Hylograph. The voice-cells UI
-   replaces the cells pane (and arguably the composition pane); the
-   others stay or merge.
+## Refinements
+
+- **Config cells form a separate clump that never gets the pivot-
+  table treatment.** Rig-config statements (`bind`, `unbind`,
+  `midi-device`, `fh2-envelope`, `fh2-gate`) are setup, not music;
+  they don't participate in cluster-by-bundle / cluster-by-machine
+  views. They sit in a fixed config zone (typically the top of
+  the .tidal). Music cells (`<name> "<pattern>"`, `<name> :<expr>`,
+  `fh2-shape`, `bpm`, `hush`) are the ones on the canvas.
+  Detection is by first-non-pragma-statement prefix; no pragma
+  needed to declare config-vs-music.
 
 ## Suggested first concrete moves
 

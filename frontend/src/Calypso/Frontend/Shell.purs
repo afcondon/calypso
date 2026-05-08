@@ -164,11 +164,12 @@ data ColumnKey
   | KeyMiniNotation
   | KeyHylograph
   | KeyConfig
+  | KeyVoiceCells
 
 derive instance Eq ColumnKey
 
 -- | Order panes appear left-to-right in the row, and the index
--- | bound to Cmd-N (Cmd-1 = first, Cmd-7 = last).
+-- | bound to Cmd-N (Cmd-1 = first, Cmd-8 = last).
 allColumnKeys :: Array ColumnKey
 allColumnKeys =
   [ KeyComposition
@@ -178,6 +179,7 @@ allColumnKeys =
   , KeyMiniNotation
   , KeyHylograph
   , KeyConfig
+  , KeyVoiceCells
   ]
 
 type ColumnVisibility =
@@ -188,6 +190,7 @@ type ColumnVisibility =
   , showMiniNotation :: Boolean
   , showHylograph :: Boolean
   , showConfig :: Boolean
+  , showVoiceCells :: Boolean
   }
 
 allVisible :: ColumnVisibility
@@ -199,10 +202,11 @@ allVisible =
   , showMiniNotation: true
   , showHylograph: true
   , showConfig: true
+  , showVoiceCells: true
   }
 
 -- | Initial visibility on a fresh load: editor + replies on, the
--- | reference panes off (Cmd-4/5/6/7 to bring them in).  Even on
+-- | reference panes off (Cmd-4/5/6/7/8 to bring them in).  Even on
 -- | big monitors all seven side-by-side is too cramped — better
 -- | to summon what you want, when you want.
 defaultVisibility :: ColumnVisibility
@@ -214,6 +218,7 @@ defaultVisibility =
   , showMiniNotation: false
   , showHylograph: false
   , showConfig: false
+  , showVoiceCells: false
   }
 
 isVisible :: ColumnKey -> ColumnVisibility -> Boolean
@@ -225,6 +230,7 @@ isVisible = case _ of
   KeyMiniNotation -> _.showMiniNotation
   KeyHylograph -> _.showHylograph
   KeyConfig -> _.showConfig
+  KeyVoiceCells -> _.showVoiceCells
 
 toggleKey :: ColumnKey -> ColumnVisibility -> ColumnVisibility
 toggleKey k v = case k of
@@ -235,6 +241,7 @@ toggleKey k v = case k of
   KeyMiniNotation -> v { showMiniNotation = not v.showMiniNotation }
   KeyHylograph -> v { showHylograph = not v.showHylograph }
   KeyConfig -> v { showConfig = not v.showConfig }
+  KeyVoiceCells -> v { showVoiceCells = not v.showVoiceCells }
 
 columnKeyLabel :: ColumnKey -> String
 columnKeyLabel = case _ of
@@ -245,6 +252,7 @@ columnKeyLabel = case _ of
   KeyMiniNotation -> "Mini-notation"
   KeyHylograph -> "Hylograph"
   KeyConfig -> "Config"
+  KeyVoiceCells -> "Voice Cells"
 
 columnKeyToken :: ColumnKey -> String
 columnKeyToken = case _ of
@@ -255,6 +263,7 @@ columnKeyToken = case _ of
   KeyMiniNotation -> "mini-notation"
   KeyHylograph -> "hylograph"
   KeyConfig -> "config"
+  KeyVoiceCells -> "voice-cells"
 
 -- | Decode the `?hide=` query value into a `ColumnVisibility`.
 -- |
@@ -280,6 +289,7 @@ visibilityFromHide hide =
     , showMiniNotation: has "mini-notation" || has "mininotation"
     , showHylograph: has "hylograph" || has "render" || has "values" || has "gutter"
     , showConfig: has "config"
+    , showVoiceCells: has "voice-cells" || has "voicecells"
     }
 
 hideFromVisibility :: ColumnVisibility -> String
@@ -1522,6 +1532,7 @@ render state =
             <> (if state.visibility.showMiniNotation then [ renderMiniNotationColumn state ] else [])
             <> (if state.visibility.showHylograph then [ renderHylographColumn state ] else [])
             <> (if state.visibility.showConfig then [ renderConfigColumn state ] else [])
+            <> (if state.visibility.showVoiceCells then [ renderVoiceCellsColumn state ] else [])
         )
     , renderErrorPanel state
     ]
@@ -1977,6 +1988,96 @@ renderMiniNotationColumn _ =
 -- | reads from the StateBus ETS table on the server).  Refresh is
 -- | manual via the button: state changes happen on every cell-fire,
 -- | but the pane shouldn't repaint on every event — that's noise.
+-- | Voice Cells column — prototype of the voice-oriented redesign
+-- | sketched in `docs/voice-cells-design.md`.
+-- |
+-- | Two zones:
+-- |   - `config` (top, never pivoted) holds rig-config cells:
+-- |     `bind` / `unbind` / `midi-device` / `fh2-envelope` / `fh2-gate`
+-- |     declarations. These set up the rig; not music.
+-- |   - `music` (below) holds the playable cells (`<name> "<pat>"`,
+-- |     `<name> :<expr>`, `fh2-shape`, `bpm`, `hush`). Each rendered
+-- |     as a card showing the voice name + a body preview. Click to
+-- |     fire (uses the same `FireCell` action as the cells column).
+-- |
+-- | Pure read of `state.cells` — no separate parser yet. Visual
+-- | encoding (kind=shape, bundle=color, machine=border) is on the
+-- | roadmap but starts here as a uniform card with name-derived
+-- | color tinting.
+renderVoiceCellsColumn :: forall m. MonadAff m => State -> H.ComponentHTML Action Slots m
+renderVoiceCellsColumn state =
+  HH.section [ HP.class_ (H.ClassName "pane pane-voice-cells") ]
+    [ HH.div [ HP.class_ (H.ClassName "voice-cells-zone voice-cells-config-zone") ]
+        ( [ HH.div [ HP.class_ (H.ClassName "voice-cells-zone-header") ]
+              [ HH.text ("config (" <> show (Array.length configCells) <> ")") ]
+          ]
+          <> map (renderVoiceCard true) configCells
+        )
+    , HH.div [ HP.class_ (H.ClassName "voice-cells-zone voice-cells-music-zone") ]
+        ( [ HH.div [ HP.class_ (H.ClassName "voice-cells-zone-header") ]
+              [ HH.text ("music (" <> show (Array.length musicCells) <> ")") ]
+          ]
+          <> map (renderVoiceCard false) musicCells
+        )
+    ]
+  where
+    configCells = Array.filter (\c ->
+      let s = cellSection c in s == SecConfig || s == SecVoices) state.cells
+    musicCells = Array.filter (\c -> cellSection c == SecPatterns) state.cells
+
+-- | One voice card: name + body preview, click to fire.
+renderVoiceCard
+  :: forall m. MonadAff m
+  => Boolean
+  -> CellRec
+  -> H.ComponentHTML Action Slots m
+renderVoiceCard isConfig c =
+  HH.div
+    [ HP.class_
+        ( H.ClassName
+            ( "voice-card "
+                <> (if isConfig then "voice-card-config" else "voice-card-music")
+                <> " " <> voiceColorClass voiceName
+            )
+        )
+    , HE.onClick \_ -> FireCell c.id c.source
+    , HP.title ("click to fire — " <> c.source)
+    ]
+    [ HH.div [ HP.class_ (H.ClassName "voice-card-name") ] [ HH.text voiceName ]
+    , HH.div [ HP.class_ (H.ClassName "voice-card-body") ] [ HH.text bodyPreview ]
+    ]
+  where
+    voiceName = extractVoiceName c.source
+    bodyPreview = previewBody c.source
+
+-- | First word of the first non-comment, non-empty line.  For music
+-- | cells this is the voice name (`bass`, `kick`, `bass-cutoff`); for
+-- | config cells it's the verb (`bind`, `midi-device`, …).
+extractVoiceName :: String -> String
+extractVoiceName src =
+  let lines = Str.split (Pattern "\n") src
+      firstStmt = Array.find (\l -> not (Str.null (stripLineComment l))) lines
+  in case firstStmt of
+    Nothing -> "(empty)"
+    Just l ->
+      let words = Array.filter (not <<< Str.null) (Str.split (Pattern " ") (stripLineComment l))
+      in fromMaybe "?" (Array.head words)
+
+-- | Compact body preview for the card face.  Strips comments, joins
+-- | non-empty lines with a separator, truncates with an ellipsis.
+previewBody :: String -> String
+previewBody src =
+  let lines = Array.filter (not <<< Str.null)
+                (map stripLineComment (Str.split (Pattern "\n") src))
+      joined = Str.joinWith " · " lines
+  in if Str.length joined > 80 then Str.take 77 joined <> "…" else joined
+
+-- | Stable name → palette index.  Same name always picks the same
+-- | colour so a card stays recognisable across re-renders.  8-bucket
+-- | palette matches the existing `cell-color-N` scheme.
+voiceColorClass :: String -> String
+voiceColorClass name = "voice-color-" <> show (Str.length name `mod` 8)
+
 renderConfigColumn :: forall m. State -> H.ComponentHTML Action Slots m
 renderConfigColumn state =
   HH.section [ HP.class_ (H.ClassName "pane pane-config") ]
