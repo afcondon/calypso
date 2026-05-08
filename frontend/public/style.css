@@ -1387,17 +1387,12 @@ body::before {
 }
 
 .voice-stack-fanned {
-  /* Vertical fan: cards slide DOWN into a single 14rem column,     */
-  /* keeping their stack order top-to-bottom (front at top).  Other */
-  /* stacks stay in place; the fanned column just grows taller.     */
+  /* Vertical fan: cards slide DOWN into a single 14rem column,    */
+  /* keeping their stack order top-to-bottom (front at top).  The  */
+  /* shared header colour + vertical alignment carry group identity*/
+  /* on their own — no wrapping border, backdrop, or glow needed.  */
   width: 14rem;
   height: auto !important;     /* override the inline collapsed-height */
-  background: rgba(0, 0, 0, 0.85);
-  border: 1px solid var(--fg);
-  border-radius: 6px;
-  padding: 0.6rem;
-  z-index: 500;
-  box-shadow: 0 0 14px rgba(65, 255, 124, 0.4);
 }
 
 .voice-stack-fan-grid {
@@ -1417,11 +1412,8 @@ body::before {
 .voice-card-v2.stack-config .voice-card-name {
   color: var(--amber);
 }
-.voice-stack-fanned.voice-stack-config {
-  background: rgba(255, 184, 74, 0.05);
-  border-color: var(--amber);
-  box-shadow: 0 0 12px rgba(255, 184, 74, 0.3);
-}
+/* (No fanned-config wrapper styling — the dashed amber headers on  */
+/* each config card already do the visual work.)                    */
 
 /* ==========================================================================
    Stack colours.  9 swatches: 0 = "no stack" (no colour fill on header
