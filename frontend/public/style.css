@@ -1298,3 +1298,91 @@ body::before {
 .voice-card.voice-color-5 { border-left: 3px solid #9bffb6; }
 .voice-card.voice-color-6 { border-left: 3px solid #6affc8; }
 .voice-card.voice-color-7 { border-left: 3px solid #ffe066; }
+
+/* ==========================================================================
+   Voice Cells: deck of cards (Phase 2)
+   Drag a card onto another to form a deck. The top card is fully
+   visible at the bottom of the stack; cards behind it peek up by
+   their name strip (~28px). Cycle button rotates top → bottom.
+   ========================================================================== */
+
+.voice-deck {
+  position: relative;
+  width: 9rem;
+  /* height set inline per-deck (toolbar + peeks + full top card). */
+}
+
+.voice-deck-toolbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0 0.3rem;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--fg-dim);
+  z-index: 100;     /* above all cards */
+}
+
+.voice-deck-btn {
+  background: transparent;
+  border: 1px solid var(--fg-dim);
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  padding: 0 0.35rem;
+  cursor: pointer;
+  border-radius: 2px;
+  line-height: 1.1;
+}
+
+.voice-deck-btn:hover {
+  color: var(--fg-bright);
+  border-color: var(--fg);
+  box-shadow: var(--glow);
+}
+
+.voice-deck-count {
+  margin-left: auto;
+  color: var(--fg);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.voice-card-decked {
+  position: absolute;
+  left: 0;
+  width: 9rem;
+  /* `top:` and `z-index:` set inline per-card. */
+}
+
+.voice-card-decked:not(.voice-card-decked-top) {
+  /* Behind cards: clip body, only show name strip's worth.
+     Body is hidden in render anyway; this is belt-and-braces.    */
+  height: 28px;
+  padding: 0.2rem 0.45rem;
+  overflow: hidden;
+}
+
+.voice-card-decked-top {
+  /* Front card: full size + a glow lift to read as "in front". */
+  box-shadow: var(--glow);
+}
+
+/* Drag affordance: the card being dragged dims out so it's clear */
+/* what's in flight.  Receivers also get a slight border accent.   */
+.voice-card-dragging {
+  opacity: 0.4;
+}
+
+/* While ANY card is being dragged, music cards highlight as drop */
+/* targets — a hint that "you can drop here." */
+.voice-cells-music-zone .voice-card,
+.voice-cells-music-zone .voice-deck {
+  /* Subtle hover affordance even when not dragging. */
+  transition: border-color 80ms linear, box-shadow 80ms linear;
+}
