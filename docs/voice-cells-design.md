@@ -318,6 +318,64 @@ multiple stacks reads better than one stack with sorted contents.
 Deferred until the prototype gets enough config cells to feel the
 pain.
 
+## Day 1 progress (2026-05-08)
+
+Prototype scaffolding landed across the day in roughly four phases:
+
+1. **Two-zone layout, lone cards.** Static visual encoding, no
+   grouping. Pane wired up at Cmd-8 reusing existing `state.cells`.
+2. **Drag-and-drop decks.** Drag a card onto another to form a
+   deck; cycle / explode toolbar buttons. *Discarded next phase.*
+3. **Card v2 + colour picker.** Header / body / footer card
+   structure, 9-swatch picker popover assigns to a stack, fan-out
+   into 2-column grid. Vector-poker-game aesthetic locked in.
+4. **Header-click stack control + vertical fan.** Front-card
+   header click fans; back-card header click brings to front; any
+   header click in a fanned stack restacks. Fan-out is now a
+   single vertical column — header colour + vertical alignment
+   carry group identity, no wrapping border / backdrop needed.
+   Config pre-stacked inline among music stacks. Cards bigger,
+   stacks distributed evenly across the canvas.
+
+What works: stack assignment is fluid (pick a colour, card joins
+that stack); fan-out / restack is one click on the header;
+config visually distinct (dashed amber); cue + play affordances
+on every music card; type icons (▲ ◇ ⬡ ⚡ ✦ ⚙ ♩ ■) infer from cell
+content.
+
+What hasn't been done: in-card editing, persistence of stack
+assignment across sessions, picker dismiss-on-outside-click,
+Tidal-line wrapping inside the card body, the SVG flip-to-back
+visualisation idea, hooking the cards' `cue` button to a
+real cue-and-play queue (today both buttons → FireCell).
+
+## Open question for next session: in-card editing
+
+Each card today shows a 4-line preview of the cell's expression.
+Editing still happens in the existing Cells pane. The next
+question is: how does in-card editing work?
+
+Three plausible directions:
+
+1. **Click-to-grow (double-dimensions).** Click anywhere in the
+   card body to enter edit mode; the card grows to ~28rem × ~2×
+   height (quadrupling its area). Other stacks reflow around the
+   focused card. Fits the HyperCard "card-as-primary-spatial-
+   object" framing — the card grows because it's now the active
+   surface. Click outside / Esc / fire to commit and shrink back.
+2. **Smart in-place editing.** Card body becomes editable with
+   line-wrapping / code-folding to keep the existing footprint.
+   Less dramatic; cards stay the same size; might not give enough
+   room for long expressions.
+3. **Pop-to-side-panel / modal.** Click → expression opens in a
+   side panel (or modal) with a full editor. Cleanest separation;
+   breaks the "stay on the canvas" feel.
+
+Andrew's instinct: option 1 (click to grow) is worth trying
+first. Decision deferred to next session; flag the existing
+CodeMirror-backed Editor.purs as reusable for whichever path we
+pick.
+
 ## Suggested first concrete moves
 
 Once decisions on the open questions land, plausible build order:
