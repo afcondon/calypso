@@ -246,6 +246,46 @@ All three project onto the same underlying graph of
   Detection is by first-non-pragma-statement prefix; no pragma
   needed to declare config-vs-music.
 
+## Direction shift (later 2026-05-08)
+
+After landing the drag-and-drop deck prototype, the design pivoted
+toward a **HyperCard / vector-poker-game** aesthetic — "weird mix
+of HyperCard and Tempest/Battlezone, vector graphics poker game
+from an alternative universe 1982." The pivot:
+
+- **Drop the pivot-table model.** No clustering by machine / kind
+  / bundle as switchable lenses. The single grouping that matters
+  is the user-defined "musical voice" stack. Machine and kind are
+  derivable and surface only as hints (icons), not as group axes.
+- **Drop drag-and-drop.** Each card has a **colour picker** (a
+  3×3 grid popover) that assigns it to a stack. All cards in a
+  stack share the same colour; that's the visual identity of the
+  stack. Picker has 9 cells: 1 "no stack" + 8 stack colours.
+- **Cards look like cards.** Rounded corners, structured face:
+  header (stack-coloured background, BLACK text on top for high
+  contrast — playing-card title-bar feel) carries a type icon +
+  voice name + colour-swatch trigger; body shows expression
+  preview; footer carries cue + play affordances.
+- **Type → icon, not colour.** Triangle (melodic), square
+  (trigger), diamond (LFO/modulator), hex (CC), envelope-shape,
+  lightning (FH-2 trigger). Derivable from binding shape; placed
+  in the header as a small geometric primitive.
+- **Cue + play on every card.** Two affordances. In the
+  prototype both fire immediately (no compile pipeline yet); the
+  visual separation prepares the slot for future "cue =
+  compile-and-arm-for-bar; play = fire-now" semantics.
+- **Fan-out per stack.** Each stack has a fan affordance ("⋯")
+  that spreads its cards in a 2-column grid for editing. Z-lifted
+  above other stacks with a backdrop glow, so it reads as
+  "modal-ish but not really." Restack button ("▣") collapses
+  back to the overlapping stack.
+- **Config stack remains special.** Separate top zone, no
+  picker, single fire button (no cue/play distinction).
+
+The aesthetic might continue to evolve toward Hylograph-rendered
+geometry rather than HTML/CSS once the interaction model
+stabilises, but Halogen/HTML is the prototype substrate.
+
 ## Suggested first concrete moves
 
 Once decisions on the open questions land, plausible build order:

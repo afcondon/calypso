@@ -42,8 +42,6 @@ import Type.Proxy (Proxy(..))
 import Web.Event.Event as WEvent
 import Web.Event.EventTarget as WEvtTarget
 import Web.HTML (window) as Web
-import Web.HTML.Event.DragEvent (DragEvent)
-import Web.HTML.Event.DragEvent as DragEvent
 import Web.HTML.Window as WWindow
 import Web.UIEvent.KeyboardEvent as WKey
 import Web.UIEvent.KeyboardEvent.EventTypes as WKeyTypes
@@ -386,16 +384,17 @@ type State =
   , lastSyncedCells :: Map String { source :: String, kind :: String }
   , lastSyncedRuntime :: String
   , visibility :: ColumnVisibility
-  -- Voice Cells pane: user-defined "musical voice" groupings of
-  -- music cells.  `decks` maps a generated deck id to the ordered
-  -- list of cellIds in that deck (top-of-stack first).  Membership
-  -- is in-session only — not persisted, not in the .tidal.  See
-  -- docs/voice-cells-design.md.
-  , decks :: Map String (Array String)
-  , nextDeckId :: Int
-  -- Currently being dragged cell id (Voice Cells pane).  Cleared
-  -- on drop or dragend.
-  , draggingCellId :: Maybe String
+  -- Voice Cells pane: user-defined "musical voice" stacks.  Each
+  -- music cell can be assigned a stack via a 9-swatch color picker
+  -- (1 "no stack" + 8 distinct colors).  Cards in the same stack
+  -- visually overlap; click "fan" on a stack to spread its cards in
+  -- a grid for editing.  Stack assignment is in-session only — not
+  -- persisted, not in the .tidal.  See docs/voice-cells-design.md.
+  , cardColors :: Map String Int      -- cellId → color index 1..8
+                                      -- (absent = no stack, lone)
+  , fannedStack :: Maybe Int          -- color index of currently-
+                                      -- fanned stack, if any
+  , colorPickerOpen :: Maybe String   -- cellId whose picker is open
   }
 
 type Slots =
@@ -443,15 +442,13 @@ data Action
   | ForcePenAction
   | DismissPenBanner
   | ToggleColumn ColumnKey
-  -- Voice Cells pane (drag-to-stack).  Forms decks of music cells
-  -- the user wants to think of as one "musical voice."  See
-  -- docs/voice-cells-design.md.
-  | StartCardDrag String                    -- cellId being dragged
-  | EndCardDrag                             -- dragend, regardless of target
-  | AllowCardDrop DragEvent                 -- dragover; preventDefault to allow drop
-  | DropCardOn String                       -- target cellId
-  | CycleDeck String                        -- deckId; rotate top → bottom
-  | ExplodeDeck String                      -- deckId; break back into lone cards
+  -- Voice Cells pane: stack assignment via colour picker, fan-out
+  -- to edit a stack's contents.  See docs/voice-cells-design.md.
+  | OpenColorPicker String                  -- cellId
+  | CloseColorPicker
+  | SetCardColor String (Maybe Int)         -- cellId, Just N (assign) | Nothing (clear)
+  | FanStack Int                            -- color; spread that stack's cards
+  | Restack                                 -- collapse the fanned stack
   | Startup
 
 initialState :: forall i. i -> State
@@ -495,9 +492,9 @@ initialState _ =
   , lastSyncedCells: Map.empty
   , lastSyncedRuntime: ""
   , visibility: defaultVisibility
-  , decks: Map.empty
-  , nextDeckId: 1
-  , draggingCellId: Nothing
+  , cardColors: Map.empty
+  , fannedStack: Nothing
+  , colorPickerOpen: Nothing
   }
 
 debounceMs :: Milliseconds
@@ -723,61 +720,24 @@ handleAction = case _ of
     sendClientMsg ForcePen
     H.modify_ _ { requestingPen = true }
   DismissPenBanner -> H.modify_ _ { penBanner = Nothing }
-  StartCardDrag cellId ->
-    H.modify_ _ { draggingCellId = Just cellId }
-  EndCardDrag ->
-    H.modify_ _ { draggingCellId = Nothing }
-  AllowCardDrop e ->
-    -- preventDefault on dragover is the standard "yes, this element
-    -- is a valid drop target" signal in HTML5 drag-and-drop. Without
-    -- it the browser refuses the drop.
-    H.liftEffect $ WEvent.preventDefault (DragEvent.toEvent e)
-  DropCardOn targetId -> do
-    H.modify_ \s -> case s.draggingCellId of
-      Nothing -> s
-      Just src
-        | src == targetId -> s { draggingCellId = Nothing }
-        | otherwise ->
-            let
-              -- Remove src from any existing deck.
-              decksWithoutSrc =
-                Map.mapMaybe
-                  (\cells ->
-                    let cs' = Array.filter (_ /= src) cells
-                    in case Array.length cs' of
-                         0 -> Nothing       -- empty deck → drop it
-                         1 -> Nothing       -- 1-cell deck → break to lone
-                         _ -> Just cs')
-                  s.decks
-              -- Find target's deck (if any) so we extend rather
-              -- than create a new one.
-              targetDeck =
-                Map.toUnfoldable decksWithoutSrc :: Array (Tuple String (Array String))
-              found = Array.findMap (\(Tuple did cs) ->
-                if Array.elem targetId cs then Just did else Nothing) targetDeck
-            in case found of
-              Just did ->
-                -- Add src to the front of target's deck (becomes top).
-                let updated = Map.update (\cs -> Just (Array.cons src cs)) did decksWithoutSrc
-                in s { decks = updated, draggingCellId = Nothing }
-              Nothing ->
-                -- Create a fresh deck containing [src, target].
-                let newId = "deck-" <> show s.nextDeckId
-                    updated = Map.insert newId [src, targetId] decksWithoutSrc
-                in s { decks = updated
-                     , nextDeckId = s.nextDeckId + 1
-                     , draggingCellId = Nothing
-                     }
-  CycleDeck did ->
-    -- Move the top card to the bottom: [a, b, c] → [b, c, a].
+  OpenColorPicker cellId ->
+    H.modify_ _ { colorPickerOpen = Just cellId }
+  CloseColorPicker ->
+    H.modify_ _ { colorPickerOpen = Nothing }
+  SetCardColor cellId Nothing ->
     H.modify_ \s -> s
-      { decks = Map.update (\cs -> case Array.uncons cs of
-          Just { head, tail } -> Just (Array.snoc tail head)
-          Nothing -> Just cs) did s.decks
+      { cardColors = Map.delete cellId s.cardColors
+      , colorPickerOpen = Nothing
       }
-  ExplodeDeck did ->
-    -- Break a deck back into lone cards.
-    H.modify_ \s -> s { decks = Map.delete did s.decks }
+  SetCardColor cellId (Just n) ->
+    H.modify_ \s -> s
+      { cardColors = Map.insert cellId n s.cardColors
+      , colorPickerOpen = Nothing
+      }
+  FanStack n ->
+    H.modify_ _ { fannedStack = Just n }
+  Restack ->
+    H.modify_ _ { fannedStack = Nothing }
   ScheduleCompile -> do
     s <- H.get
     case s.pendingCompile of
@@ -2106,13 +2066,13 @@ renderVoiceCellsColumn state =
       let s = cellSection c in s == SecConfig || s == SecVoices) state.cells
     musicCells = Array.filter (\c -> cellSection c == SecPatterns) state.cells
 
--- | Walk music cells in original order, emitting either a lone-card
--- | render or a deck render at the position of the deck's first
--- | encountered member.  Subsequent members of the same deck are
--- | skipped (the deck was rendered when we hit its first cell).
--- |
--- | This anchors a deck's spatial position to the first cell that
--- | joined it; cycling rotates *contents* but not *position*.
+-- | Walk music cells in original order, emitting either a lone card
+-- | (no stack assignment) or a stack render at the position of the
+-- | stack's first encountered member.  Subsequent members of the
+-- | same stack are skipped — they were drawn when we hit the first.
+-- | A "fanned" stack instead spreads its cards individually in a
+-- | grid (their original lone-card positions are overridden by the
+-- | fan layout).
 renderMusicLayout
   :: forall m. MonadAff m
   => State
@@ -2120,177 +2080,283 @@ renderMusicLayout
   -> Array (H.ComponentHTML Action Slots m)
 renderMusicLayout state cells =
   let
-    cellsById = Map.fromFoldable (map (\c -> Tuple c.id c) cells)
-    deckOf cellId = cellInDeck state cellId
-    walk :: Array CellRec -> Set String -> Array (H.ComponentHTML Action Slots m)
-    walk remaining renderedDecks = case Array.uncons remaining of
+    walk :: Array CellRec -> Set Int -> Array (H.ComponentHTML Action Slots m)
+    walk remaining renderedStacks = case Array.uncons remaining of
       Nothing -> []
-      Just { head: c, tail: rest } -> case deckOf c.id of
+      Just { head: c, tail: rest } -> case Map.lookup c.id state.cardColors of
         Nothing ->
-          renderLoneMusicCard state c
-            Array.: walk rest renderedDecks
-        Just did
-          | Set.member did renderedDecks ->
-              walk rest renderedDecks
+          renderVoiceCard state false c
+            Array.: walk rest renderedStacks
+        Just color
+          | Set.member color renderedStacks ->
+              walk rest renderedStacks
           | otherwise ->
               let
-                cellIds = fromMaybe [] (Map.lookup did state.decks)
-                deckCells = Array.mapMaybe (\cid -> Map.lookup cid cellsById) cellIds
+                stackCells = Array.filter
+                  (\c2 -> Map.lookup c2.id state.cardColors == Just color)
+                  cells
+                rendered =
+                  if state.fannedStack == Just color
+                    then renderFannedStack state color stackCells
+                    else renderCollapsedStack state color stackCells
               in
-                renderDeck state did deckCells
-                  Array.: walk rest (Set.insert did renderedDecks)
+                rendered Array.: walk rest (Set.insert color renderedStacks)
   in
     walk cells Set.empty
 
--- | Reverse lookup: which deck (if any) does this cellId belong to?
-cellInDeck :: State -> String -> Maybe String
-cellInDeck state cellId =
-  Array.findMap
-    (\(Tuple did cs) -> if Array.elem cellId cs then Just did else Nothing)
-    (Map.toUnfoldable state.decks :: Array (Tuple String (Array String)))
-
--- | Lone music card: the standard rendering, but with drag-and-drop
--- | wiring for forming decks.
-renderLoneMusicCard
+-- | A collapsed stack: cards overlap, only the front card is fully
+-- | visible.  Click "fan" to spread.  Click any card to fire that
+-- | card (the front, since it's the only one with full hit area).
+renderCollapsedStack
   :: forall m. MonadAff m
   => State
+  -> Int
+  -> Array CellRec
+  -> H.ComponentHTML Action Slots m
+renderCollapsedStack state color cells =
+  let
+    total = Array.length cells
+    -- Toolbar 22 + (total-1)*peek + topCardHeight
+    deckHeightPx = 22 + (total - 1) * 18 + 100
+  in
+    HH.div
+      [ HP.class_ (H.ClassName ("voice-stack stack-color-" <> show color))
+      , HP.style ("height: " <> show deckHeightPx <> "px;")
+      ]
+      ( [ HH.div [ HP.class_ (H.ClassName "voice-stack-toolbar") ]
+            [ HH.button
+                [ HP.class_ (H.ClassName "voice-stack-btn voice-stack-fan")
+                , HE.onClick \_ -> FanStack color
+                , HP.title "fan out this stack to work on each card"
+                ]
+                [ HH.text "⋯" ]
+            , HH.span [ HP.class_ (H.ClassName "voice-stack-count") ]
+                [ HH.text (show total) ]
+            ]
+        ]
+        <> mapWithIndex (renderStackedCard state total color) cells
+      )
+
+-- | A fanned stack: cards laid out in a 2-column grid, each fully
+-- | visible.  Restack button collapses back.  Cards in this view
+-- | can still pop their picker and be re-coloured (which yanks them
+-- | into a different stack live).
+renderFannedStack
+  :: forall m. MonadAff m
+  => State
+  -> Int
+  -> Array CellRec
+  -> H.ComponentHTML Action Slots m
+renderFannedStack state color cells =
+  HH.div
+    [ HP.class_ (H.ClassName ("voice-stack voice-stack-fanned stack-color-" <> show color)) ]
+    ( [ HH.div [ HP.class_ (H.ClassName "voice-stack-toolbar voice-stack-toolbar-fanned") ]
+          [ HH.button
+              [ HP.class_ (H.ClassName "voice-stack-btn voice-stack-restack")
+              , HE.onClick \_ -> Restack
+              , HP.title "collapse this fan back into a stack"
+              ]
+              [ HH.text "▣" ]
+          , HH.span [ HP.class_ (H.ClassName "voice-stack-count") ]
+              [ HH.text (show (Array.length cells)) ]
+          ]
+      , HH.div [ HP.class_ (H.ClassName "voice-stack-fan-grid") ]
+          (map (renderVoiceCard state false) cells)
+      ]
+    )
+
+-- | One card inside a collapsed stack.  Index 0 is the front
+-- | (fully visible at the bottom).  Higher indices recede upward;
+-- | only their top ~18px (header strip) peeks above the front card.
+-- | Same z-index trick as the previous deck visual.
+renderStackedCard
+  :: forall m. MonadAff m
+  => State
+  -> Int                           -- total cards in stack
+  -> Int                           -- color index (for class)
+  -> Int                           -- this card's index (0 = front)
   -> CellRec
   -> H.ComponentHTML Action Slots m
-renderLoneMusicCard state c =
-  HH.div
-    [ HP.class_
-        ( H.ClassName
-            ( "voice-card voice-card-music "
-                <> voiceColorClass voiceName
-                <> (if state.draggingCellId == Just c.id then " voice-card-dragging" else "")
-            )
-        )
-    , HP.draggable true
-    , HE.onDragStart \_ -> StartCardDrag c.id
-    , HE.onDragEnd \_ -> EndCardDrag
-    , HE.onDragOver AllowCardDrop
-    , HE.onDrop \_ -> DropCardOn c.id
-    , HE.onClick \_ -> FireCell c.id c.source
-    , HP.title ("click to fire — drag onto another card to deck — " <> c.source)
-    ]
-    [ HH.div [ HP.class_ (H.ClassName "voice-card-name") ] [ HH.text voiceName ]
-    , HH.div [ HP.class_ (H.ClassName "voice-card-body") ] [ HH.text (previewBody c.source) ]
-    ]
-  where
-    voiceName = extractVoiceName c.source
+renderStackedCard state total _color idx c =
+  let
+    isFront = idx == 0
+    topPx = 22 + (total - 1 - idx) * 18
+    zIdx = total - idx
+    -- Behind cards only show the header (no body, smaller height).
+    extraClass = if isFront then " voice-card-front" else " voice-card-stacked"
+  in
+    HH.div
+      [ HP.class_ (H.ClassName ("voice-card-stacked-wrapper" <> extraClass))
+      , HP.style
+          ( "top: " <> show topPx <> "px;"
+              <> "z-index: " <> show zIdx <> ";"
+          )
+      ]
+      [ renderVoiceCard state (not isFront) c ]
 
--- | Config card: no drag (config doesn't pivot/group), no deck
--- | participation.
+-- | The card itself.  Three zones: header (stack-coloured background,
+-- | type icon + name + colour swatch), body (expression preview),
+-- | footer (cue + play).  `compact` is true for non-front cards in a
+-- | collapsed stack — header only, no body or footer.
+renderVoiceCard
+  :: forall m. MonadAff m
+  => State
+  -> Boolean       -- compact (header-only)
+  -> CellRec
+  -> H.ComponentHTML Action Slots m
+renderVoiceCard state compact c =
+  let
+    voiceName = extractVoiceName c.source
+    bodyPreview = previewBody c.source
+    color = Map.lookup c.id state.cardColors
+    colorClass = case color of
+      Just n -> " stack-color-" <> show n
+      Nothing -> " stack-color-none"
+    isPickerOpen = state.colorPickerOpen == Just c.id
+    typeIcon = inferTypeIcon c.source
+  in
+    HH.div
+      [ HP.class_
+          ( H.ClassName
+              ( "voice-card-v2"
+                  <> colorClass
+                  <> (if compact then " voice-card-compact" else "")
+              )
+          )
+      ]
+      ( [ HH.div [ HP.class_ (H.ClassName "voice-card-header") ]
+            [ HH.span [ HP.class_ (H.ClassName "voice-card-icon") ]
+                [ HH.text typeIcon ]
+            , HH.span [ HP.class_ (H.ClassName "voice-card-name") ]
+                [ HH.text voiceName ]
+            , HH.button
+                [ HP.class_ (H.ClassName "voice-card-swatch")
+                , HE.onClick \_ ->
+                    if isPickerOpen then CloseColorPicker
+                    else OpenColorPicker c.id
+                , HP.title "pick a stack colour"
+                ]
+                [ HH.text "●" ]
+            ]
+        ]
+        <> (if compact then [] else
+            [ HH.div [ HP.class_ (H.ClassName "voice-card-body") ]
+                [ HH.text bodyPreview ]
+            , HH.div [ HP.class_ (H.ClassName "voice-card-footer") ]
+                [ HH.button
+                    [ HP.class_ (H.ClassName "voice-card-btn voice-card-cue")
+                    , HE.onClick \_ -> FireCell c.id c.source
+                    , HP.title "cue (compile-armed in future; fires immediately today)"
+                    ]
+                    [ HH.text "cue" ]
+                , HH.button
+                    [ HP.class_ (H.ClassName "voice-card-btn voice-card-play")
+                    , HE.onClick \_ -> FireCell c.id c.source
+                    , HP.title "play (fire immediately)"
+                    ]
+                    [ HH.text "▶" ]
+                ]
+            ])
+        <> (if isPickerOpen then [ renderColorPicker c.id (Map.lookup c.id state.cardColors) ] else [])
+      )
+
+-- | 9-swatch popover.  3×3 grid; first cell is "no stack" (clears the
+-- | assignment), the other 8 are stack colours.  Current colour gets
+-- | a subtle highlight ring.  Clicking outside the picker doesn't
+-- | dismiss yet — click the swatch trigger again, or pick a colour.
+renderColorPicker
+  :: forall m. MonadAff m
+  => String                        -- cellId
+  -> Maybe Int                     -- current color (Nothing = lone)
+  -> H.ComponentHTML Action Slots m
+renderColorPicker cellId current =
+  HH.div [ HP.class_ (H.ClassName "voice-card-picker") ]
+    ( [ swatch Nothing ]
+        <> map (\n -> swatch (Just n)) (Array.range 1 8)
+    )
+  where
+    swatch :: Maybe Int -> H.ComponentHTML Action Slots m
+    swatch n =
+      let
+        cls = case n of
+          Just k -> "voice-picker-swatch stack-color-" <> show k
+          Nothing -> "voice-picker-swatch stack-color-none"
+        isCurrent = n == current
+        markedCls = if isCurrent then cls <> " voice-picker-current" else cls
+      in
+        HH.button
+          [ HP.class_ (H.ClassName markedCls)
+          , HE.onClick \_ -> SetCardColor cellId n
+          , HP.title (case n of
+              Nothing -> "no stack (lone card)"
+              Just k -> "stack " <> show k)
+          ]
+          [ HH.text (case n of
+              Nothing -> "∅"
+              Just _ -> "") ]
+
+-- | Config card: same v2 visual, no colour picker (config cells don't
+-- | join musical-voice stacks), no cue/play distinction (just a
+-- | single fire button) — they're rig setup, not performance.
 renderConfigCard
   :: forall m. MonadAff m
   => CellRec
   -> H.ComponentHTML Action Slots m
 renderConfigCard c =
-  HH.div
-    [ HP.class_
-        ( H.ClassName
-            ( "voice-card voice-card-config "
-                <> voiceColorClass voiceName
-            )
-        )
-    , HE.onClick \_ -> FireCell c.id c.source
-    , HP.title ("click to fire — " <> c.source)
-    ]
-    [ HH.div [ HP.class_ (H.ClassName "voice-card-name") ] [ HH.text voiceName ]
-    , HH.div [ HP.class_ (H.ClassName "voice-card-body") ] [ HH.text (previewBody c.source) ]
-    ]
-  where
-    voiceName = extractVoiceName c.source
-
--- | Deck of music cards: top card fully visible; each subsequent
--- | card peeks below by a small offset (enough to read the name).
--- | Cycle button rotates top → bottom; explode button breaks the
--- | deck back into lone cards.
-renderDeck
-  :: forall m. MonadAff m
-  => State
-  -> String                        -- deckId
-  -> Array CellRec
-  -> H.ComponentHTML Action Slots m
-renderDeck _ did cells =
-  let
-    total = Array.length cells
-    -- Toolbar (24px) + per-card peek (28px) for non-top cards + full
-    -- top card height (56px = 3.5rem). Inline so each deck sizes to
-    -- exactly its contents — wrap layout still flows the next item.
-    deckHeightPx = 24 + (total - 1) * 28 + 56
-  in
-    HH.div
-      [ HP.class_ (H.ClassName "voice-deck")
-      , HP.style ("height: " <> show deckHeightPx <> "px;")
-      , HE.onDragOver AllowCardDrop
-      , HE.onDrop \_ -> case Array.head cells of
-          Just c -> DropCardOn c.id
-          Nothing -> EndCardDrag
-      ]
-      ( [ HH.div [ HP.class_ (H.ClassName "voice-deck-toolbar") ]
-            [ HH.button
-                [ HP.class_ (H.ClassName "voice-deck-btn voice-deck-cycle")
-                , HE.onClick \_ -> CycleDeck did
-                , HP.title "cycle the top card to the bottom"
-                ]
-                [ HH.text "↻" ]
-            , HH.span [ HP.class_ (H.ClassName "voice-deck-count") ]
-                [ HH.text (show total) ]
-            , HH.button
-                [ HP.class_ (H.ClassName "voice-deck-btn voice-deck-explode")
-                , HE.onClick \_ -> ExplodeDeck did
-                , HP.title "break this deck back into lone cards"
-                ]
-                [ HH.text "⌫" ]
-            ]
+  HH.div [ HP.class_ (H.ClassName "voice-card-v2 voice-card-config") ]
+    [ HH.div [ HP.class_ (H.ClassName "voice-card-header") ]
+        [ HH.span [ HP.class_ (H.ClassName "voice-card-icon") ]
+            [ HH.text (inferTypeIcon c.source) ]
+        , HH.span [ HP.class_ (H.ClassName "voice-card-name") ]
+            [ HH.text (extractVoiceName c.source) ]
         ]
-        <> mapWithIndex (renderDeckedCard total) cells
-      )
+    , HH.div [ HP.class_ (H.ClassName "voice-card-body") ]
+        [ HH.text (previewBody c.source) ]
+    , HH.div [ HP.class_ (H.ClassName "voice-card-footer") ]
+        [ HH.button
+            [ HP.class_ (H.ClassName "voice-card-btn voice-card-play")
+            , HE.onClick \_ -> FireCell c.id c.source
+            , HP.title "fire this config statement"
+            ]
+            [ HH.text "▶" ]
+        ]
+    ]
 
--- | One card inside a deck.  Index 0 is the *front* of the stack
--- | (fully visible at the bottom of the deck container).  Higher
--- | indices recede UP the stack; only their top ~28px (the name
--- | strip) peeks above the card in front of them.
--- |
--- | Geometry: card at index `idx` has `top = 24 + (total-1-idx)*28`
--- | (24px reserves the toolbar at the top).  Z-index decreases
--- | with idx so the front card paints over those behind in the
--- | overlap region.
-renderDeckedCard
-  :: forall m. MonadAff m
-  => Int                           -- total cards in deck
-  -> Int                           -- this card's index (0 = front)
-  -> CellRec
-  -> H.ComponentHTML Action Slots m
-renderDeckedCard total idx c =
-  HH.div
-    [ HP.class_
-        ( H.ClassName
-            ( "voice-card voice-card-music voice-card-decked "
-                <> voiceColorClass voiceName
-                <> (if idx == 0 then " voice-card-decked-top" else "")
-            )
-        )
-    , HP.style
-        ( "top: " <> show (24 + (total - 1 - idx) * 28) <> "px;"
-            <> "z-index: " <> show (total - idx) <> ";"
-        )
-    , HP.draggable true
-    , HE.onDragStart \_ -> StartCardDrag c.id
-    , HE.onDragEnd \_ -> EndCardDrag
-    , HE.onDragOver AllowCardDrop
-    , HE.onDrop \_ -> DropCardOn c.id
-    , HE.onClick \_ -> FireCell c.id c.source
-    , HP.title ("click to fire — drag away or onto another to regroup — " <> c.source)
-    ]
-    [ HH.div [ HP.class_ (H.ClassName "voice-card-name") ] [ HH.text voiceName ]
-    , if idx == 0
-        then HH.div [ HP.class_ (H.ClassName "voice-card-body") ] [ HH.text (previewBody c.source) ]
-        else HH.text ""
-    ]
-  where
-    voiceName = extractVoiceName c.source
+-- | Cheap heuristic: pick a glyph based on the first verb/word of
+-- | the cell's source.  Type icons are vector-graphics-y placeholders
+-- | until we wire real binding info from the dispatcher snapshot.
+inferTypeIcon :: String -> String
+inferTypeIcon src =
+  let lines = Str.split (Pattern "\n") src
+      firstStmt = Array.find (\l -> not (Str.null (stripLineComment l))) lines
+      firstWord = case firstStmt of
+        Nothing -> ""
+        Just l -> case Array.filter (not <<< Str.null) (Str.split (Pattern " ") (stripLineComment l)) of
+          ws -> fromMaybe "" (Array.head ws)
+  in case firstWord of
+    "bind" -> "⚙"
+    "unbind" -> "⚙"
+    "midi-device" -> "⌬"
+    "fh2-envelope" -> "✦"
+    "fh2-gate" -> "✦"
+    "fh2-trigger" -> "⚡"
+    "fh2-shape" -> "⌇"
+    "hush" -> "■"
+    "bpm" -> "♩"
+    -- Music cells: glyph by clues in the body.
+    _ ->
+      let body = Str.toLower src
+      in if Str.contains (Pattern "sine") body
+         || Str.contains (Pattern "saw") body
+         || Str.contains (Pattern "tri") body
+         || Str.contains (Pattern "square") body
+         || Str.contains (Pattern "cosine") body
+         || Str.contains (Pattern ":slow") body
+         then "◇"      -- LFO/modulator
+         else if Str.contains (Pattern "midi-cc-cont") body
+                 || Str.contains (Pattern "cv-cont") body
+              then "⬡"  -- continuous CC
+              else "▲"   -- default: melodic source / trigger
 
 -- | First word of the first non-comment, non-empty line.  For music
 -- | cells this is the voice name (`bass`, `kick`, `bass-cutoff`); for
@@ -2314,11 +2380,6 @@ previewBody src =
       joined = Str.joinWith " · " lines
   in if Str.length joined > 80 then Str.take 77 joined <> "…" else joined
 
--- | Stable name → palette index.  Same name always picks the same
--- | colour so a card stays recognisable across re-renders.  8-bucket
--- | palette matches the existing `cell-color-N` scheme.
-voiceColorClass :: String -> String
-voiceColorClass name = "voice-color-" <> show (Str.length name `mod` 8)
 
 renderConfigColumn :: forall m. State -> H.ComponentHTML Action Slots m
 renderConfigColumn state =
