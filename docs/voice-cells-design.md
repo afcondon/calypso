@@ -1,0 +1,266 @@
+# Voice-Cells Calypso redesign
+
+Brainstormed 2026-05-08 (between Andrew + Claude) on the branch
+`voice-cells` after the per-voice supervision tree landed in
+purerl-tidal (tag `voice-tree-2026-05-08`). This document captures
+the conversation so the thinking isn't lost; it's intentionally
+expansive and not yet a build plan. Decisions still pending are
+flagged inline.
+
+## Vision
+
+Calypso shifts from a free-form-text-cells editor to a
+**voice-oriented** workspace. The cell becomes the atomic unit, and
+the cell *is* a voice — one cell ↔ one bound name in the rig ↔ one
+`tidal_voice` gen_server in purerl-tidal ↔ (later, with a compile
+pipeline) one generated PureScript module + .beam.
+
+This sets up the longer-term direction of moving from "interpret the
+DSL at runtime" to "compile each voice to its own PureScript module
+and hot-reload." The per-voice supervision tree is the runtime
+foundation; this UI is the authoring surface.
+
+## The three orthogonal axes
+
+A cell carries three independent classification axes:
+
+1. **Voice kind** — derivable from the binding's PrimAction shape.
+   VCO / sound-source, LFO / continuous modulator, envelope shaper,
+   gate trigger, MIDI CC, FH-2 trigger, etc.
+2. **Machine** — which physical destination the voice talks to.
+   FH-2, Yarns, ES-9, MIDI external (Ableton / AUM / specific synth),
+   cv-router, etc. Mostly derivable from the device alias used in
+   the binding.
+3. **Musical bundle** — the conceptual "instrument": *the lead*,
+   *the bass*, *the pad*, *the drums*. A bundle gathers voices of
+   different kinds and machines into one mental unit. **User-
+   assigned**, not derivable. An LFO can sit in the "bass" bundle
+   because that's how the musician thinks of it, but is freely
+   re-routable to any destination.
+
+The axes are **orthogonal**: the bass bundle's cutoff LFO is in the
+LFO kind, on the FH-2 machine, in the bass bundle. Same cell, three
+classifications, all true at once.
+
+## Visual encoding
+
+Three visual channels for three axes — so cells stay identifiable
+when re-clustered:
+
+| Visual property | Axis            | Example                                  |
+|-----------------|-----------------|------------------------------------------|
+| **Color**       | Musical bundle  | bass=blue, pad=purple, lead=green, …     |
+| **Shape**       | Voice kind      | △ VCO, ◇ LFO, ⬡ CC, ▢ trigger, ⬢ env    |
+| **Border style**| Machine         | solid=FH-2, double=Yarns, dashed=ES-9, … |
+
+A "bass-cutoff LFO routed through FH-2" is then a **diamond**
+(LFO), **blue** (bass bundle), **solid border** (FH-2). When you
+re-cluster by machine, all FH-2 cells gather; bass-cutoff stays a
+blue-diamond-solid in its new home, so your eye doesn't lose it.
+
+The 1980s vector-graphics aesthetic Calypso already has lends
+itself naturally to shape-coded primitives — Tempest, Battlezone,
+Robotron-style bright wireframe polygons on dark background. Cells
+render as outlined geometric shapes; they glow on activity. Not
+sacred — could be reskinned without affecting the encoding.
+
+## The "undifferentiated mass + cluster lens" UX
+
+The cells are **not** in a fixed column structure. They live in an
+undifferentiated 2D field that the user re-clusters by selecting an
+axis as the lens:
+
+- Cluster by **bundle** → bass / pad / lead / drums / FH-2-raw groups
+- Cluster by **machine** → FH-2 / Yarns / ES-9 / MIDI-external groups
+- Cluster by **voice kind** → VCOs / LFOs / triggers / envelopes groups
+
+Switching lens regroups visually but preserves color/shape/border
+on each cell, so re-orientation is fluid.
+
+### Folding
+
+Per-cluster fold (collapse/expand) is a strong affordance. With
+30+ cells across a session, the focal need shifts moment-to-moment:
+"working on bass right now → fold all non-bass clusters" or
+"diagnosing an FH-2 issue → fold all non-FH-2 clusters."
+
+**Fold state is ephemeral** — UI session preference, not persisted
+in the .tidal. What the user folds is "what they're not paying
+attention to right now," not a property of the composition. The
+*lens choice* might persist (last-used clustering); per-cluster
+fold state probably should not.
+
+## .tidal as source of truth
+
+A strong principle: whatever the UI looks like, **conceptually
+there is still one single .tidal file** representing the current
+state of the rig. The UI is a *view* over that file:
+
+- vim-editable outside Calypso
+- `git diff`-friendly
+- Shareable as a gist / setup file
+- `load <name>` round-trips with no data loss
+- Fed line-by-line to the WS handler at fire time
+
+The cell metadata (bundle, optional id, etc.) rides in **pragma
+comments** — `-- @bundle bass` etc. Anything that doesn't
+understand pragmas just sees comments. Calypso parses the pragmas
+and uses them for clustering / coloring / id-tracking; the rest of
+the toolchain (vim, git, `load`) sees plain text.
+
+Calypso already has a pragma convention (`-- @bpm 120`-style); the
+extension here is a small vocabulary of cell-metadata pragmas:
+
+```
+-- @id bass-cutoff
+-- @bundle bass
+bind bass-cutoff midi-cc-cont fh2 1 74
+bass-cutoff :slow 4 sine
+```
+
+Voice kind and machine can usually be *derived* from the binding,
+so the user doesn't have to author them. Bundle is the only
+genuinely user-assigned axis.
+
+### Linear-order vs cluster-order
+
+The .tidal file's linear order = the firing order when `load` plays
+it back. Clustering in the UI is a **read-only view**; it doesn't
+clobber file order.
+
+There can be a separate explicit user action: "rewrite the file in
+cluster order." Useful occasionally; not a side effect of switching
+lens.
+
+## Stable cell identity + content hashing
+
+Each cell has a **stable id** that persists across edits. The id is
+the "card" in the Time Machine card-stack metaphor. Either an
+auto-generated UUID or a human-readable name (the binding name is a
+natural default — `bass-cutoff`, `lead`, etc.).
+
+The cell's *content* (its expression text, after the pragmas) gets
+**content-hashed**. Edit history per id is a sequence of (timestamp,
+hash, text) tuples. The content hash IS the cell's identity-in-time.
+
+### Where the history lives
+
+Two viable storage options (not exclusive):
+
+1. **git** — the .tidal file gets committed per save; a small
+   "extract cell by id from every historical commit" tool
+   synthesizes per-cell timelines on demand. Free, git-native,
+   coarse granularity (per-commit).
+2. **Sidecar SQLite** — a row per save, keyed by (cell-id, hash,
+   timestamp, text). Sub-commit granularity (every keystroke pause,
+   if you want); persists across `git stash`. Cheap to implement.
+
+Coarse + fine layered: git for cross-session permanence, sidecar
+for in-session scrubbing.
+
+## Time Machine UI
+
+Visualizes the per-cell hash chain with the receding-card-stack
+metaphor (Apple's Time Machine for Finder). For a focused cell, you
+flip backwards through past versions, scrubbing time. Each card is
+one historical (text, hash) pair; the current one is in the front.
+
+Old versions don't pollute the current .tidal — they're only
+visible when the Time Machine UI is open.
+
+## Where this connects to per-voice compiled modules (purerl-tidal)
+
+This is the payoff that makes the hash-addressing more than a
+filing trick.
+
+Once purerl-tidal grows a compile pipeline (per the
+`per-voice-refactor` direction), each cell-version's content hash
+becomes the *name* of a generated PureScript module:
+`Tidal.Voice.Generated.Cell_<hash>`. Identical content → identical
+hash → existing .beam in the cache, **no recompile needed**.
+
+Edit-and-revert lands on a hash you've seen before; the voice
+gen_server's module pointer just swaps to the cached .beam. Time
+Machine flip-back is *literally* "rebind voice to module
+`Cell_<old-hash>`" — instantaneous, no recompile, because the old
+code is still loaded (or one `code:load_file` away from the
+compile cache).
+
+So:
+- **single .tidal file** = current cross-section (UI surface for
+  the spatial axis)
+- **per-cell hash chain** = temporal axis (UI surface: Time Machine
+  card-stack)
+- **content-addressed compiled modules** = runtime cache (no UI;
+  pure infrastructure)
+
+All three project onto the same underlying graph of
+(cell-id, hash, content) triples.
+
+## Open questions
+
+These need resolution before code lands:
+
+1. **Cell ↔ voice cardinality.** Does a cell stay tied to a single
+   voice (one cell = one binding name = one tidal_voice gen_server)?
+   Or can a cell author multiple voices at once (a "drums" cell that
+   fires `kick`, `snare`, `hh` together)?
+   - First is cleaner architecturally; aligns 1:1 with the
+     supervision tree.
+   - Second is closer to how live-coders write today (multi-statement
+     cells, `do`-blocks).
+   - May depend on whether the bundle abstraction subsumes the
+     "multi-voice cell" use case (bundle = the multi-voice unit;
+     cell stays single-voice).
+
+2. **Compile-and-hot-reload latency budget.** Andrew is OK with
+   ~1.5s if there's a cue-and-play system to mask it. The compile
+   pipeline's design depends on this budget. Below 500ms unlocks
+   "just type and fire"; above ~2s mandates explicit cue.
+
+3. **Pragma minimalism.** Voice kind + machine are derivable from
+   the binding. Should they be stored as pragmas anyway (denormalized
+   for parser simplicity), or always re-derived (single source of
+   truth in the binding spec)? Probably re-derived — but the cost
+   shows up at parse time.
+
+4. **Grid layout vs free positioning.** Once cells are visual
+   objects, do they sit in an auto-layout grid (row by row in
+   cluster order), or can the user drag them around freely?
+   Auto-layout is simpler; free positioning gives more "rig as
+   physical instrument" feel but adds complexity (positions need
+   to persist somewhere — pragmas in the .tidal? sidecar?).
+
+5. **The relationship between cells and the existing seven panes.**
+   Calypso currently has composition / cells / Vocabulary / Mini-
+   notation / Replies / Config / Hylograph. The voice-cells UI
+   replaces the cells pane (and arguably the composition pane); the
+   others stay or merge.
+
+## Suggested first concrete moves
+
+Once decisions on the open questions land, plausible build order:
+
+1. **Pragma vocabulary** — extend Calypso's existing pragma parser
+   for `@id`, `@bundle`. (Cheap; unlocks the metadata layer.)
+2. **Cell extraction** — parse the .tidal file into a list of
+   `Cell { id, bundle, body, … }` records.
+3. **Visual encoding renderer** — given a cell's binding +
+   bundle, render the geometric primitive (color/shape/border).
+4. **Cluster lens** — UI control + group-by logic over the cell
+   list.
+5. **Folding** — per-cluster collapse/expand, ephemeral state.
+6. **Sidecar history** — write (id, hash, text, ts) on save.
+7. **Time Machine UI** — receding-card visualizer over the per-id
+   hash chain.
+
+These are independently shippable — the design admits a gradual
+migration from today's text-cells to the voice-cells surface.
+
+## Aesthetic note
+
+The 80s vector-graphics aesthetic isn't load-bearing — it's a
+stylistic choice that happens to map well to shape-coded
+primitives. The encoding (color = bundle, shape = kind, border =
+machine) works in any aesthetic. Re-skinning to a softer / more
+modern look would be a CSS swap, not an architectural change.
