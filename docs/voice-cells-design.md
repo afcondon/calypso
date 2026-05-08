@@ -286,6 +286,38 @@ The aesthetic might continue to evolve toward Hylograph-rendered
 geometry rather than HTML/CSS once the interaction model
 stabilises, but Halogen/HTML is the prototype substrate.
 
+## Future: SVG cards with flip-to-back
+
+Once the interaction model stabilises, redo card rendering in SVG.
+Two payoffs:
+
+1. **Vector quality at all sizes.** Cards shape-cleanly at any zoom
+  without antialiasing artefacts; the geometric primitives in the
+  type icons can be real SVG paths rather than Unicode glyphs.
+2. **Flip-to-back animation.** Each card has a *front* (current
+  surface: header / body / footer with the expression text) and a
+  *back* (a live visualisation — the pattern's events on a cycle
+  ring, the LFO's curve, the FH-2 envelope shape, etc.). A 3D
+  flip transition swaps front for back; the back is interactive
+  (drag the cycle ring, scrub the envelope curve, etc.) and the
+  changes propagate back through the same WS verbs.
+
+This is plausibly the bridge between the cell metaphor and the
+"data-flow computing surfaces with live feedback" aspiration —
+the back of the card IS the visualisation, and the visualisation
+IS the live mutation surface.
+
+## Future: config sub-stacks
+
+The config pseudo-stack currently mixes `bind`, `midi-device`,
+`fh2-envelope`, `bpm`, `log-level` etc. into one collapsed pile.
+When that pile gets long it might be worth splitting into multiple
+config stacks by verb category (devices / bindings / FH-2 setup /
+runtime config). Open question whether one "config zone" with
+multiple stacks reads better than one stack with sorted contents.
+Deferred until the prototype gets enough config cells to feel the
+pain.
+
 ## Suggested first concrete moves
 
 Once decisions on the open questions land, plausible build order:

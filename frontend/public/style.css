@@ -1209,6 +1209,9 @@ body::before {
   gap: 0.8rem;
   align-items: flex-start;
   align-content: flex-start;
+  /* Distribute stacks evenly across the row instead of packing them */
+  /* against the left edge.                                          */
+  justify-content: space-evenly;
 }
 
 /* ==========================================================================
