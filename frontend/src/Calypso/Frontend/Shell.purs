@@ -385,15 +385,24 @@ type State =
   , lastSyncedRuntime :: String
   , visibility :: ColumnVisibility
   -- Voice Cells pane: user-defined "musical voice" stacks.  Each
-  -- music cell can be assigned a stack via a 9-swatch color picker
-  -- (1 "no stack" + 8 distinct colors).  Cards in the same stack
-  -- visually overlap; click "fan" on a stack to spread its cards in
-  -- a grid for editing.  Stack assignment is in-session only — not
-  -- persisted, not in the .tidal.  See docs/voice-cells-design.md.
-  , cardColors :: Map String Int      -- cellId → color index 1..8
-                                      -- (absent = no stack, lone)
-  , fannedStack :: Maybe Int          -- color index of currently-
-                                      -- fanned stack, if any
+  -- music cell can be assigned a stack via a 9-swatch colour
+  -- picker (1 "no stack" + 8 colours).  Stack identity is the
+  -- colour, full stop; same-coloured cards overlap visually with
+  -- the front card fully visible; clicking a back card's header
+  -- brings it to the front; clicking the front card's header fans
+  -- the stack out for editing; clicking any header in a fanned
+  -- stack restacks.  Stack assignment + per-stack ordering are
+  -- in-session only — not persisted, not in the .tidal.  See
+  -- docs/voice-cells-design.md.
+  , stackOrder :: Map Int (Array String)
+                                      -- colour 1..8 → cellIds in
+                                      -- stack order, front first
+  , fannedStack :: Maybe Int          -- colour of currently-fanned
+                                      -- music stack, if any
+  , configStackFanned :: Boolean      -- config cells form their own
+                                      -- pseudo-stack (always present);
+                                      -- this tracks whether it's
+                                      -- fanned out
   , colorPickerOpen :: Maybe String   -- cellId whose picker is open
   }
 
@@ -447,8 +456,11 @@ data Action
   | OpenColorPicker String                  -- cellId
   | CloseColorPicker
   | SetCardColor String (Maybe Int)         -- cellId, Just N (assign) | Nothing (clear)
-  | FanStack Int                            -- color; spread that stack's cards
-  | Restack                                 -- collapse the fanned stack
+  | HeaderClick String                      -- cellId; resolves to
+                                            -- bring-to-front /
+                                            -- fan / restack based
+                                            -- on current stack
+                                            -- context
   | Startup
 
 initialState :: forall i. i -> State
@@ -492,8 +504,9 @@ initialState _ =
   , lastSyncedCells: Map.empty
   , lastSyncedRuntime: ""
   , visibility: defaultVisibility
-  , cardColors: Map.empty
+  , stackOrder: Map.empty
   , fannedStack: Nothing
+  , configStackFanned: false
   , colorPickerOpen: Nothing
   }
 
@@ -726,18 +739,41 @@ handleAction = case _ of
     H.modify_ _ { colorPickerOpen = Nothing }
   SetCardColor cellId Nothing ->
     H.modify_ \s -> s
-      { cardColors = Map.delete cellId s.cardColors
+      { stackOrder = removeFromAllStacks cellId s.stackOrder
       , colorPickerOpen = Nothing
       }
   SetCardColor cellId (Just n) ->
-    H.modify_ \s -> s
-      { cardColors = Map.insert cellId n s.cardColors
-      , colorPickerOpen = Nothing
-      }
-  FanStack n ->
-    H.modify_ _ { fannedStack = Just n }
-  Restack ->
-    H.modify_ _ { fannedStack = Nothing }
+    H.modify_ \s ->
+      let cleaned = removeFromAllStacks cellId s.stackOrder
+          inserted = Map.alter
+            (\mArr -> Just (Array.cons cellId (fromMaybe [] mArr)))
+            n
+            cleaned
+      in s { stackOrder = inserted, colorPickerOpen = Nothing }
+  HeaderClick cellId -> do
+    s <- H.get
+    let isConfig = case Array.find (\c -> c.id == cellId) s.cells of
+          Just c -> let sec = cellSection c in sec == SecConfig || sec == SecVoices
+          Nothing -> false
+    if isConfig
+      then H.modify_ _ { configStackFanned = not s.configStackFanned }
+      else case cellInColor s.stackOrder cellId of
+        Nothing -> pure unit  -- lone music card; header click is a no-op
+        Just color
+          | s.fannedStack == Just color ->
+              H.modify_ _ { fannedStack = Nothing }
+          | otherwise -> do
+              let stack = fromMaybe [] (Map.lookup color s.stackOrder)
+              if Array.head stack == Just cellId
+                then H.modify_ _ { fannedStack = Just color }
+                else
+                  -- Bring to front: remove + prepend within this stack.
+                  H.modify_ \st -> st
+                    { stackOrder = Map.update
+                        (\arr -> Just (Array.cons cellId (Array.filter (_ /= cellId) arr)))
+                        color
+                        st.stackOrder
+                    }
   ScheduleCompile -> do
     s <- H.get
     case s.pendingCompile of
@@ -2048,216 +2084,300 @@ renderMiniNotationColumn _ =
 renderVoiceCellsColumn :: forall m. MonadAff m => State -> H.ComponentHTML Action Slots m
 renderVoiceCellsColumn state =
   HH.section [ HP.class_ (H.ClassName "pane pane-voice-cells") ]
-    [ HH.div [ HP.class_ (H.ClassName "voice-cells-zone voice-cells-config-zone") ]
-        ( [ HH.div [ HP.class_ (H.ClassName "voice-cells-zone-header") ]
-              [ HH.text ("config (" <> show (Array.length configCells) <> ")") ]
-          ]
-          <> map (renderConfigCard) configCells
-        )
-    , HH.div [ HP.class_ (H.ClassName "voice-cells-zone voice-cells-music-zone") ]
-        ( [ HH.div [ HP.class_ (H.ClassName "voice-cells-zone-header") ]
-              [ HH.text ("music (" <> show (Array.length musicCells) <> ")") ]
-          ]
-          <> renderMusicLayout state musicCells
-        )
+    [ HH.div [ HP.class_ (H.ClassName "voice-cells-canvas") ]
+        (renderCanvas state)
     ]
-  where
-    configCells = Array.filter (\c ->
-      let s = cellSection c in s == SecConfig || s == SecVoices) state.cells
-    musicCells = Array.filter (\c -> cellSection c == SecPatterns) state.cells
 
--- | Walk music cells in original order, emitting either a lone card
--- | (no stack assignment) or a stack render at the position of the
--- | stack's first encountered member.  Subsequent members of the
--- | same stack are skipped — they were drawn when we hit the first.
--- | A "fanned" stack instead spreads its cards individually in a
--- | grid (their original lone-card positions are overridden by the
--- | fan layout).
-renderMusicLayout
+-- | Walk all cells in original order; emit one of:
+-- |   - lone music card (no colour)
+-- |   - music stack (collapsed or fanned) at first-encountered position
+-- |   - config stack (synthetic, contains all SecConfig + SecVoices
+-- |     cells; rendered at first config-cell position)
+-- | Subsequent members of an already-rendered stack are skipped.
+-- | Cards bigger than v3 — wider, taller body, more breathing room.
+renderCanvas
   :: forall m. MonadAff m
   => State
-  -> Array CellRec
   -> Array (H.ComponentHTML Action Slots m)
-renderMusicLayout state cells =
+renderCanvas state =
   let
-    walk :: Array CellRec -> Set Int -> Array (H.ComponentHTML Action Slots m)
-    walk remaining renderedStacks = case Array.uncons remaining of
+    isConfigCell c =
+      let sec = cellSection c in sec == SecConfig || sec == SecVoices
+    configCells = Array.filter isConfigCell state.cells
+    walk
+      :: Array CellRec
+      -> Set Int                    -- music-stack colours already rendered
+      -> Boolean                    -- config stack already rendered?
+      -> Array (H.ComponentHTML Action Slots m)
+    walk remaining renderedStacks renderedConfig = case Array.uncons remaining of
       Nothing -> []
-      Just { head: c, tail: rest } -> case Map.lookup c.id state.cardColors of
-        Nothing ->
-          renderVoiceCard state false c
-            Array.: walk rest renderedStacks
-        Just color
-          | Set.member color renderedStacks ->
-              walk rest renderedStacks
-          | otherwise ->
-              let
-                stackCells = Array.filter
-                  (\c2 -> Map.lookup c2.id state.cardColors == Just color)
-                  cells
-                rendered =
-                  if state.fannedStack == Just color
-                    then renderFannedStack state color stackCells
-                    else renderCollapsedStack state color stackCells
-              in
-                rendered Array.: walk rest (Set.insert color renderedStacks)
+      Just { head: c, tail: rest }
+        | isConfigCell c ->
+            if renderedConfig
+              then walk rest renderedStacks renderedConfig
+              else renderConfigStack state configCells
+                Array.: walk rest renderedStacks true
+        | otherwise -> case cellInColor state.stackOrder c.id of
+            Nothing ->
+              renderVoiceCard state CardLone c
+                Array.: walk rest renderedStacks renderedConfig
+            Just color
+              | Set.member color renderedStacks ->
+                  walk rest renderedStacks renderedConfig
+              | otherwise ->
+                  let
+                    -- Render in stackOrder (front first).  Look up each
+                    -- cellId in the cell list to get the CellRec.
+                    cellsById = Map.fromFoldable (map (\c2 -> Tuple c2.id c2) state.cells)
+                    orderedIds = fromMaybe [] (Map.lookup color state.stackOrder)
+                    stackCells = Array.mapMaybe (\cid -> Map.lookup cid cellsById) orderedIds
+                    rendered =
+                      if state.fannedStack == Just color
+                        then renderFannedMusicStack state color stackCells
+                        else renderCollapsedMusicStack state color stackCells
+                  in
+                    rendered Array.: walk rest (Set.insert color renderedStacks) renderedConfig
   in
-    walk cells Set.empty
+    walk state.cells Set.empty false
 
--- | A collapsed stack: cards overlap, only the front card is fully
--- | visible.  Click "fan" to spread.  Click any card to fire that
--- | card (the front, since it's the only one with full hit area).
-renderCollapsedStack
+-- | A collapsed music stack: cards overlap with only the front fully
+-- | visible.  No toolbar — header click on the front fans, header
+-- | click on a back card brings it forward, header click in fanned
+-- | view restacks (handled in HeaderClick).
+renderCollapsedMusicStack
   :: forall m. MonadAff m
   => State
-  -> Int
-  -> Array CellRec
+  -> Int                           -- color
+  -> Array CellRec                 -- in stack order, front first
   -> H.ComponentHTML Action Slots m
-renderCollapsedStack state color cells =
+renderCollapsedMusicStack state color cells =
   let
     total = Array.length cells
-    -- Toolbar 22 + (total-1)*peek + topCardHeight
-    deckHeightPx = 22 + (total - 1) * 18 + 100
+    -- (total-1) cards behind, each peeking ~22px (header row),
+    -- plus the front card in full (front-card height ~140px).
+    stackHeightPx = (total - 1) * 22 + 140
   in
     HH.div
       [ HP.class_ (H.ClassName ("voice-stack stack-color-" <> show color))
-      , HP.style ("height: " <> show deckHeightPx <> "px;")
+      , HP.style ("height: " <> show stackHeightPx <> "px;")
       ]
-      ( [ HH.div [ HP.class_ (H.ClassName "voice-stack-toolbar") ]
-            [ HH.button
-                [ HP.class_ (H.ClassName "voice-stack-btn voice-stack-fan")
-                , HE.onClick \_ -> FanStack color
-                , HP.title "fan out this stack to work on each card"
-                ]
-                [ HH.text "⋯" ]
-            , HH.span [ HP.class_ (H.ClassName "voice-stack-count") ]
-                [ HH.text (show total) ]
-            ]
-        ]
-        <> mapWithIndex (renderStackedCard state total color) cells
-      )
+      (mapWithIndex (renderStackedCard state total) cells)
 
--- | A fanned stack: cards laid out in a 2-column grid, each fully
--- | visible.  Restack button collapses back.  Cards in this view
--- | can still pop their picker and be re-coloured (which yanks them
--- | into a different stack live).
-renderFannedStack
+-- | A fanned music stack: cards laid out in a grid, each fully
+-- | visible.  Restack happens via HeaderClick on any card.
+renderFannedMusicStack
   :: forall m. MonadAff m
   => State
   -> Int
   -> Array CellRec
   -> H.ComponentHTML Action Slots m
-renderFannedStack state color cells =
+renderFannedMusicStack state color cells =
   HH.div
     [ HP.class_ (H.ClassName ("voice-stack voice-stack-fanned stack-color-" <> show color)) ]
-    ( [ HH.div [ HP.class_ (H.ClassName "voice-stack-toolbar voice-stack-toolbar-fanned") ]
-          [ HH.button
-              [ HP.class_ (H.ClassName "voice-stack-btn voice-stack-restack")
-              , HE.onClick \_ -> Restack
-              , HP.title "collapse this fan back into a stack"
-              ]
-              [ HH.text "▣" ]
-          , HH.span [ HP.class_ (H.ClassName "voice-stack-count") ]
-              [ HH.text (show (Array.length cells)) ]
-          ]
-      , HH.div [ HP.class_ (H.ClassName "voice-stack-fan-grid") ]
-          (map (renderVoiceCard state false) cells)
-      ]
-    )
+    [ HH.div [ HP.class_ (H.ClassName "voice-stack-fan-grid") ]
+        (map (renderVoiceCard state CardFanned) cells)
+    ]
 
--- | One card inside a collapsed stack.  Index 0 is the front
--- | (fully visible at the bottom).  Higher indices recede upward;
--- | only their top ~18px (header strip) peeks above the front card.
--- | Same z-index trick as the previous deck visual.
+-- | Config cells form a synthetic always-present stack.  Rendered
+-- | inline with the music stacks (no separate zone).  Visually
+-- | distinct via .voice-stack-config (dashed accent on the header).
+renderConfigStack
+  :: forall m. MonadAff m
+  => State
+  -> Array CellRec
+  -> H.ComponentHTML Action Slots m
+renderConfigStack state cells =
+  if state.configStackFanned
+    then
+      HH.div
+        [ HP.class_ (H.ClassName "voice-stack voice-stack-fanned voice-stack-config") ]
+        [ HH.div [ HP.class_ (H.ClassName "voice-stack-fan-grid") ]
+            (map (renderVoiceCard state CardConfigFanned) cells)
+        ]
+    else
+      let
+        total = Array.length cells
+        stackHeightPx = (total - 1) * 22 + 140
+      in
+        HH.div
+          [ HP.class_ (H.ClassName "voice-stack voice-stack-config")
+          , HP.style ("height: " <> show stackHeightPx <> "px;")
+          ]
+          (mapWithIndex (renderStackedConfigCard state total) cells)
+
+-- | One card inside a collapsed music stack.  Index 0 is the front
+-- | (fully visible at the bottom of the container); higher indices
+-- | recede upward, peeking only their header strip (~22px).
 renderStackedCard
   :: forall m. MonadAff m
   => State
   -> Int                           -- total cards in stack
-  -> Int                           -- color index (for class)
   -> Int                           -- this card's index (0 = front)
   -> CellRec
   -> H.ComponentHTML Action Slots m
-renderStackedCard state total _color idx c =
+renderStackedCard state total idx c =
   let
     isFront = idx == 0
-    topPx = 22 + (total - 1 - idx) * 18
+    topPx = (total - 1 - idx) * 22
     zIdx = total - idx
-    -- Behind cards only show the header (no body, smaller height).
-    extraClass = if isFront then " voice-card-front" else " voice-card-stacked"
+    cardKind = if isFront then CardStackedFront else CardStackedBehind
   in
     HH.div
-      [ HP.class_ (H.ClassName ("voice-card-stacked-wrapper" <> extraClass))
+      [ HP.class_ (H.ClassName "voice-card-stacked-wrapper")
       , HP.style
           ( "top: " <> show topPx <> "px;"
               <> "z-index: " <> show zIdx <> ";"
           )
       ]
-      [ renderVoiceCard state (not isFront) c ]
+      [ renderVoiceCard state cardKind c ]
 
--- | The card itself.  Three zones: header (stack-coloured background,
--- | type icon + name + colour swatch), body (expression preview),
--- | footer (cue + play).  `compact` is true for non-front cards in a
--- | collapsed stack — header only, no body or footer.
+-- | One card inside the (collapsed) config stack — same geometry as
+-- | renderStackedCard but with config-flavoured CardKind so the
+-- | renderVoiceCard branch suppresses the picker etc.
+renderStackedConfigCard
+  :: forall m. MonadAff m
+  => State
+  -> Int
+  -> Int
+  -> CellRec
+  -> H.ComponentHTML Action Slots m
+renderStackedConfigCard state total idx c =
+  let
+    isFront = idx == 0
+    topPx = (total - 1 - idx) * 22
+    zIdx = total - idx
+    cardKind = if isFront then CardConfigFront else CardConfigBehind
+  in
+    HH.div
+      [ HP.class_ (H.ClassName "voice-card-stacked-wrapper")
+      , HP.style
+          ( "top: " <> show topPx <> "px;"
+              <> "z-index: " <> show zIdx <> ";"
+          )
+      ]
+      [ renderVoiceCard state cardKind c ]
+
+-- | Card-rendering variants. Each maps to a distinct CSS shape +
+-- | feature set so renderVoiceCard can stay one function.
+data CardKind
+  = CardLone               -- music card, not in a stack
+  | CardStackedFront       -- music card, front of a collapsed stack
+  | CardStackedBehind      -- music card, behind in a collapsed stack
+  | CardFanned             -- music card, in a fanned stack
+  | CardConfigFront        -- config card, front of (collapsed) config stack
+  | CardConfigBehind       -- config card, behind in config stack
+  | CardConfigFanned       -- config card, fanned
+
+derive instance Eq CardKind
+
+-- | The card itself.  Three zones: header (stack-coloured background
+-- | with BLACK text — playing-card title-bar look — type icon + name
+-- | + colour-swatch trigger), body (expression preview), footer (cue
+-- | + play).  Behind-cards in a collapsed stack render header-only;
+-- | config cards skip the picker + cue (config is rig setup, not
+-- | performance).
+-- |
+-- | Header click handler is wired on every card; HeaderClick action
+-- | resolves to bring-to-front / fan / restack based on context
+-- | (handled in handleAction so the render stays declarative).
 renderVoiceCard
   :: forall m. MonadAff m
   => State
-  -> Boolean       -- compact (header-only)
+  -> CardKind
   -> CellRec
   -> H.ComponentHTML Action Slots m
-renderVoiceCard state compact c =
+renderVoiceCard state kind c =
   let
     voiceName = extractVoiceName c.source
     bodyPreview = previewBody c.source
-    color = Map.lookup c.id state.cardColors
-    colorClass = case color of
-      Just n -> " stack-color-" <> show n
-      Nothing -> " stack-color-none"
+    color = cellInColor state.stackOrder c.id
+    isConfig = kind == CardConfigFront || kind == CardConfigBehind || kind == CardConfigFanned
+    isCompact = kind == CardStackedBehind || kind == CardConfigBehind
+    colorClass =
+      if isConfig then " stack-config"
+      else case color of
+        Just n -> " stack-color-" <> show n
+        Nothing -> " stack-color-none"
+    kindClass = case kind of
+      CardLone -> " voice-card-lone"
+      CardStackedFront -> " voice-card-front"
+      CardStackedBehind -> " voice-card-compact"
+      CardFanned -> " voice-card-fanned"
+      CardConfigFront -> " voice-card-front"
+      CardConfigBehind -> " voice-card-compact"
+      CardConfigFanned -> " voice-card-fanned"
     isPickerOpen = state.colorPickerOpen == Just c.id
     typeIcon = inferTypeIcon c.source
   in
     HH.div
       [ HP.class_
           ( H.ClassName
-              ( "voice-card-v2"
-                  <> colorClass
-                  <> (if compact then " voice-card-compact" else "")
-              )
+              ("voice-card-v2" <> colorClass <> kindClass)
           )
       ]
-      ( [ HH.div [ HP.class_ (H.ClassName "voice-card-header") ]
+      ( [ HH.div
+            [ HP.class_ (H.ClassName "voice-card-header")
+            , HE.onClick \_ -> HeaderClick c.id
+            , HP.title (case kind of
+                CardLone -> "lone card — assign a colour to stack it"
+                CardStackedFront -> "click to fan the stack"
+                CardStackedBehind -> "click to bring this card to the front"
+                CardFanned -> "click to restack"
+                CardConfigFront -> "click to fan config"
+                CardConfigBehind -> "click to bring this card to the front"
+                CardConfigFanned -> "click to restack config")
+            ]
             [ HH.span [ HP.class_ (H.ClassName "voice-card-icon") ]
                 [ HH.text typeIcon ]
             , HH.span [ HP.class_ (H.ClassName "voice-card-name") ]
                 [ HH.text voiceName ]
-            , HH.button
-                [ HP.class_ (H.ClassName "voice-card-swatch")
-                , HE.onClick \_ ->
-                    if isPickerOpen then CloseColorPicker
-                    else OpenColorPicker c.id
-                , HP.title "pick a stack colour"
-                ]
-                [ HH.text "●" ]
             ]
-        ]
-        <> (if compact then [] else
+        -- Colour swatch is a SIBLING of the header (not a descendant)
+        -- so its click doesn't bubble up to the header's HeaderClick
+        -- handler.  Positioned absolutely at top-right via CSS.
+        -- Suppressed for config cards (they aren't user-stackable).
+        ] <> (if isConfig then [] else
+              [ HH.button
+                  [ HP.class_ (H.ClassName "voice-card-swatch")
+                  , HE.onClick \_ ->
+                      if isPickerOpen then CloseColorPicker
+                      else OpenColorPicker c.id
+                  , HP.title "pick a stack colour"
+                  ]
+                  [ HH.text "●" ]
+              ])
+        <> (if isCompact then [] else
             [ HH.div [ HP.class_ (H.ClassName "voice-card-body") ]
                 [ HH.text bodyPreview ]
             , HH.div [ HP.class_ (H.ClassName "voice-card-footer") ]
-                [ HH.button
-                    [ HP.class_ (H.ClassName "voice-card-btn voice-card-cue")
-                    , HE.onClick \_ -> FireCell c.id c.source
-                    , HP.title "cue (compile-armed in future; fires immediately today)"
-                    ]
-                    [ HH.text "cue" ]
-                , HH.button
-                    [ HP.class_ (H.ClassName "voice-card-btn voice-card-play")
-                    , HE.onClick \_ -> FireCell c.id c.source
-                    , HP.title "play (fire immediately)"
-                    ]
-                    [ HH.text "▶" ]
-                ]
+                ( if isConfig
+                    then
+                      [ HH.button
+                          [ HP.class_ (H.ClassName "voice-card-btn voice-card-play")
+                          , HE.onClick \_ -> FireCell c.id c.source
+                          , HP.title "fire this config statement"
+                          ]
+                          [ HH.text "▶" ]
+                      ]
+                    else
+                      [ HH.button
+                          [ HP.class_ (H.ClassName "voice-card-btn voice-card-cue")
+                          , HE.onClick \_ -> FireCell c.id c.source
+                          , HP.title "cue (compile-armed in future; fires immediately today)"
+                          ]
+                          [ HH.text "cue" ]
+                      , HH.button
+                          [ HP.class_ (H.ClassName "voice-card-btn voice-card-play")
+                          , HE.onClick \_ -> FireCell c.id c.source
+                          , HP.title "play (fire immediately)"
+                          ]
+                          [ HH.text "▶" ]
+                      ]
+                )
             ])
-        <> (if isPickerOpen then [ renderColorPicker c.id (Map.lookup c.id state.cardColors) ] else [])
+        <> (if isPickerOpen && not isConfig
+              then [ renderColorPicker c.id color ]
+              else [])
       )
 
 -- | 9-swatch popover.  3×3 grid; first cell is "no stack" (clears the
@@ -2295,36 +2415,28 @@ renderColorPicker cellId current =
               Nothing -> "∅"
               Just _ -> "") ]
 
--- | Config card: same v2 visual, no colour picker (config cells don't
--- | join musical-voice stacks), no cue/play distinction (just a
--- | single fire button) — they're rig setup, not performance.
-renderConfigCard
-  :: forall m. MonadAff m
-  => CellRec
-  -> H.ComponentHTML Action Slots m
-renderConfigCard c =
-  HH.div [ HP.class_ (H.ClassName "voice-card-v2 voice-card-config") ]
-    [ HH.div [ HP.class_ (H.ClassName "voice-card-header") ]
-        [ HH.span [ HP.class_ (H.ClassName "voice-card-icon") ]
-            [ HH.text (inferTypeIcon c.source) ]
-        , HH.span [ HP.class_ (H.ClassName "voice-card-name") ]
-            [ HH.text (extractVoiceName c.source) ]
-        ]
-    , HH.div [ HP.class_ (H.ClassName "voice-card-body") ]
-        [ HH.text (previewBody c.source) ]
-    , HH.div [ HP.class_ (H.ClassName "voice-card-footer") ]
-        [ HH.button
-            [ HP.class_ (H.ClassName "voice-card-btn voice-card-play")
-            , HE.onClick \_ -> FireCell c.id c.source
-            , HP.title "fire this config statement"
-            ]
-            [ HH.text "▶" ]
-        ]
-    ]
-
 -- | Cheap heuristic: pick a glyph based on the first verb/word of
 -- | the cell's source.  Type icons are vector-graphics-y placeholders
 -- | until we wire real binding info from the dispatcher snapshot.
+-- | Reverse lookup: which stack colour (if any) does a cellId belong
+-- | to?  Walks the small stackOrder map; up to 8 entries so cheap.
+cellInColor :: Map Int (Array String) -> String -> Maybe Int
+cellInColor m cellId =
+  Array.findMap
+    (\(Tuple n cells) -> if Array.elem cellId cells then Just n else Nothing)
+    (Map.toUnfoldable m :: Array (Tuple Int (Array String)))
+
+-- | Remove a cellId from every stack in the map, dropping any stack
+-- | that becomes empty.  Used when re-assigning a card's colour.
+removeFromAllStacks :: String -> Map Int (Array String) -> Map Int (Array String)
+removeFromAllStacks cellId =
+  Map.mapMaybe
+    (\arr ->
+      let arr' = Array.filter (_ /= cellId) arr
+      in case Array.length arr' of
+           0 -> Nothing
+           _ -> Just arr')
+
 inferTypeIcon :: String -> String
 inferTypeIcon src =
   let lines = Str.split (Pattern "\n") src

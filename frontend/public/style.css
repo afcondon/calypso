@@ -1192,66 +1192,42 @@ body::before {
    (header / body / footer) rendered with phosphor + amber palette,
    thin lines, geometric primitives. Stack identity by colour;
    type by icon. See docs/voice-cells-design.md.
+
+   Phase 4: bigger cards, single canvas, header-click drives all stack
+   interactions, config pre-stacked inline.
    ========================================================================== */
 
 .pane-voice-cells {
   background: var(--bg-deep);
-  padding: 0.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
+  padding: 0.6rem;
   overflow-y: auto;
 }
 
-/* The two zones: config (top, never stack-grouped, no colour picker) */
-/* and music (canvas where stacks live).                              */
-.voice-cells-zone {
+.voice-cells-canvas {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.6rem;
+  gap: 0.8rem;
+  align-items: flex-start;
   align-content: flex-start;
-  padding: 0.4rem;
-  border: 1px solid var(--fg-rule);
-  border-radius: 4px;
-  min-height: 4rem;
-}
-
-.voice-cells-config-zone {
-  background: rgba(255, 184, 74, 0.04);
-  border-color: rgba(255, 184, 74, 0.18);
-}
-
-.voice-cells-music-zone {
-  background: rgba(65, 255, 124, 0.03);
-  flex: 1 1 auto;
-}
-
-.voice-cells-zone-header {
-  width: 100%;
-  font-family: var(--mono);
-  font-size: 0.85rem;
-  color: var(--fg-dim);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  margin-bottom: 0.2rem;
 }
 
 /* ==========================================================================
    Card v2: HyperCard-y header / body / footer, vector primitive lines.
+   Phase 4: ~14rem wide, ~140px tall (front), 22px header (back).
    ========================================================================== */
 
 .voice-card-v2 {
   position: relative;
   display: flex;
   flex-direction: column;
-  width: 11rem;
+  width: 14rem;
   background: var(--bg);
   border: 1px solid var(--fg-dim);
   border-radius: 6px;
   font-family: var(--mono);
   user-select: none;
   transition: border-color 80ms linear, box-shadow 80ms linear;
-  overflow: visible;     /* picker popover escapes */
+  overflow: visible;
 }
 
 .voice-card-v2:hover {
@@ -1259,22 +1235,22 @@ body::before {
   box-shadow: var(--glow);
 }
 
-/* Header: stack-coloured background, BLACK text on top of it for */
-/* high contrast — playing-card title-bar look.                   */
+/* Header: stack-coloured background, BLACK text — playing-card title. */
 .voice-card-header {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
-  padding: 0.3rem 0.5rem;
-  background: var(--card-color, #1a3a22);   /* default no-stack */
+  gap: 0.4rem;
+  padding: 0.35rem 0.55rem;
+  background: var(--card-color, #1a3a22);
   color: #000;
   border-radius: 5px 5px 0 0;
   border-bottom: 1px solid var(--fg-dim);
-  min-height: 1.6rem;
+  min-height: 22px;
+  cursor: pointer;
 }
 
 .voice-card-icon {
-  font-size: 1rem;
+  font-size: 1.05rem;
   line-height: 1;
   width: 1.1rem;
   text-align: center;
@@ -1283,7 +1259,7 @@ body::before {
 
 .voice-card-name {
   flex: 1 1 auto;
-  font-size: 0.95rem;
+  font-size: 1rem;
   font-weight: 700;
   letter-spacing: 0.02em;
   white-space: nowrap;
@@ -1291,45 +1267,52 @@ body::before {
   text-overflow: ellipsis;
 }
 
-/* Tiny circle = "current colour swatch" → click to open picker.   */
+/* Swatch is positioned absolutely so it doesn't bubble click up to */
+/* the header (which would also trigger HeaderClick).               */
 .voice-card-swatch {
-  background: transparent;
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: rgba(0, 0, 0, 0.15);
   border: 1px solid #000;
   color: #000;
-  width: 1rem;
-  height: 1rem;
-  font-size: 0.85rem;
-  line-height: 0.9rem;
+  width: 1.1rem;
+  height: 1.1rem;
+  font-size: 0.9rem;
+  line-height: 1rem;
   border-radius: 50%;
   cursor: pointer;
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  z-index: 5;
 }
 
 .voice-card-swatch:hover {
-  background: rgba(0, 0, 0, 0.15);
+  background: rgba(0, 0, 0, 0.35);
 }
 
 .voice-card-body {
   font-family: var(--mono-code);
-  font-size: 0.78rem;
-  color: var(--fg-dim);
-  line-height: 1.25;
-  padding: 0.4rem 0.5rem;
+  font-size: 0.85rem;
+  color: var(--fg);
+  line-height: 1.35;
+  padding: 0.55rem 0.7rem;
   overflow: hidden;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
   flex: 1 1 auto;
-  min-height: 2.5rem;
+  min-height: 4.5rem;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .voice-card-footer {
   display: flex;
-  gap: 0.35rem;
-  padding: 0.3rem 0.5rem;
+  gap: 0.4rem;
+  padding: 0.4rem 0.55rem;
   border-top: 1px solid var(--fg-rule);
   justify-content: flex-end;
 }
@@ -1339,8 +1322,8 @@ body::before {
   border: 1px solid var(--fg-dim);
   color: var(--fg);
   font-family: var(--mono);
-  font-size: 0.85rem;
-  padding: 0.15rem 0.55rem;
+  font-size: 0.9rem;
+  padding: 0.2rem 0.7rem;
   cursor: pointer;
   border-radius: 3px;
   line-height: 1.1;
@@ -1353,11 +1336,10 @@ body::before {
 }
 
 .voice-card-cue {
-  /* Cue is the "prepare for next bar" affordance — amber-tinted to */
-  /* read as "armed but not yet playing."                            */
   color: var(--amber);
   border-color: var(--amber);
 }
+
 .voice-card-cue:hover {
   color: var(--amber);
   border-color: var(--amber);
@@ -1365,106 +1347,74 @@ body::before {
 }
 
 .voice-card-play {
-  /* Play is the "fire now" affordance — bright phosphor.            */
   color: var(--fg-bright);
   border-color: var(--fg);
 }
 
-/* Compact variant: header-only (used for cards behind the front in */
-/* a collapsed stack).                                              */
+/* Compact (header-only) variant: behind cards in collapsed stacks. */
 .voice-card-compact {
   border-radius: 6px 6px 4px 4px;
 }
 .voice-card-compact .voice-card-header {
   border-radius: 5px 5px 4px 4px;
   border-bottom: none;
-  min-height: 1.4rem;
+  min-height: 22px;
+}
+
+/* Front of a collapsed stack — slight glow lift. */
+.voice-card-front {
+  box-shadow: var(--glow);
 }
 
 /* ==========================================================================
-   Stack of cards: collapsed (overlapping, front fully visible) and
-   fanned (cards spread in a 2-column grid).
+   Stack of cards.  Collapsed = absolute-positioned overlap.
+   Fanned = grid of full-size cards lifted with a backdrop glow.
    ========================================================================== */
 
 .voice-stack {
   position: relative;
-  width: 11rem;
-  /* height inline */
+  width: 14rem;
+  /* height set inline per-stack */
 }
 
-.voice-stack-toolbar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0 0.3rem;
-  font-family: var(--mono);
-  font-size: 0.75rem;
-  color: var(--fg-dim);
-  z-index: 1000;
-}
-
-.voice-stack-toolbar-fanned {
-  position: relative;     /* takes flow space inside the fanned layout */
-  height: auto;
-  padding: 0.2rem 0;
-  margin-bottom: 0.4rem;
-}
-
-.voice-stack-btn {
-  background: transparent;
-  border: 1px solid var(--fg-dim);
-  color: var(--fg-dim);
-  font-family: var(--mono);
-  font-size: 0.85rem;
-  padding: 0 0.35rem;
-  cursor: pointer;
-  border-radius: 2px;
-  line-height: 1.1;
-}
-
-.voice-stack-btn:hover {
-  color: var(--fg-bright);
-  border-color: var(--fg);
-  box-shadow: var(--glow);
-}
-
-.voice-stack-count {
-  margin-left: auto;
-  color: var(--fg);
-  font-weight: 700;
-  letter-spacing: 0.04em;
-}
-
-/* Stacked card wrapper (collapsed view): absolute-positioned in the */
-/* parent stack, top + z-index set inline by render.                  */
 .voice-card-stacked-wrapper {
   position: absolute;
   left: 0;
-  width: 11rem;
+  width: 14rem;
 }
 
-/* Fanned view: a 2-column grid of full-size cards.  Uses z-index so */
-/* it lifts above the rest of the music zone visually.                */
 .voice-stack-fanned {
   width: auto;
   flex: 1 1 100%;
   background: rgba(0, 0, 0, 0.85);
   border: 1px solid var(--fg);
   border-radius: 6px;
-  padding: 0.5rem;
+  padding: 0.6rem;
   z-index: 500;
-  box-shadow: 0 0 12px rgba(65, 255, 124, 0.4);
+  box-shadow: 0 0 14px rgba(65, 255, 124, 0.4);
 }
 
 .voice-stack-fan-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
-  gap: 0.6rem;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 0.8rem;
+}
+
+/* Config stack: dashed accent on the header instead of stack colour, */
+/* amber-tinted so it's clearly setup-not-music.                      */
+.voice-card-v2.stack-config .voice-card-header {
+  background: var(--bg-elev);
+  color: var(--amber);
+  border-bottom: 1px dashed var(--amber);
+}
+.voice-card-v2.stack-config .voice-card-icon,
+.voice-card-v2.stack-config .voice-card-name {
+  color: var(--amber);
+}
+.voice-stack-fanned.voice-stack-config {
+  background: rgba(255, 184, 74, 0.05);
+  border-color: var(--amber);
+  box-shadow: 0 0 12px rgba(255, 184, 74, 0.3);
 }
 
 /* ==========================================================================
@@ -1475,7 +1425,7 @@ body::before {
 .voice-card-v2.stack-color-none .voice-card-header {
   background: var(--bg-elev);
   color: var(--fg-dim);
-  border: 1px dashed var(--fg-dim);   /* "no stack" hint */
+  border: 1px dashed var(--fg-dim);
 }
 .voice-card-v2.stack-color-none .voice-card-icon,
 .voice-card-v2.stack-color-none .voice-card-name {
@@ -1484,6 +1434,7 @@ body::before {
 .voice-card-v2.stack-color-none .voice-card-swatch {
   border-color: var(--fg-dim);
   color: var(--fg-dim);
+  background: transparent;
 }
 
 .voice-card-v2.stack-color-1 .voice-card-header { background: #41ff7c; }
@@ -1504,14 +1455,14 @@ body::before {
   top: -2px;
   right: -2px;
   display: grid;
-  grid-template-columns: repeat(3, 1.4rem);
-  grid-auto-rows: 1.4rem;
-  gap: 0.2rem;
-  padding: 0.3rem;
+  grid-template-columns: repeat(3, 1.5rem);
+  grid-auto-rows: 1.5rem;
+  gap: 0.25rem;
+  padding: 0.35rem;
   background: var(--bg-deep);
   border: 1px solid var(--fg);
   border-radius: 4px;
-  box-shadow: 0 0 8px rgba(65, 255, 124, 0.5);
+  box-shadow: 0 0 10px rgba(65, 255, 124, 0.55);
   z-index: 2000;
 }
 
@@ -1552,17 +1503,3 @@ body::before {
 .voice-picker-swatch.stack-color-6 { background: #9bffb6; }
 .voice-picker-swatch.stack-color-7 { background: #ffe066; }
 .voice-picker-swatch.stack-color-8 { background: #ce93ff; }
-
-/* ==========================================================================
-   Config card (no picker, no cue/play distinction).
-   ========================================================================== */
-
-.voice-card-v2.voice-card-config .voice-card-header {
-  background: var(--bg-elev);
-  color: var(--fg-dim);
-  border-bottom: 1px dashed var(--fg-rule);
-}
-.voice-card-v2.voice-card-config .voice-card-name,
-.voice-card-v2.voice-card-config .voice-card-icon {
-  color: var(--fg-dim);
-}
