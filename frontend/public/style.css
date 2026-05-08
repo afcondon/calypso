@@ -1387,8 +1387,11 @@ body::before {
 }
 
 .voice-stack-fanned {
-  width: auto;
-  flex: 1 1 100%;
+  /* Vertical fan: cards slide DOWN into a single 14rem column,     */
+  /* keeping their stack order top-to-bottom (front at top).  Other */
+  /* stacks stay in place; the fanned column just grows taller.     */
+  width: 14rem;
+  height: auto !important;     /* override the inline collapsed-height */
   background: rgba(0, 0, 0, 0.85);
   border: 1px solid var(--fg);
   border-radius: 6px;
@@ -1398,9 +1401,9 @@ body::before {
 }
 
 .voice-stack-fan-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
-  gap: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
 }
 
 /* Config stack: dashed accent on the header instead of stack colour, */
