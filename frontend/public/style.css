@@ -1585,16 +1585,28 @@ body::before {
   border-bottom: 1px solid var(--fg-dim);
 }
 
-/* Reply / error scaffold area — empty today, will host compile errors
-   and dispatcher replies once cue=compile arrives. */
+/* Reply area — shows the latest daemon reply for the cell being
+   edited.  Wired today; will gate close on compile error once cue =
+   compile arrives. */
 .voice-edit-replies {
   padding: 0.6rem 1.4rem;
-  min-height: 1.2rem;
+  min-height: 1.6rem;
   background: var(--bg);
-  color: var(--fg-dim);
+  color: var(--fg);
   font-family: var(--mono);
   font-size: 0.85rem;
   border-bottom: 1px solid var(--fg-dim);
+}
+
+.voice-edit-reply-text {
+  margin: 0;
+  white-space: pre-wrap;
+  color: var(--fg);
+}
+
+.voice-edit-replies-empty {
+  color: var(--fg-dim);
+  font-style: italic;
 }
 
 /* Footer: cue + play, larger than small-card footer to match scale. */

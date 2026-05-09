@@ -796,11 +796,12 @@ handleAction = case _ of
   CloseEditor ->
     H.modify_ _ { editingCard = Nothing }
   CommitEdit cellId src -> do
-    -- Fire the cell, then close the modal.  When compile-armed Cue
-    -- arrives this will become "compile + cue", and we'll refuse close
-    -- on compile error.  For today: fire-and-forget like the small card.
+    -- Fire the cell.  Don't auto-close — keep the modal open so the
+    -- user sees the reply land in the in-modal reply area and can
+    -- iterate (type → fire → see → type → fire).  Close manually via
+    -- × or Esc once satisfied.  When compile-armed Cue arrives we'll
+    -- be able to gate close on compile error here.
     handleAction (FireCell cellId src)
-    H.modify_ _ { editingCard = Nothing }
   ScheduleCompile -> do
     s <- H.get
     case s.pendingCompile of
@@ -2518,11 +2519,24 @@ renderEditingModal state = case state.editingCard of
                       }
                       (modalEditorOutput c.id)
                   ]
-              -- Error / reply scaffold — inert today.  When cue ⇒
-              -- compile lands, compile errors get rendered here and
-              -- prevent close.
+              -- Reply area — shows the latest daemon reply for this
+              -- cell, mirroring renderHylographRow's pattern.  When
+              -- cue ⇒ compile lands, compile errors get rendered here
+              -- and gate close.  Today: just the "OK: …" / error line
+              -- from the most recent fire.
               , HH.div [ HP.class_ (H.ClassName "voice-edit-replies") ]
-                  []
+                  ( case Map.lookup c.id state.cellResults of
+                      Just reply ->
+                        [ HH.pre
+                            [ HP.class_ (H.ClassName "voice-edit-reply-text") ]
+                            [ HH.text reply ]
+                        ]
+                      Nothing ->
+                        [ HH.span
+                            [ HP.class_ (H.ClassName "voice-edit-replies-empty") ]
+                            [ HH.text "no replies yet" ]
+                        ]
+                  )
               , HH.div [ HP.class_ (H.ClassName "voice-card-footer voice-edit-footer") ]
                   ( if isConfig
                       then
