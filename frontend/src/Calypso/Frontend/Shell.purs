@@ -423,6 +423,14 @@ type State =
                                       -- the modal shows "compiling…" while
                                       -- a cellId is in this set so a long
                                       -- wait doesn't read as a hang.
+  , cellMvoice :: Map String String   -- cellId → mvoice name (the
+                                      -- purerl-tidal binding to install
+                                      -- the cell's Pattern into).  PR3:
+                                      -- in-session only; default per-cell
+                                      -- is extractVoiceName(source).  Edit
+                                      -- via small input field in modal
+                                      -- header.  Persists per-session,
+                                      -- not across server restarts (yet).
   }
 
 type Slots =
@@ -493,7 +501,8 @@ data Action
   -- and Play wires into the voice install.  Backend integrated test
   -- on per-cell-compile branch (purerl-tidal).
   | CueCell String String                   -- cellId, source
-  | PlayArmed String String                 -- cellId, moduleName
+  | PlayArmed String String String          -- cellId, mvoiceName, moduleName
+  | UpdateCellMvoice String String          -- cellId, new mvoice name
   | Startup
 
 initialState :: forall i. i -> State
@@ -544,6 +553,7 @@ initialState _ =
   , editingCard: Nothing
   , armedModule: Map.empty
   , cuePending: Set.empty
+  , cellMvoice: Map.empty
   }
 
 debounceMs :: Milliseconds
@@ -851,15 +861,26 @@ handleAction = case _ of
                 H.modify_ \s -> s
                   { armedModule = Map.insert cellId modName s.armedModule }
               Nothing -> pure unit
-  PlayArmed cellId moduleName -> do
-    -- Invoke the previously-cued module.  Reply lands in cellResults
-    -- as text — the modal renders it in the reply area.  No state
-    -- mutation beyond that today; PR3 will wire this into voice install.
-    result <- evalSource ("play-armed " <> moduleName)
+  PlayArmed cellId mvoiceName moduleName -> do
+    -- PR3: Install the previously-cued module's pattern into the
+    -- named mvoice on the backend.  Backend looks up the binding
+    -- registered for mvoiceName via `bind` and hands the loaded
+    -- Pattern String to tidal_voice_sup:set_voice_pat.  Pattern
+    -- starts firing through the rig immediately.
+    result <- evalSource
+      ("play-armed " <> mvoiceName <> " " <> moduleName)
     case result of
       Left err -> H.modify_ _ { transportError = Just err }
       Right reply ->
         H.modify_ \s -> s { cellResults = Map.insert cellId reply s.cellResults }
+  UpdateCellMvoice cellId name -> do
+    -- The mvoice name binds the cell's pattern to a purerl-tidal
+    -- voice (set up via `bind`).  Empty string clears (defaults
+    -- back to extractVoiceName at fire time).
+    let trimmed = Str.trim name
+    if Str.null trimmed
+      then H.modify_ \s -> s { cellMvoice = Map.delete cellId s.cellMvoice }
+      else H.modify_ \s -> s { cellMvoice = Map.insert cellId trimmed s.cellMvoice }
   ScheduleCompile -> do
     s <- H.get
     case s.pendingCompile of
@@ -2539,6 +2560,10 @@ renderEditingModal state = case state.editingCard of
     Just c ->
       let
         voiceName = extractVoiceName c.source
+        -- The mvoice the cell will install into when Play is pressed.
+        -- Override via the small input in the modal header; falls back
+        -- to the heuristic-extracted first identifier from the source.
+        mvoice = fromMaybe voiceName (Map.lookup c.id state.cellMvoice)
         typeIcon = inferTypeIcon c.source
         color = cellInColor state.stackOrder c.id
         sec = cellSection c
@@ -2567,8 +2592,17 @@ renderEditingModal state = case state.editingCard of
               [ HH.div [ HP.class_ (H.ClassName "voice-card-header") ]
                   [ HH.span [ HP.class_ (H.ClassName "voice-card-icon") ]
                       [ HH.text typeIcon ]
-                  , HH.span [ HP.class_ (H.ClassName "voice-card-name") ]
-                      [ HH.text voiceName ]
+                  -- Mvoice input: small text field showing the
+                  -- purerl-tidal binding name the cell installs
+                  -- into.  Default = extractVoiceName(source);
+                  -- editable inline.  Empty value clears the
+                  -- override (falls back to the default).
+                  , HH.input
+                      [ HP.class_ (H.ClassName "voice-edit-mvoice")
+                      , HP.value mvoice
+                      , HP.title "mvoice — the binding to install this cell's pattern into"
+                      , HE.onValueInput \v -> UpdateCellMvoice c.id v
+                      ]
                   , HH.button
                       [ HP.class_ (H.ClassName "voice-edit-close")
                       , HE.onClick \_ -> CloseEditor
@@ -2662,7 +2696,7 @@ renderEditingModal state = case state.editingCard of
                               , HP.disabled (not playEnabled)
                               ]
                               <> case armed of
-                                   Just m  -> [ HE.onClick \_ -> PlayArmed c.id m ]
+                                   Just m  -> [ HE.onClick \_ -> PlayArmed c.id mvoice m ]
                                    Nothing -> []
                             )
                             [ HH.text "▶" ]
