@@ -1692,7 +1692,7 @@ parseCueReply reply = Str.trim <$> Str.stripPrefix (Pattern "OK: cue ") reply
 -- | back through deep history.
 historyOpacity :: Int -> String
 historyOpacity idx =
-  let f = max 0.18 (1.0 - Int.toNumber idx * 0.04)
+  let f = max 0.12 (1.0 - Int.toNumber idx * 0.10)
   in show f
 
 decorateErrors
@@ -2677,37 +2677,14 @@ renderEditingModal state = case state.editingCard of
                       }
                       (modalEditorOutput c.id)
                   ]
-              -- Reply area — shows the latest daemon reply for this
-              -- cell, mirroring renderHylographRow's pattern.  Cold
-              -- compile takes ~7s today, so we show "compiling…" while
-              -- the cue is in flight (cuePending) so the modal doesn't
-              -- read as hung.  Steady-state replies (OK / ERR) land
-              -- here once the verb returns.
-              , HH.div [ HP.class_ (H.ClassName "voice-edit-replies") ]
-                  ( if Set.member c.id state.cuePending
-                      then
-                        [ HH.span
-                            [ HP.class_ (H.ClassName "voice-edit-pending") ]
-                            [ HH.text "compiling… (cold compile is ~7s today)" ]
-                        ]
-                      else case Map.lookup c.id state.cellResults of
-                        Just reply ->
-                          [ HH.pre
-                              [ HP.class_ (H.ClassName "voice-edit-reply-text") ]
-                              [ HH.text reply ]
-                          ]
-                        Nothing ->
-                          [ HH.span
-                              [ HP.class_ (H.ClassName "voice-edit-replies-empty") ]
-                              [ HH.text "no replies yet" ]
-                          ]
-                  )
-              -- Per-card history.  Every successful Cue prepends the
-              -- (body, module) pair.  Click a row to re-arm that
-              -- version — the module is still loaded so this is a
-              -- cache hit (instant).  Most-recent first; the row at
-              -- the top is the currently-armed entry (highlighted);
-              -- subsequent rows fade to black via opacity gradient.
+              -- Per-card history — sits directly under the editor with
+              -- no separator, so the live pattern flows visually into
+              -- the version log.  Most-recent first; the row at the
+              -- top is the currently-armed entry (highlighted with a
+              -- ▶ pip); subsequent rows fade to near-black via the
+              -- opacity gradient (steeper than the original — Andrew's
+              -- request).  Click any → load body + re-arm (module's
+              -- still in BEAM memory, so cache hit, instant).
               , let history = fromMaybe [] (Map.lookup c.id state.cellHistory)
                     armedMod = Map.lookup c.id state.armedModule
                 in if Array.null history
@@ -2730,6 +2707,31 @@ renderEditingModal state = case state.editingCard of
                                      [ HH.text h.body ]
                                  ])
                           history)
+              -- Reply / status line — sits just above Cue/Play so the
+              -- relationship is visually direct: "this is what the
+              -- last commit returned".  Compact (single-row when the
+              -- text fits); compile errors that span multiple lines
+              -- still wrap and grow the area as needed.  "compiling…"
+              -- placeholder while a cue is in flight.
+              , HH.div [ HP.class_ (H.ClassName "voice-edit-replies") ]
+                  ( if Set.member c.id state.cuePending
+                      then
+                        [ HH.span
+                            [ HP.class_ (H.ClassName "voice-edit-pending") ]
+                            [ HH.text "compiling…" ]
+                        ]
+                      else case Map.lookup c.id state.cellResults of
+                        Just reply ->
+                          [ HH.pre
+                              [ HP.class_ (H.ClassName "voice-edit-reply-text") ]
+                              [ HH.text reply ]
+                          ]
+                        Nothing ->
+                          [ HH.span
+                              [ HP.class_ (H.ClassName "voice-edit-replies-empty") ]
+                              [ HH.text " " ]  -- empty placeholder; no "no replies yet" stub
+                          ]
+                  )
               , HH.div [ HP.class_ (H.ClassName "voice-card-footer voice-edit-footer") ]
                   ( if isConfig
                       then

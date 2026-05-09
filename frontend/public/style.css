@@ -1618,7 +1618,10 @@ body::before {
   background: rgba(0, 0, 0, 0.15);
 }
 
-/* Editor body: holds the CodeMirror slot; min height for legibility. */
+/* Editor body: holds the CodeMirror slot; min height for legibility.
+   No bottom separator — the editor flows directly into the history
+   list below it (single visual block of "the live pattern + the
+   versions it came from"). */
 .voice-edit-body {
   padding: 1rem 1.4rem;
   min-height: 8rem;
@@ -1626,20 +1629,20 @@ body::before {
   color: var(--fg);
   font-family: var(--mono);
   font-size: 0.95rem;
-  border-bottom: 1px solid var(--fg-dim);
 }
 
-/* Reply area — shows the latest daemon reply for the cell being
-   edited.  Wired today; will gate close on compile error once cue =
-   compile arrives. */
+/* Status / reply line — sits directly above the Cue/Play buttons so
+   the relationship is visually direct.  Single-row when the reply
+   text fits; wraps and grows for multi-line compile errors.  Hairline
+   top border separates it from the history list above. */
 .voice-edit-replies {
-  padding: 0.6rem 1.4rem;
-  min-height: 1.6rem;
+  padding: 0.3rem 1.4rem;
+  min-height: 1.2rem;
   background: var(--bg);
   color: var(--fg);
   font-family: var(--mono);
   font-size: 0.85rem;
-  border-bottom: 1px solid var(--fg-dim);
+  border-top: 1px solid var(--fg-rule);
 }
 
 .voice-edit-reply-text {
@@ -1666,15 +1669,17 @@ body::before {
    row to re-arm that version (instant — module is still loaded).
    Opacity-decays via inline style so older entries fade to near-
    black.  The currently-armed row is highlighted with a pip. */
+/* Sits flush under the editor with no top border so the live pattern
+   flows visually into the version log.  No bottom border either —
+   the reply line below handles its own divider against the footer. */
 .voice-edit-history {
-  padding: 0.4rem 1.4rem 0.4rem 0.6rem;
+  padding: 0.2rem 1.4rem 0.4rem 0.6rem;
   max-height: 14rem;
   overflow-y: auto;
-  border-bottom: 1px solid var(--fg-rule);
   background: var(--bg);
   font-family: var(--mono);
   font-size: 0.85rem;
-  line-height: 1.4;
+  line-height: 1.35;
 }
 
 .voice-edit-history-row {
