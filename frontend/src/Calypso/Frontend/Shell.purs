@@ -2600,8 +2600,13 @@ renderEditingModal state = case state.editingCard of
                   , HH.input
                       [ HP.class_ (H.ClassName "voice-edit-mvoice")
                       , HP.value mvoice
-                      , HP.title "mvoice — the binding to install this cell's pattern into"
-                      , HE.onValueInput \v -> UpdateCellMvoice c.id v
+                      , HP.title "mvoice — the binding to install this cell's pattern into.  Commit on blur or Enter."
+                      -- onValueChange fires on commit (blur/Enter), not
+                      -- every keystroke.  This avoids the controlled-
+                      -- input race where Halogen re-renders mid-typing
+                      -- and snaps HP.value back, eating characters.
+                      -- Same pattern the topbar BPM widget uses.
+                      , HE.onValueChange \v -> UpdateCellMvoice c.id v
                       ]
                   , HH.button
                       [ HP.class_ (H.ClassName "voice-edit-close")
