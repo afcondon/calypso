@@ -404,11 +404,18 @@ type State =
                                       -- this tracks whether it's
                                       -- fanned out
   , colorPickerOpen :: Maybe String   -- cellId whose picker is open
+  , editingCard :: Maybe String       -- cellId currently popped open
+                                      -- in the modal editor, if any.
+                                      -- One-at-a-time; backdrop /
+                                      -- Esc / Cmd-Enter close it.
+                                      -- See docs/voice-cells-design.md
+                                      -- "in-card editing" section.
   }
 
 type Slots =
   ( moduleEditor :: H.Slot Editor.Query Editor.Output Unit
   , cellEditor :: H.Slot Editor.Query Editor.Output String
+  , editorModal :: H.Slot Editor.Query Editor.Output Unit
   )
 
 _moduleEditor :: Proxy "moduleEditor"
@@ -416,6 +423,9 @@ _moduleEditor = Proxy
 
 _cellEditor :: Proxy "cellEditor"
 _cellEditor = Proxy
+
+_editorModal :: Proxy "editorModal"
+_editorModal = Proxy
 
 data Action
   = Compile
@@ -461,6 +471,9 @@ data Action
                                             -- fan / restack based
                                             -- on current stack
                                             -- context
+  | OpenEditor String                       -- click on small card body
+  | CloseEditor                             -- backdrop / Esc / cancel
+  | CommitEdit String String                -- Cmd-Enter from modal: fire + close
   | Startup
 
 initialState :: forall i. i -> State
@@ -508,6 +521,7 @@ initialState _ =
   , fannedStack: Nothing
   , configStackFanned: false
   , colorPickerOpen: Nothing
+  , editingCard: Nothing
   }
 
 debounceMs :: Milliseconds
@@ -774,6 +788,19 @@ handleAction = case _ of
                         color
                         st.stackOrder
                     }
+  OpenEditor cellId -> do
+    -- One-at-a-time: opening a new card replaces any in-flight edit.
+    -- Mirroring is automatic — the modal's editor emits Editor.Changed
+    -- which we route to CellChanged, the existing per-cell source path.
+    H.modify_ _ { editingCard = Just cellId }
+  CloseEditor ->
+    H.modify_ _ { editingCard = Nothing }
+  CommitEdit cellId src -> do
+    -- Fire the cell, then close the modal.  When compile-armed Cue
+    -- arrives this will become "compile + cue", and we'll refuse close
+    -- on compile error.  For today: fire-and-forget like the small card.
+    handleAction (FireCell cellId src)
+    H.modify_ _ { editingCard = Nothing }
   ScheduleCompile -> do
     s <- H.get
     case s.pendingCompile of
@@ -1299,6 +1326,12 @@ subscribeWindowShortcuts = do
       case WKey.fromEvent evt of
         Nothing -> pure unit
         Just kev -> do
+          -- Escape: close the editing modal if one is open.  No
+          -- modifier required.  CodeMirror doesn't bind Escape by
+          -- default, so the keydown bubbles to window.  CloseEditor
+          -- is a no-op when nothing is being edited.
+          when (WKey.key kev == "Escape") do
+            HS.notify listener CloseEditor
           let mod = WKey.metaKey kev || WKey.ctrlKey kev
           when mod do
             case digitFor (WKey.key kev) of
@@ -1612,6 +1645,7 @@ render state =
             <> (if state.visibility.showVoiceCells then [ renderVoiceCellsColumn state ] else [])
         )
     , renderErrorPanel state
+    , renderEditingModal state
     ]
 
 renderPenBanner :: forall m. State -> H.ComponentHTML Action Slots m
@@ -2347,7 +2381,11 @@ renderVoiceCard state kind c =
                   [ HH.text "●" ]
               ])
         <> (if isCompact then [] else
-            [ HH.div [ HP.class_ (H.ClassName "voice-card-body") ]
+            [ HH.div
+                [ HP.class_ (H.ClassName "voice-card-body")
+                , HE.onClick \_ -> OpenEditor c.id
+                , HP.title "click to edit"
+                ]
                 [ HH.text bodyPreview ]
             , HH.div [ HP.class_ (H.ClassName "voice-card-footer") ]
                 ( if isConfig
@@ -2414,6 +2452,114 @@ renderColorPicker cellId current =
           [ HH.text (case n of
               Nothing -> "∅"
               Just _ -> "") ]
+
+-- | Modal pop-out editor.  When `editingCard = Just id`, renders a
+-- | dim backdrop + a 3×-scale card on top, hosting the existing
+-- | CodeMirror Editor component.  The original small card stays in
+-- | place underneath (probably hidden by the overlay) — keystrokes
+-- | mirror back to it via Editor.Changed → CellChanged so a commit
+-- | from the modal is just "fire the cell, then close".
+-- |
+-- | Backdrop click = cancel.  Cmd-Enter inside the editor → Submitted
+-- | → CommitEdit.  An error/reply scaffold is in the layout but inert
+-- | until cue/compile semantics arrive.
+renderEditingModal
+  :: forall m. MonadAff m
+  => State -> H.ComponentHTML Action Slots m
+renderEditingModal state = case state.editingCard of
+  Nothing -> HH.text ""
+  Just cellId -> case Array.find (\c -> c.id == cellId) state.cells of
+    Nothing -> HH.text ""
+    Just c ->
+      let
+        voiceName = extractVoiceName c.source
+        typeIcon = inferTypeIcon c.source
+        color = cellInColor state.stackOrder c.id
+        sec = cellSection c
+        isConfig = sec == SecConfig || sec == SecVoices
+        colorClass =
+          if isConfig then " stack-config"
+          else case color of
+            Just n -> " stack-color-" <> show n
+            Nothing -> " stack-color-none"
+      in
+        HH.div [ HP.class_ (H.ClassName "voice-edit-overlay") ]
+          [ -- Backdrop is a SIBLING of the modal, decorative only:
+            -- pointer-events: none lets wheel scroll and clicks reach
+            -- the columns underneath (vocabulary / mini-notation /
+            -- config) so you can consult them while editing.  Close
+            -- via × button, Esc, or commit (cue / play / Cmd-Enter).
+            HH.div
+              [ HP.class_ (H.ClassName "voice-edit-backdrop") ]
+              []
+          , HH.div
+              [ HP.class_
+                  ( H.ClassName
+                      ("voice-edit-modal voice-card-v2" <> colorClass)
+                  )
+              ]
+              [ HH.div [ HP.class_ (H.ClassName "voice-card-header") ]
+                  [ HH.span [ HP.class_ (H.ClassName "voice-card-icon") ]
+                      [ HH.text typeIcon ]
+                  , HH.span [ HP.class_ (H.ClassName "voice-card-name") ]
+                      [ HH.text voiceName ]
+                  , HH.button
+                      [ HP.class_ (H.ClassName "voice-edit-close")
+                      , HE.onClick \_ -> CloseEditor
+                      , HP.title "close (Esc)"
+                      ]
+                      [ HH.text "×" ]
+                  ]
+              , HH.div [ HP.class_ (H.ClassName "voice-edit-body") ]
+                  [ HH.slot _editorModal unit Editor.component
+                      { initialDoc: c.source
+                      , tag: "voice-edit"
+                      , vocabulary: state.completions
+                      }
+                      (modalEditorOutput c.id)
+                  ]
+              -- Error / reply scaffold — inert today.  When cue ⇒
+              -- compile lands, compile errors get rendered here and
+              -- prevent close.
+              , HH.div [ HP.class_ (H.ClassName "voice-edit-replies") ]
+                  []
+              , HH.div [ HP.class_ (H.ClassName "voice-card-footer voice-edit-footer") ]
+                  ( if isConfig
+                      then
+                        [ HH.button
+                            [ HP.class_ (H.ClassName "voice-card-btn voice-card-play")
+                            , HE.onClick \_ -> CommitEdit c.id c.source
+                            , HP.title "fire this config statement (Cmd-Enter)"
+                            ]
+                            [ HH.text "▶" ]
+                        ]
+                      else
+                        [ HH.button
+                            [ HP.class_ (H.ClassName "voice-card-btn voice-card-cue")
+                            , HE.onClick \_ -> CommitEdit c.id c.source
+                            , HP.title "cue (compile-armed in future; fires immediately today)"
+                            ]
+                            [ HH.text "cue" ]
+                        , HH.button
+                            [ HP.class_ (H.ClassName "voice-card-btn voice-card-play")
+                            , HE.onClick \_ -> CommitEdit c.id c.source
+                            , HP.title "play (Cmd-Enter)"
+                            ]
+                            [ HH.text "▶" ]
+                        ]
+                  )
+              ]
+          ]
+  where
+    -- The modal's editor and the small card share a cell id, so we
+    -- route Changed through the existing CellChanged handler — that's
+    -- the mirror.  Submitted (Cmd-Enter) commits and closes.
+    modalEditorOutput cid = case _ of
+      Editor.Changed src -> CellChanged cid src
+      Editor.Submitted src -> CommitEdit cid src
+      Editor.AcceptHunkO pid idx -> AcceptHunk pid idx
+      Editor.RejectHunkO pid idx -> RejectHunk pid idx
+      Editor.MoveRequested -> CloseEditor   -- Mod-Shift-Enter: just close
 
 -- | Cheap heuristic: pick a glyph based on the first verb/word of
 -- | the cell's source.  Type icons are vector-graphics-y placeholders
