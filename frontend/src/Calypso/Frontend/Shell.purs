@@ -431,6 +431,18 @@ type State =
                                       -- via small input field in modal
                                       -- header.  Persists per-session,
                                       -- not across server restarts (yet).
+  , cellHistory :: Map String (Array { body :: String, modul :: String })
+                                      -- Per-cell version log: every
+                                      -- successful Cue prepends a
+                                      -- {body, module} entry; module
+                                      -- name encodes the source hash.
+                                      -- Modules stay loaded so re-
+                                      -- arming a previous entry is a
+                                      -- cache hit (sub-ms).  Dedupe
+                                      -- by modul — re-cuing identical
+                                      -- source moves entry to top
+                                      -- rather than piling up.
+                                      -- Endless; in-session only.
   }
 
 type Slots =
@@ -503,6 +515,12 @@ data Action
   | CueCell String String                   -- cellId, source
   | PlayArmed String String String          -- cellId, mvoiceName, moduleName
   | UpdateCellMvoice String String          -- cellId, new mvoice name
+  | LoadHistoryEntry String String String   -- cellId, body, moduleName.
+                                            -- Re-selects a previous cued
+                                            -- version: replaces editor doc,
+                                            -- writes through to cell source,
+                                            -- re-arms.  Cache hit on the
+                                            -- module since it's still loaded.
   | Startup
 
 initialState :: forall i. i -> State
@@ -554,6 +572,7 @@ initialState _ =
   , armedModule: Map.empty
   , cuePending: Set.empty
   , cellMvoice: Map.empty
+  , cellHistory: Map.empty
   }
 
 debounceMs :: Milliseconds
@@ -857,9 +876,19 @@ handleAction = case _ of
             H.modify_ \s -> s
               { cellResults = Map.insert cellId reply s.cellResults }
             case parseCueReply reply of
-              Just modName ->
-                H.modify_ \s -> s
-                  { armedModule = Map.insert cellId modName s.armedModule }
+              Just modName -> do
+                -- Arm + log history.  Dedupe by module name: if this
+                -- exact module already exists in the cell's history,
+                -- pull the entry to the top rather than piling up.
+                let entry = { body: cleaned, modul: modName }
+                H.modify_ \s ->
+                  let existing = fromMaybe [] (Map.lookup cellId s.cellHistory)
+                      filtered = Array.filter (\e -> e.modul /= modName) existing
+                      updated  = Array.cons entry filtered
+                  in s
+                    { armedModule = Map.insert cellId modName s.armedModule
+                    , cellHistory = Map.insert cellId updated s.cellHistory
+                    }
               Nothing -> pure unit
   PlayArmed cellId mvoiceName moduleName -> do
     -- PR3: Install the previously-cued module's pattern into the
@@ -881,6 +910,18 @@ handleAction = case _ of
     if Str.null trimmed
       then H.modify_ \s -> s { cellMvoice = Map.delete cellId s.cellMvoice }
       else H.modify_ \s -> s { cellMvoice = Map.insert cellId trimmed s.cellMvoice }
+  LoadHistoryEntry cellId body modul -> do
+    -- Re-select a previous cued version.  The module is still
+    -- loaded (modules stay live for the BEAM session), so arming
+    -- is just a Map.insert — no compile, no WS round-trip.
+    -- Three things have to update in sync:
+    --   1. The modal editor's document (Editor.ReplaceContent)
+    --   2. The cell's source-of-truth in state.cells (so the small
+    --      card body preview stays consistent)
+    --   3. armedModule[cellId] = modul (so Play wires to this version)
+    void $ H.tell _editorModal unit (Editor.ReplaceContent body)
+    handleAction (CellChanged cellId body)
+    H.modify_ \s -> s { armedModule = Map.insert cellId modul s.armedModule }
   ScheduleCompile -> do
     s <- H.get
     case s.pendingCompile of
@@ -1644,6 +1685,15 @@ parseCellNumber s = Str.stripPrefix (Pattern "c") s >>= Int.fromString
 -- | text in cellResults).
 parseCueReply :: String -> Maybe String
 parseCueReply reply = Str.trim <$> Str.stripPrefix (Pattern "OK: cue ") reply
+
+-- | Opacity for a history row at depth `idx` (0 = most recent).
+-- | Linear decay with a floor so rows are always slightly visible —
+-- | "endless fading to black" without losing the option to scroll
+-- | back through deep history.
+historyOpacity :: Int -> String
+historyOpacity idx =
+  let f = max 0.18 (1.0 - Int.toNumber idx * 0.04)
+  in show f
 
 decorateErrors
   :: forall o m
@@ -2652,6 +2702,34 @@ renderEditingModal state = case state.editingCard of
                               [ HH.text "no replies yet" ]
                           ]
                   )
+              -- Per-card history.  Every successful Cue prepends the
+              -- (body, module) pair.  Click a row to re-arm that
+              -- version — the module is still loaded so this is a
+              -- cache hit (instant).  Most-recent first; the row at
+              -- the top is the currently-armed entry (highlighted);
+              -- subsequent rows fade to black via opacity gradient.
+              , let history = fromMaybe [] (Map.lookup c.id state.cellHistory)
+                    armedMod = Map.lookup c.id state.armedModule
+                in if Array.null history
+                     then HH.text ""
+                     else HH.div [ HP.class_ (H.ClassName "voice-edit-history") ]
+                       (Array.mapWithIndex
+                          (\idx h ->
+                            let isArmed = Just h.modul == armedMod
+                                cls = "voice-edit-history-row"
+                                  <> if isArmed then " is-armed" else ""
+                            in HH.div
+                                 [ HP.class_ (H.ClassName cls)
+                                 , HP.style ("opacity: " <> historyOpacity idx)
+                                 , HP.title h.modul
+                                 , HE.onClick \_ -> LoadHistoryEntry c.id h.body h.modul
+                                 ]
+                                 [ HH.span [ HP.class_ (H.ClassName "voice-edit-history-marker") ]
+                                     [ HH.text (if isArmed then "▶" else " ") ]
+                                 , HH.span [ HP.class_ (H.ClassName "voice-edit-history-body") ]
+                                     [ HH.text h.body ]
+                                 ])
+                          history)
               , HH.div [ HP.class_ (H.ClassName "voice-card-footer voice-edit-footer") ]
                   ( if isConfig
                       then

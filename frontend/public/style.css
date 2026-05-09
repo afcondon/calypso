@@ -1662,6 +1662,54 @@ body::before {
   text-shadow: 0 0 4px rgba(255, 184, 74, 0.55);
 }
 
+/* Per-card history.  Each successful Cue prepends a row; click any
+   row to re-arm that version (instant — module is still loaded).
+   Opacity-decays via inline style so older entries fade to near-
+   black.  The currently-armed row is highlighted with a pip. */
+.voice-edit-history {
+  padding: 0.4rem 1.4rem 0.4rem 0.6rem;
+  max-height: 14rem;
+  overflow-y: auto;
+  border-bottom: 1px solid var(--fg-rule);
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.voice-edit-history-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.1rem 0.3rem;
+  cursor: pointer;
+  border-radius: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.voice-edit-history-row:hover {
+  opacity: 1 !important;
+  background: rgba(65, 255, 124, 0.08);
+}
+.voice-edit-history-row.is-armed {
+  background: rgba(65, 255, 124, 0.12);
+}
+
+.voice-edit-history-marker {
+  width: 0.9rem;
+  flex: 0 0 auto;
+  color: var(--fg-bright);
+  text-align: center;
+}
+
+.voice-edit-history-body {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg);
+}
+
 /* Footer: cue + play, larger than small-card footer to match scale. */
 .voice-edit-footer {
   padding: 0.7rem 1.4rem;
