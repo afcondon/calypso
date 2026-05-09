@@ -1354,6 +1354,22 @@ body::before {
   border-color: var(--fg);
 }
 
+/* Play button is disabled until the corresponding cell has been
+   successfully cued (compiled + hot-loaded on the backend).  Visually
+   dim the colour and remove the hover affordance; the actual click
+   handler is omitted in PureScript when not armed. */
+.voice-card-btn.is-disabled,
+.voice-card-btn:disabled {
+  color: var(--fg-dim);
+  border-color: var(--fg-rule);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.voice-card-btn.is-disabled:hover,
+.voice-card-btn:disabled:hover {
+  background: transparent;
+}
+
 /* Compact (header-only) variant: behind cards in collapsed stacks. */
 .voice-card-compact {
   border-radius: 6px 6px 4px 4px;
@@ -1409,7 +1425,8 @@ body::before {
   border-bottom: 1px dashed var(--amber);
 }
 .voice-card-v2.stack-config .voice-card-icon,
-.voice-card-v2.stack-config .voice-card-name {
+.voice-card-v2.stack-config .voice-card-name,
+.voice-card-v2.stack-config .voice-edit-mvoice {
   color: var(--amber);
 }
 /* (No fanned-config wrapper styling — the dashed amber headers on  */
@@ -1426,7 +1443,8 @@ body::before {
   border: 1px dashed var(--fg-dim);
 }
 .voice-card-v2.stack-color-none .voice-card-icon,
-.voice-card-v2.stack-color-none .voice-card-name {
+.voice-card-v2.stack-color-none .voice-card-name,
+.voice-card-v2.stack-color-none .voice-edit-mvoice {
   color: var(--fg-dim);
 }
 .voice-card-v2.stack-color-none .voice-card-swatch {
@@ -1554,6 +1572,32 @@ body::before {
   font-size: 1.2rem;
 }
 
+/* Mvoice input — small text field in the modal header showing the
+   purerl-tidal binding name the cell will install its pattern into.
+   Sits inline with the icon; empty/transparent background blends with
+   the coloured header.  Text colour inherits from the header so the
+   per-stack-state overrides below (stack-color-none, stack-config)
+   apply to the input as well.  Border / focus colours adapt similarly
+   via currentColor. */
+.voice-edit-mvoice {
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 1.2rem;
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 0.1rem 0.4rem;
+  min-width: 6rem;
+  max-width: 14rem;
+  opacity: 0.85;
+}
+.voice-edit-mvoice:focus {
+  outline: none;
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
+}
+
 /* Close × button on the right of the header. */
 .voice-edit-close {
   margin-left: auto;
@@ -1574,7 +1618,10 @@ body::before {
   background: rgba(0, 0, 0, 0.15);
 }
 
-/* Editor body: holds the CodeMirror slot; min height for legibility. */
+/* Editor body: holds the CodeMirror slot; min height for legibility.
+   No bottom separator — the editor flows directly into the history
+   list below it (single visual block of "the live pattern + the
+   versions it came from"). */
 .voice-edit-body {
   padding: 1rem 1.4rem;
   min-height: 8rem;
@@ -1582,20 +1629,20 @@ body::before {
   color: var(--fg);
   font-family: var(--mono);
   font-size: 0.95rem;
-  border-bottom: 1px solid var(--fg-dim);
 }
 
-/* Reply area — shows the latest daemon reply for the cell being
-   edited.  Wired today; will gate close on compile error once cue =
-   compile arrives. */
+/* Status / reply line — sits directly above the Cue/Play buttons so
+   the relationship is visually direct.  Single-row when the reply
+   text fits; wraps and grows for multi-line compile errors.  Hairline
+   top border separates it from the history list above. */
 .voice-edit-replies {
-  padding: 0.6rem 1.4rem;
-  min-height: 1.6rem;
+  padding: 0.3rem 1.4rem;
+  min-height: 1.2rem;
   background: var(--bg);
   color: var(--fg);
   font-family: var(--mono);
   font-size: 0.85rem;
-  border-bottom: 1px solid var(--fg-dim);
+  border-top: 1px solid var(--fg-rule);
 }
 
 .voice-edit-reply-text {
@@ -1607,6 +1654,65 @@ body::before {
 .voice-edit-replies-empty {
   color: var(--fg-dim);
   font-style: italic;
+}
+
+/* "compiling…" text shown while a cue is in flight on the backend.
+   Cold compile is ~7s today; the steady glow telegraphs work in
+   progress so the modal doesn't read as hung. */
+.voice-edit-pending {
+  color: var(--amber);
+  font-style: italic;
+  text-shadow: 0 0 4px rgba(255, 184, 74, 0.55);
+}
+
+/* Per-card history.  Each successful Cue prepends a row; click any
+   row to re-arm that version (instant — module is still loaded).
+   Opacity-decays via inline style so older entries fade to near-
+   black.  The currently-armed row is highlighted with a pip. */
+/* Sits flush under the editor with no top border so the live pattern
+   flows visually into the version log.  No bottom border either —
+   the reply line below handles its own divider against the footer. */
+.voice-edit-history {
+  padding: 0.2rem 1.4rem 0.4rem 0.6rem;
+  max-height: 14rem;
+  overflow-y: auto;
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
+.voice-edit-history-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.1rem 0.3rem;
+  cursor: pointer;
+  border-radius: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.voice-edit-history-row:hover {
+  opacity: 1 !important;
+  background: rgba(65, 255, 124, 0.08);
+}
+.voice-edit-history-row.is-armed {
+  background: rgba(65, 255, 124, 0.12);
+}
+
+.voice-edit-history-marker {
+  width: 0.9rem;
+  flex: 0 0 auto;
+  color: var(--fg-bright);
+  text-align: center;
+}
+
+.voice-edit-history-body {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg);
 }
 
 /* Footer: cue + play, larger than small-card footer to match scale. */

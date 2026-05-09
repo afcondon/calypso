@@ -24,7 +24,7 @@ import Data.Map (Map)
 import Data.Map as Map
 import Data.Int (toNumber)
 import Data.Int as Int
-import Data.Maybe (Maybe(..), fromMaybe, isNothing)
+import Data.Maybe (Maybe(..), fromMaybe, isJust, isNothing)
 import Data.Number as Number
 import Data.String.Pattern (Pattern(..))
 import Data.Traversable (for)
@@ -410,6 +410,39 @@ type State =
                                       -- Esc / Cmd-Enter close it.
                                       -- See docs/voice-cells-design.md
                                       -- "in-card editing" section.
+  , armedModule :: Map String String  -- cellId → loaded module name
+                                      -- ("M<hash>") set by a successful
+                                      -- Cue.  Play is enabled iff a cell
+                                      -- has an entry here.  PR2-phase:
+                                      -- the module exports `result :: Int`;
+                                      -- PR3 flips it to `pattern :: Pattern
+                                      -- String` and wires voice install.
+  , cuePending :: Set String          -- cellIds whose Cue is in flight.
+                                      -- Cold compile is ~7s today (PR4's
+                                      -- daemon path drops it to <300ms);
+                                      -- the modal shows "compiling…" while
+                                      -- a cellId is in this set so a long
+                                      -- wait doesn't read as a hang.
+  , cellMvoice :: Map String String   -- cellId → mvoice name (the
+                                      -- purerl-tidal binding to install
+                                      -- the cell's Pattern into).  PR3:
+                                      -- in-session only; default per-cell
+                                      -- is extractVoiceName(source).  Edit
+                                      -- via small input field in modal
+                                      -- header.  Persists per-session,
+                                      -- not across server restarts (yet).
+  , cellHistory :: Map String (Array { body :: String, modul :: String })
+                                      -- Per-cell version log: every
+                                      -- successful Cue prepends a
+                                      -- {body, module} entry; module
+                                      -- name encodes the source hash.
+                                      -- Modules stay loaded so re-
+                                      -- arming a previous entry is a
+                                      -- cache hit (sub-ms).  Dedupe
+                                      -- by modul — re-cuing identical
+                                      -- source moves entry to top
+                                      -- rather than piling up.
+                                      -- Endless; in-session only.
   }
 
 type Slots =
@@ -474,6 +507,20 @@ data Action
   | OpenEditor String                       -- click on small card body
   | CloseEditor                             -- backdrop / Esc / cancel
   | CommitEdit String String                -- Cmd-Enter from modal: fire + close
+  -- PR2 cue/play-armed flow.  Cue compiles + hot-loads on the
+  -- backend; Play invokes the loaded module's `result/0`.  When PR3
+  -- lands these become the canonical fire path (replacing FireCell)
+  -- and Play wires into the voice install.  Backend integrated test
+  -- on per-cell-compile branch (purerl-tidal).
+  | CueCell String String                   -- cellId, source
+  | PlayArmed String String String          -- cellId, mvoiceName, moduleName
+  | UpdateCellMvoice String String          -- cellId, new mvoice name
+  | LoadHistoryEntry String String String   -- cellId, body, moduleName.
+                                            -- Re-selects a previous cued
+                                            -- version: replaces editor doc,
+                                            -- writes through to cell source,
+                                            -- re-arms.  Cache hit on the
+                                            -- module since it's still loaded.
   | Startup
 
 initialState :: forall i. i -> State
@@ -522,6 +569,10 @@ initialState _ =
   , configStackFanned: false
   , colorPickerOpen: Nothing
   , editingCard: Nothing
+  , armedModule: Map.empty
+  , cuePending: Set.empty
+  , cellMvoice: Map.empty
+  , cellHistory: Map.empty
   }
 
 debounceMs :: Milliseconds
@@ -802,6 +853,75 @@ handleAction = case _ of
     -- × or Esc once satisfied.  When compile-armed Cue arrives we'll
     -- be able to gate close on compile error here.
     handleAction (FireCell cellId src)
+  CueCell cellId src -> do
+    -- PR2: send the source through the new `cue` verb on purerl-tidal.
+    -- Backend hashes, compiles to a generated PureScript module, hot-
+    -- loads, replies `OK: cue M<hash>` or `ERR cue: <stderr>`.  On
+    -- success we record the module name in armedModule; the modal's
+    -- Play button enables.  On error we just show the reply text.
+    let stmts = compositionStatements src
+        cleaned = Str.joinWith "\n" (map _.source stmts)
+    if Str.null cleaned
+      then H.modify_ \s -> s
+        { cellResults = Map.insert cellId "(no statements)" s.cellResults }
+      else do
+        -- Mark this cell's cue as in flight so the modal can render
+        -- "compiling…" instead of looking hung during the 7s cold path.
+        H.modify_ \s -> s { cuePending = Set.insert cellId s.cuePending }
+        result <- evalSource ("cue " <> cleaned)
+        H.modify_ \s -> s { cuePending = Set.delete cellId s.cuePending }
+        case result of
+          Left err -> H.modify_ _ { transportError = Just err }
+          Right reply -> do
+            H.modify_ \s -> s
+              { cellResults = Map.insert cellId reply s.cellResults }
+            case parseCueReply reply of
+              Just modName -> do
+                -- Arm + log history.  Dedupe by module name: if this
+                -- exact module already exists in the cell's history,
+                -- pull the entry to the top rather than piling up.
+                let entry = { body: cleaned, modul: modName }
+                H.modify_ \s ->
+                  let existing = fromMaybe [] (Map.lookup cellId s.cellHistory)
+                      filtered = Array.filter (\e -> e.modul /= modName) existing
+                      updated  = Array.cons entry filtered
+                  in s
+                    { armedModule = Map.insert cellId modName s.armedModule
+                    , cellHistory = Map.insert cellId updated s.cellHistory
+                    }
+              Nothing -> pure unit
+  PlayArmed cellId mvoiceName moduleName -> do
+    -- PR3: Install the previously-cued module's pattern into the
+    -- named mvoice on the backend.  Backend looks up the binding
+    -- registered for mvoiceName via `bind` and hands the loaded
+    -- Pattern String to tidal_voice_sup:set_voice_pat.  Pattern
+    -- starts firing through the rig immediately.
+    result <- evalSource
+      ("play-armed " <> mvoiceName <> " " <> moduleName)
+    case result of
+      Left err -> H.modify_ _ { transportError = Just err }
+      Right reply ->
+        H.modify_ \s -> s { cellResults = Map.insert cellId reply s.cellResults }
+  UpdateCellMvoice cellId name -> do
+    -- The mvoice name binds the cell's pattern to a purerl-tidal
+    -- voice (set up via `bind`).  Empty string clears (defaults
+    -- back to extractVoiceName at fire time).
+    let trimmed = Str.trim name
+    if Str.null trimmed
+      then H.modify_ \s -> s { cellMvoice = Map.delete cellId s.cellMvoice }
+      else H.modify_ \s -> s { cellMvoice = Map.insert cellId trimmed s.cellMvoice }
+  LoadHistoryEntry cellId body modul -> do
+    -- Re-select a previous cued version.  The module is still
+    -- loaded (modules stay live for the BEAM session), so arming
+    -- is just a Map.insert — no compile, no WS round-trip.
+    -- Three things have to update in sync:
+    --   1. The modal editor's document (Editor.ReplaceContent)
+    --   2. The cell's source-of-truth in state.cells (so the small
+    --      card body preview stays consistent)
+    --   3. armedModule[cellId] = modul (so Play wires to this version)
+    void $ H.tell _editorModal unit (Editor.ReplaceContent body)
+    handleAction (CellChanged cellId body)
+    H.modify_ \s -> s { armedModule = Map.insert cellId modul s.armedModule }
   ScheduleCompile -> do
     s <- H.get
     case s.pendingCompile of
@@ -1558,6 +1678,22 @@ applyRemote r = do
 
 parseCellNumber :: String -> Maybe Int
 parseCellNumber s = Str.stripPrefix (Pattern "c") s >>= Int.fromString
+
+-- | Parse purerl-tidal's `cue` verb reply for the loaded module name.
+-- | Backend replies `OK: cue M<hash>` on success, `ERR cue: <stderr>`
+-- | on failure (we ignore the latter here — caller still shows the
+-- | text in cellResults).
+parseCueReply :: String -> Maybe String
+parseCueReply reply = Str.trim <$> Str.stripPrefix (Pattern "OK: cue ") reply
+
+-- | Opacity for a history row at depth `idx` (0 = most recent).
+-- | Linear decay with a floor so rows are always slightly visible —
+-- | "endless fading to black" without losing the option to scroll
+-- | back through deep history.
+historyOpacity :: Int -> String
+historyOpacity idx =
+  let f = max 0.12 (1.0 - Int.toNumber idx * 0.10)
+  in show f
 
 decorateErrors
   :: forall o m
@@ -2323,7 +2459,11 @@ renderVoiceCard
   -> H.ComponentHTML Action Slots m
 renderVoiceCard state kind c =
   let
-    voiceName = extractVoiceName c.source
+    -- mvoice override (set in modal header) takes precedence over the
+    -- heuristic source-extracted name.  Same resolution rule as
+    -- renderEditingModal — keeps small card and modal in sync.
+    voiceName = fromMaybe (extractVoiceName c.source)
+                          (Map.lookup c.id state.cellMvoice)
     bodyPreview = previewBody c.source
     color = cellInColor state.stackOrder c.id
     isConfig = kind == CardConfigFront || kind == CardConfigBehind || kind == CardConfigFanned
@@ -2474,6 +2614,10 @@ renderEditingModal state = case state.editingCard of
     Just c ->
       let
         voiceName = extractVoiceName c.source
+        -- The mvoice the cell will install into when Play is pressed.
+        -- Override via the small input in the modal header; falls back
+        -- to the heuristic-extracted first identifier from the source.
+        mvoice = fromMaybe voiceName (Map.lookup c.id state.cellMvoice)
         typeIcon = inferTypeIcon c.source
         color = cellInColor state.stackOrder c.id
         sec = cellSection c
@@ -2502,8 +2646,22 @@ renderEditingModal state = case state.editingCard of
               [ HH.div [ HP.class_ (H.ClassName "voice-card-header") ]
                   [ HH.span [ HP.class_ (H.ClassName "voice-card-icon") ]
                       [ HH.text typeIcon ]
-                  , HH.span [ HP.class_ (H.ClassName "voice-card-name") ]
-                      [ HH.text voiceName ]
+                  -- Mvoice input: small text field showing the
+                  -- purerl-tidal binding name the cell installs
+                  -- into.  Default = extractVoiceName(source);
+                  -- editable inline.  Empty value clears the
+                  -- override (falls back to the default).
+                  , HH.input
+                      [ HP.class_ (H.ClassName "voice-edit-mvoice")
+                      , HP.value mvoice
+                      , HP.title "mvoice — the binding to install this cell's pattern into.  Commit on blur or Enter."
+                      -- onValueChange fires on commit (blur/Enter), not
+                      -- every keystroke.  This avoids the controlled-
+                      -- input race where Halogen re-renders mid-typing
+                      -- and snaps HP.value back, eating characters.
+                      -- Same pattern the topbar BPM widget uses.
+                      , HE.onValueChange \v -> UpdateCellMvoice c.id v
+                      ]
                   , HH.button
                       [ HP.class_ (H.ClassName "voice-edit-close")
                       , HE.onClick \_ -> CloseEditor
@@ -2519,27 +2677,66 @@ renderEditingModal state = case state.editingCard of
                       }
                       (modalEditorOutput c.id)
                   ]
-              -- Reply area — shows the latest daemon reply for this
-              -- cell, mirroring renderHylographRow's pattern.  When
-              -- cue ⇒ compile lands, compile errors get rendered here
-              -- and gate close.  Today: just the "OK: …" / error line
-              -- from the most recent fire.
+              -- Per-card history — sits directly under the editor with
+              -- no separator, so the live pattern flows visually into
+              -- the version log.  Most-recent first; the row at the
+              -- top is the currently-armed entry (highlighted with a
+              -- ▶ pip); subsequent rows fade to near-black via the
+              -- opacity gradient (steeper than the original — Andrew's
+              -- request).  Click any → load body + re-arm (module's
+              -- still in BEAM memory, so cache hit, instant).
+              , let history = fromMaybe [] (Map.lookup c.id state.cellHistory)
+                    armedMod = Map.lookup c.id state.armedModule
+                in if Array.null history
+                     then HH.text ""
+                     else HH.div [ HP.class_ (H.ClassName "voice-edit-history") ]
+                       (Array.mapWithIndex
+                          (\idx h ->
+                            let isArmed = Just h.modul == armedMod
+                                cls = "voice-edit-history-row"
+                                  <> if isArmed then " is-armed" else ""
+                            in HH.div
+                                 [ HP.class_ (H.ClassName cls)
+                                 , HP.style ("opacity: " <> historyOpacity idx)
+                                 , HP.title h.modul
+                                 , HE.onClick \_ -> LoadHistoryEntry c.id h.body h.modul
+                                 ]
+                                 [ HH.span [ HP.class_ (H.ClassName "voice-edit-history-marker") ]
+                                     [ HH.text (if isArmed then "▶" else " ") ]
+                                 , HH.span [ HP.class_ (H.ClassName "voice-edit-history-body") ]
+                                     [ HH.text h.body ]
+                                 ])
+                          history)
+              -- Reply / status line — sits just above Cue/Play so the
+              -- relationship is visually direct: "this is what the
+              -- last commit returned".  Compact (single-row when the
+              -- text fits); compile errors that span multiple lines
+              -- still wrap and grow the area as needed.  "compiling…"
+              -- placeholder while a cue is in flight.
               , HH.div [ HP.class_ (H.ClassName "voice-edit-replies") ]
-                  ( case Map.lookup c.id state.cellResults of
-                      Just reply ->
-                        [ HH.pre
-                            [ HP.class_ (H.ClassName "voice-edit-reply-text") ]
-                            [ HH.text reply ]
-                        ]
-                      Nothing ->
+                  ( if Set.member c.id state.cuePending
+                      then
                         [ HH.span
-                            [ HP.class_ (H.ClassName "voice-edit-replies-empty") ]
-                            [ HH.text "no replies yet" ]
+                            [ HP.class_ (H.ClassName "voice-edit-pending") ]
+                            [ HH.text "compiling…" ]
                         ]
+                      else case Map.lookup c.id state.cellResults of
+                        Just reply ->
+                          [ HH.pre
+                              [ HP.class_ (H.ClassName "voice-edit-reply-text") ]
+                              [ HH.text reply ]
+                          ]
+                        Nothing ->
+                          [ HH.span
+                              [ HP.class_ (H.ClassName "voice-edit-replies-empty") ]
+                              [ HH.text " " ]  -- empty placeholder; no "no replies yet" stub
+                          ]
                   )
               , HH.div [ HP.class_ (H.ClassName "voice-card-footer voice-edit-footer") ]
                   ( if isConfig
                       then
+                        -- Config cards keep the legacy fire path —
+                        -- they're not part of the cue/compile pipeline.
                         [ HH.button
                             [ HP.class_ (H.ClassName "voice-card-btn voice-card-play")
                             , HE.onClick \_ -> CommitEdit c.id c.source
@@ -2548,17 +2745,49 @@ renderEditingModal state = case state.editingCard of
                             [ HH.text "▶" ]
                         ]
                       else
+                        -- Music cards: PR2 cue/play-armed flow.  Cue
+                        -- compiles + hot-loads on the backend; Play
+                        -- enables once a module is armed and invokes it.
+                        let armed = Map.lookup c.id state.armedModule
+                            playEnabled = isJust armed
+                            cueInFlight = Set.member c.id state.cuePending
+                        in
                         [ HH.button
-                            [ HP.class_ (H.ClassName "voice-card-btn voice-card-cue")
-                            , HE.onClick \_ -> CommitEdit c.id c.source
-                            , HP.title "cue (compile-armed in future; fires immediately today)"
-                            ]
-                            [ HH.text "cue" ]
+                            ( [ HP.class_
+                                  ( H.ClassName
+                                      ( "voice-card-btn voice-card-cue"
+                                          <> if cueInFlight then " is-disabled" else ""
+                                      )
+                                  )
+                              , HP.title
+                                  ( if cueInFlight
+                                      then "compile in progress"
+                                      else "cue — compile + hot-load this cell on the backend"
+                                  )
+                              , HP.disabled cueInFlight
+                              ]
+                              <> if cueInFlight then [] else
+                                   [ HE.onClick \_ -> CueCell c.id c.source ]
+                            )
+                            [ HH.text (if cueInFlight then "…" else "cue") ]
                         , HH.button
-                            [ HP.class_ (H.ClassName "voice-card-btn voice-card-play")
-                            , HE.onClick \_ -> CommitEdit c.id c.source
-                            , HP.title "play (Cmd-Enter)"
-                            ]
+                            ( [ HP.class_
+                                  ( H.ClassName
+                                      ( "voice-card-btn voice-card-play"
+                                          <> if playEnabled then "" else " is-disabled"
+                                      )
+                                  )
+                              , HP.title
+                                  ( case armed of
+                                      Just m  -> "play armed module " <> m
+                                      Nothing -> "play — disabled until a successful cue"
+                                  )
+                              , HP.disabled (not playEnabled)
+                              ]
+                              <> case armed of
+                                   Just m  -> [ HE.onClick \_ -> PlayArmed c.id mvoice m ]
+                                   Nothing -> []
+                            )
                             [ HH.text "▶" ]
                         ]
                   )
