@@ -1185,3 +1185,437 @@ body::before {
   color: var(--cyan);
   opacity: 0.9;
 }
+
+/* ==========================================================================
+   Voice Cells pane (Cmd-8) — voice-oriented redesign.
+   "Vector graphics poker game from alt-1982" — HyperCard structure
+   (header / body / footer) rendered with phosphor + amber palette,
+   thin lines, geometric primitives. Stack identity by colour;
+   type by icon. See docs/voice-cells-design.md.
+
+   Phase 4: bigger cards, single canvas, header-click drives all stack
+   interactions, config pre-stacked inline.
+   ========================================================================== */
+
+.pane-voice-cells {
+  background: var(--bg-deep);
+  padding: 0.6rem;
+  overflow-y: auto;
+}
+
+.voice-cells-canvas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  align-items: flex-start;
+  align-content: flex-start;
+  /* Distribute stacks evenly across the row instead of packing them */
+  /* against the left edge.                                          */
+  justify-content: space-evenly;
+}
+
+/* ==========================================================================
+   Card v2: HyperCard-y header / body / footer, vector primitive lines.
+   Phase 4: ~14rem wide, ~140px tall (front), 22px header (back).
+   ========================================================================== */
+
+.voice-card-v2 {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 14rem;
+  background: var(--bg);
+  border: 1px solid var(--fg-dim);
+  border-radius: 6px;
+  font-family: var(--mono);
+  user-select: none;
+  transition: border-color 80ms linear, box-shadow 80ms linear;
+  overflow: visible;
+}
+
+.voice-card-v2:hover {
+  border-color: var(--fg);
+  box-shadow: var(--glow);
+}
+
+/* Header: stack-coloured background, BLACK text — playing-card title. */
+.voice-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.55rem;
+  background: var(--card-color, #1a3a22);
+  color: #000;
+  border-radius: 5px 5px 0 0;
+  border-bottom: 1px solid var(--fg-dim);
+  min-height: 22px;
+  cursor: pointer;
+}
+
+.voice-card-icon {
+  font-size: 1.05rem;
+  line-height: 1;
+  width: 1.1rem;
+  text-align: center;
+  font-weight: 700;
+}
+
+.voice-card-name {
+  flex: 1 1 auto;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Swatch is positioned absolutely so it doesn't bubble click up to */
+/* the header (which would also trigger HeaderClick).               */
+.voice-card-swatch {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: rgba(0, 0, 0, 0.15);
+  border: 1px solid #000;
+  color: #000;
+  width: 1.1rem;
+  height: 1.1rem;
+  font-size: 0.9rem;
+  line-height: 1rem;
+  border-radius: 50%;
+  cursor: pointer;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+}
+
+.voice-card-swatch:hover {
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.voice-card-body {
+  font-family: var(--mono-code);
+  font-size: 0.85rem;
+  color: var(--fg);
+  line-height: 1.35;
+  padding: 0.55rem 0.7rem;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  flex: 1 1 auto;
+  min-height: 4.5rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.voice-card-footer {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.4rem 0.55rem;
+  border-top: 1px solid var(--fg-rule);
+  justify-content: flex-end;
+}
+
+.voice-card-btn {
+  background: transparent;
+  border: 1px solid var(--fg-dim);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  padding: 0.2rem 0.7rem;
+  cursor: pointer;
+  border-radius: 3px;
+  line-height: 1.1;
+}
+
+.voice-card-btn:hover {
+  color: var(--fg-bright);
+  border-color: var(--fg);
+  box-shadow: var(--glow);
+}
+
+.voice-card-cue {
+  color: var(--amber);
+  border-color: var(--amber);
+}
+
+.voice-card-cue:hover {
+  color: var(--amber);
+  border-color: var(--amber);
+  box-shadow: 0 0 5px rgba(255, 184, 74, 0.5);
+}
+
+.voice-card-play {
+  color: var(--fg-bright);
+  border-color: var(--fg);
+}
+
+/* Compact (header-only) variant: behind cards in collapsed stacks. */
+.voice-card-compact {
+  border-radius: 6px 6px 4px 4px;
+}
+.voice-card-compact .voice-card-header {
+  border-radius: 5px 5px 4px 4px;
+  border-bottom: none;
+  min-height: 22px;
+}
+
+/* Front of a collapsed stack — slight glow lift. */
+.voice-card-front {
+  box-shadow: var(--glow);
+}
+
+/* ==========================================================================
+   Stack of cards.  Collapsed = absolute-positioned overlap.
+   Fanned = grid of full-size cards lifted with a backdrop glow.
+   ========================================================================== */
+
+.voice-stack {
+  position: relative;
+  width: 14rem;
+  /* height set inline per-stack */
+}
+
+.voice-card-stacked-wrapper {
+  position: absolute;
+  left: 0;
+  width: 14rem;
+}
+
+.voice-stack-fanned {
+  /* Vertical fan: cards slide DOWN into a single 14rem column,    */
+  /* keeping their stack order top-to-bottom (front at top).  The  */
+  /* shared header colour + vertical alignment carry group identity*/
+  /* on their own — no wrapping border, backdrop, or glow needed.  */
+  width: 14rem;
+  height: auto !important;     /* override the inline collapsed-height */
+}
+
+.voice-stack-fan-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+/* Config stack: dashed accent on the header instead of stack colour, */
+/* amber-tinted so it's clearly setup-not-music.                      */
+.voice-card-v2.stack-config .voice-card-header {
+  background: var(--bg-elev);
+  color: var(--amber);
+  border-bottom: 1px dashed var(--amber);
+}
+.voice-card-v2.stack-config .voice-card-icon,
+.voice-card-v2.stack-config .voice-card-name {
+  color: var(--amber);
+}
+/* (No fanned-config wrapper styling — the dashed amber headers on  */
+/* each config card already do the visual work.)                    */
+
+/* ==========================================================================
+   Stack colours.  9 swatches: 0 = "no stack" (no colour fill on header
+   — phosphor-on-dark), 1..8 = vivid named-stack colours.
+   ========================================================================== */
+
+.voice-card-v2.stack-color-none .voice-card-header {
+  background: var(--bg-elev);
+  color: var(--fg-dim);
+  border: 1px dashed var(--fg-dim);
+}
+.voice-card-v2.stack-color-none .voice-card-icon,
+.voice-card-v2.stack-color-none .voice-card-name {
+  color: var(--fg-dim);
+}
+.voice-card-v2.stack-color-none .voice-card-swatch {
+  border-color: var(--fg-dim);
+  color: var(--fg-dim);
+  background: transparent;
+}
+
+.voice-card-v2.stack-color-1 .voice-card-header { background: #41ff7c; }
+.voice-card-v2.stack-color-2 .voice-card-header { background: #ffb84a; }
+.voice-card-v2.stack-color-3 .voice-card-header { background: #4afff0; }
+.voice-card-v2.stack-color-4 .voice-card-header { background: #b6ff5c; }
+.voice-card-v2.stack-color-5 .voice-card-header { background: #ff8a65; }
+.voice-card-v2.stack-color-6 .voice-card-header { background: #9bffb6; }
+.voice-card-v2.stack-color-7 .voice-card-header { background: #ffe066; }
+.voice-card-v2.stack-color-8 .voice-card-header { background: #ce93ff; }
+
+/* ==========================================================================
+   Colour picker popover.  3×3 grid of swatches; appears above the card.
+   ========================================================================== */
+
+.voice-card-picker {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  display: grid;
+  grid-template-columns: repeat(3, 1.5rem);
+  grid-auto-rows: 1.5rem;
+  gap: 0.25rem;
+  padding: 0.35rem;
+  background: var(--bg-deep);
+  border: 1px solid var(--fg);
+  border-radius: 4px;
+  box-shadow: 0 0 10px rgba(65, 255, 124, 0.55);
+  z-index: 2000;
+}
+
+.voice-picker-swatch {
+  border: 1px solid var(--fg-dim);
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.voice-picker-swatch:hover {
+  border-color: var(--fg-bright);
+  box-shadow: var(--glow-bright);
+}
+
+.voice-picker-swatch.voice-picker-current {
+  outline: 2px solid var(--fg-bright);
+  outline-offset: -2px;
+}
+
+.voice-picker-swatch.stack-color-none {
+  background: var(--bg);
+  color: var(--fg-dim);
+  border-color: var(--fg-dim);
+  border-style: dashed;
+}
+.voice-picker-swatch.stack-color-1 { background: #41ff7c; }
+.voice-picker-swatch.stack-color-2 { background: #ffb84a; }
+.voice-picker-swatch.stack-color-3 { background: #4afff0; }
+.voice-picker-swatch.stack-color-4 { background: #b6ff5c; }
+.voice-picker-swatch.stack-color-5 { background: #ff8a65; }
+.voice-picker-swatch.stack-color-6 { background: #9bffb6; }
+.voice-picker-swatch.stack-color-7 { background: #ffe066; }
+.voice-picker-swatch.stack-color-8 { background: #ce93ff; }
+
+/* ==========================================================================
+   Voice-card editing modal: pop-out card at 3× scale.
+   The original small card stays in place beneath; the modal floats above
+   on a dim backdrop.  Backdrop click cancels.  CodeMirror inside body.
+   ========================================================================== */
+
+.voice-edit-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+/* Backdrop is purely decorative — it dims the columns visually but
+   does NOT capture pointer events, so wheel scroll and clicks still
+   reach the vocabulary / mini-notation / config panes underneath
+   (consult-while-editing).  Close via × button, Esc, or commit
+   (cue / play / Cmd-Enter). */
+.voice-edit-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+
+/* Modal card: 3× the small card's 14rem width, proportional to small
+   card's overall feel.  Keep the same vector-poker header/body/footer
+   structure so card identity carries through. */
+.voice-edit-modal {
+  position: relative;
+  width: 42rem;
+  z-index: 1;
+  pointer-events: auto;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+}
+
+/* Bigger header in the modal — proportional to a 3×-scale card. */
+.voice-edit-modal .voice-card-header {
+  padding: 0.9rem 1.4rem;
+}
+
+.voice-edit-modal .voice-card-icon {
+  font-size: 1.4rem;
+}
+
+.voice-edit-modal .voice-card-name {
+  font-size: 1.2rem;
+}
+
+/* Close × button on the right of the header. */
+.voice-edit-close {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  color: rgba(0, 0, 0, 0.75);
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 4px;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.voice-edit-close:hover {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+/* Editor body: holds the CodeMirror slot; min height for legibility. */
+.voice-edit-body {
+  padding: 1rem 1.4rem;
+  min-height: 8rem;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 0.95rem;
+  border-bottom: 1px solid var(--fg-dim);
+}
+
+/* Reply area — shows the latest daemon reply for the cell being
+   edited.  Wired today; will gate close on compile error once cue =
+   compile arrives. */
+.voice-edit-replies {
+  padding: 0.6rem 1.4rem;
+  min-height: 1.6rem;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  border-bottom: 1px solid var(--fg-dim);
+}
+
+.voice-edit-reply-text {
+  margin: 0;
+  white-space: pre-wrap;
+  color: var(--fg);
+}
+
+.voice-edit-replies-empty {
+  color: var(--fg-dim);
+  font-style: italic;
+}
+
+/* Footer: cue + play, larger than small-card footer to match scale. */
+.voice-edit-footer {
+  padding: 0.7rem 1.4rem;
+  gap: 0.8rem;
+}
+
+.voice-edit-modal .voice-card-btn {
+  font-size: 1rem;
+  padding: 0.5rem 1.1rem;
+}
