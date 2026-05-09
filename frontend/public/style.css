@@ -1425,7 +1425,8 @@ body::before {
   border-bottom: 1px dashed var(--amber);
 }
 .voice-card-v2.stack-config .voice-card-icon,
-.voice-card-v2.stack-config .voice-card-name {
+.voice-card-v2.stack-config .voice-card-name,
+.voice-card-v2.stack-config .voice-edit-mvoice {
   color: var(--amber);
 }
 /* (No fanned-config wrapper styling — the dashed amber headers on  */
@@ -1442,7 +1443,8 @@ body::before {
   border: 1px dashed var(--fg-dim);
 }
 .voice-card-v2.stack-color-none .voice-card-icon,
-.voice-card-v2.stack-color-none .voice-card-name {
+.voice-card-v2.stack-color-none .voice-card-name,
+.voice-card-v2.stack-color-none .voice-edit-mvoice {
   color: var(--fg-dim);
 }
 .voice-card-v2.stack-color-none .voice-card-swatch {
@@ -1573,24 +1575,27 @@ body::before {
 /* Mvoice input — small text field in the modal header showing the
    purerl-tidal binding name the cell will install its pattern into.
    Sits inline with the icon; empty/transparent background blends with
-   the coloured header.  Black text on the stack-coloured background
-   carries through the playing-card aesthetic. */
+   the coloured header.  Text colour inherits from the header so the
+   per-stack-state overrides below (stack-color-none, stack-config)
+   apply to the input as well.  Border / focus colours adapt similarly
+   via currentColor. */
 .voice-edit-mvoice {
   font: inherit;
   font-family: var(--mono);
   font-size: 1.2rem;
-  color: rgba(0, 0, 0, 0.85);
+  color: inherit;
   background: transparent;
-  border: 1px solid rgba(0, 0, 0, 0.25);
+  border: 1px solid currentColor;
   border-radius: 3px;
   padding: 0.1rem 0.4rem;
   min-width: 6rem;
   max-width: 14rem;
+  opacity: 0.85;
 }
 .voice-edit-mvoice:focus {
   outline: none;
-  border-color: rgba(0, 0, 0, 0.6);
-  background: rgba(255, 255, 255, 0.15);
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 /* Close × button on the right of the header. */

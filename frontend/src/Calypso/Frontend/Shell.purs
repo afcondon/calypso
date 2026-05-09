@@ -2409,7 +2409,11 @@ renderVoiceCard
   -> H.ComponentHTML Action Slots m
 renderVoiceCard state kind c =
   let
-    voiceName = extractVoiceName c.source
+    -- mvoice override (set in modal header) takes precedence over the
+    -- heuristic source-extracted name.  Same resolution rule as
+    -- renderEditingModal — keeps small card and modal in sync.
+    voiceName = fromMaybe (extractVoiceName c.source)
+                          (Map.lookup c.id state.cellMvoice)
     bodyPreview = previewBody c.source
     color = cellInColor state.stackOrder c.id
     isConfig = kind == CardConfigFront || kind == CardConfigBehind || kind == CardConfigFanned
