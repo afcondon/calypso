@@ -1354,6 +1354,22 @@ body::before {
   border-color: var(--fg);
 }
 
+/* Play button is disabled until the corresponding cell has been
+   successfully cued (compiled + hot-loaded on the backend).  Visually
+   dim the colour and remove the hover affordance; the actual click
+   handler is omitted in PureScript when not armed. */
+.voice-card-btn.is-disabled,
+.voice-card-btn:disabled {
+  color: var(--fg-dim);
+  border-color: var(--fg-rule);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.voice-card-btn.is-disabled:hover,
+.voice-card-btn:disabled:hover {
+  background: transparent;
+}
+
 /* Compact (header-only) variant: behind cards in collapsed stacks. */
 .voice-card-compact {
   border-radius: 6px 6px 4px 4px;
@@ -1607,6 +1623,15 @@ body::before {
 .voice-edit-replies-empty {
   color: var(--fg-dim);
   font-style: italic;
+}
+
+/* "compiling…" text shown while a cue is in flight on the backend.
+   Cold compile is ~7s today; the steady glow telegraphs work in
+   progress so the modal doesn't read as hung. */
+.voice-edit-pending {
+  color: var(--amber);
+  font-style: italic;
+  text-shadow: 0 0 4px rgba(255, 184, 74, 0.55);
 }
 
 /* Footer: cue + play, larger than small-card footer to match scale. */

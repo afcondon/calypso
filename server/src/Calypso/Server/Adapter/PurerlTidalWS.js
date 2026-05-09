@@ -5,7 +5,11 @@
 // Uses Node's built-in WebSocket (Node ≥ 21).
 
 const PURERL_TIDAL_WS_URL = "ws://localhost:3012/ws";
-const TIMEOUT_MS = 5000;
+// 30s — covers cold per-cell compiles (~7s today via spago build +
+// purs-backend-erl re-emit; PR4's daemon path will drop this to
+// ~100-300ms and we can pull the timeout back down then).  Most
+// non-cue verbs round-trip in single-digit ms.
+const TIMEOUT_MS = 30000;
 
 const result = (ok, reply) => ({ ok, reply });
 

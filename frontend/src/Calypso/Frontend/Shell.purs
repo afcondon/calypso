@@ -24,7 +24,7 @@ import Data.Map (Map)
 import Data.Map as Map
 import Data.Int (toNumber)
 import Data.Int as Int
-import Data.Maybe (Maybe(..), fromMaybe, isNothing)
+import Data.Maybe (Maybe(..), fromMaybe, isJust, isNothing)
 import Data.Number as Number
 import Data.String.Pattern (Pattern(..))
 import Data.Traversable (for)
@@ -410,6 +410,19 @@ type State =
                                       -- Esc / Cmd-Enter close it.
                                       -- See docs/voice-cells-design.md
                                       -- "in-card editing" section.
+  , armedModule :: Map String String  -- cellId → loaded module name
+                                      -- ("M<hash>") set by a successful
+                                      -- Cue.  Play is enabled iff a cell
+                                      -- has an entry here.  PR2-phase:
+                                      -- the module exports `result :: Int`;
+                                      -- PR3 flips it to `pattern :: Pattern
+                                      -- String` and wires voice install.
+  , cuePending :: Set String          -- cellIds whose Cue is in flight.
+                                      -- Cold compile is ~7s today (PR4's
+                                      -- daemon path drops it to <300ms);
+                                      -- the modal shows "compiling…" while
+                                      -- a cellId is in this set so a long
+                                      -- wait doesn't read as a hang.
   }
 
 type Slots =
@@ -474,6 +487,13 @@ data Action
   | OpenEditor String                       -- click on small card body
   | CloseEditor                             -- backdrop / Esc / cancel
   | CommitEdit String String                -- Cmd-Enter from modal: fire + close
+  -- PR2 cue/play-armed flow.  Cue compiles + hot-loads on the
+  -- backend; Play invokes the loaded module's `result/0`.  When PR3
+  -- lands these become the canonical fire path (replacing FireCell)
+  -- and Play wires into the voice install.  Backend integrated test
+  -- on per-cell-compile branch (purerl-tidal).
+  | CueCell String String                   -- cellId, source
+  | PlayArmed String String                 -- cellId, moduleName
   | Startup
 
 initialState :: forall i. i -> State
@@ -522,6 +542,8 @@ initialState _ =
   , configStackFanned: false
   , colorPickerOpen: Nothing
   , editingCard: Nothing
+  , armedModule: Map.empty
+  , cuePending: Set.empty
   }
 
 debounceMs :: Milliseconds
@@ -802,6 +824,42 @@ handleAction = case _ of
     -- × or Esc once satisfied.  When compile-armed Cue arrives we'll
     -- be able to gate close on compile error here.
     handleAction (FireCell cellId src)
+  CueCell cellId src -> do
+    -- PR2: send the source through the new `cue` verb on purerl-tidal.
+    -- Backend hashes, compiles to a generated PureScript module, hot-
+    -- loads, replies `OK: cue M<hash>` or `ERR cue: <stderr>`.  On
+    -- success we record the module name in armedModule; the modal's
+    -- Play button enables.  On error we just show the reply text.
+    let stmts = compositionStatements src
+        cleaned = Str.joinWith "\n" (map _.source stmts)
+    if Str.null cleaned
+      then H.modify_ \s -> s
+        { cellResults = Map.insert cellId "(no statements)" s.cellResults }
+      else do
+        -- Mark this cell's cue as in flight so the modal can render
+        -- "compiling…" instead of looking hung during the 7s cold path.
+        H.modify_ \s -> s { cuePending = Set.insert cellId s.cuePending }
+        result <- evalSource ("cue " <> cleaned)
+        H.modify_ \s -> s { cuePending = Set.delete cellId s.cuePending }
+        case result of
+          Left err -> H.modify_ _ { transportError = Just err }
+          Right reply -> do
+            H.modify_ \s -> s
+              { cellResults = Map.insert cellId reply s.cellResults }
+            case parseCueReply reply of
+              Just modName ->
+                H.modify_ \s -> s
+                  { armedModule = Map.insert cellId modName s.armedModule }
+              Nothing -> pure unit
+  PlayArmed cellId moduleName -> do
+    -- Invoke the previously-cued module.  Reply lands in cellResults
+    -- as text — the modal renders it in the reply area.  No state
+    -- mutation beyond that today; PR3 will wire this into voice install.
+    result <- evalSource ("play-armed " <> moduleName)
+    case result of
+      Left err -> H.modify_ _ { transportError = Just err }
+      Right reply ->
+        H.modify_ \s -> s { cellResults = Map.insert cellId reply s.cellResults }
   ScheduleCompile -> do
     s <- H.get
     case s.pendingCompile of
@@ -1558,6 +1616,13 @@ applyRemote r = do
 
 parseCellNumber :: String -> Maybe Int
 parseCellNumber s = Str.stripPrefix (Pattern "c") s >>= Int.fromString
+
+-- | Parse purerl-tidal's `cue` verb reply for the loaded module name.
+-- | Backend replies `OK: cue M<hash>` on success, `ERR cue: <stderr>`
+-- | on failure (we ignore the latter here — caller still shows the
+-- | text in cellResults).
+parseCueReply :: String -> Maybe String
+parseCueReply reply = Str.trim <$> Str.stripPrefix (Pattern "OK: cue ") reply
 
 decorateErrors
   :: forall o m
@@ -2520,26 +2585,35 @@ renderEditingModal state = case state.editingCard of
                       (modalEditorOutput c.id)
                   ]
               -- Reply area — shows the latest daemon reply for this
-              -- cell, mirroring renderHylographRow's pattern.  When
-              -- cue ⇒ compile lands, compile errors get rendered here
-              -- and gate close.  Today: just the "OK: …" / error line
-              -- from the most recent fire.
+              -- cell, mirroring renderHylographRow's pattern.  Cold
+              -- compile takes ~7s today, so we show "compiling…" while
+              -- the cue is in flight (cuePending) so the modal doesn't
+              -- read as hung.  Steady-state replies (OK / ERR) land
+              -- here once the verb returns.
               , HH.div [ HP.class_ (H.ClassName "voice-edit-replies") ]
-                  ( case Map.lookup c.id state.cellResults of
-                      Just reply ->
-                        [ HH.pre
-                            [ HP.class_ (H.ClassName "voice-edit-reply-text") ]
-                            [ HH.text reply ]
-                        ]
-                      Nothing ->
+                  ( if Set.member c.id state.cuePending
+                      then
                         [ HH.span
-                            [ HP.class_ (H.ClassName "voice-edit-replies-empty") ]
-                            [ HH.text "no replies yet" ]
+                            [ HP.class_ (H.ClassName "voice-edit-pending") ]
+                            [ HH.text "compiling… (cold compile is ~7s today)" ]
                         ]
+                      else case Map.lookup c.id state.cellResults of
+                        Just reply ->
+                          [ HH.pre
+                              [ HP.class_ (H.ClassName "voice-edit-reply-text") ]
+                              [ HH.text reply ]
+                          ]
+                        Nothing ->
+                          [ HH.span
+                              [ HP.class_ (H.ClassName "voice-edit-replies-empty") ]
+                              [ HH.text "no replies yet" ]
+                          ]
                   )
               , HH.div [ HP.class_ (H.ClassName "voice-card-footer voice-edit-footer") ]
                   ( if isConfig
                       then
+                        -- Config cards keep the legacy fire path —
+                        -- they're not part of the cue/compile pipeline.
                         [ HH.button
                             [ HP.class_ (H.ClassName "voice-card-btn voice-card-play")
                             , HE.onClick \_ -> CommitEdit c.id c.source
@@ -2548,17 +2622,49 @@ renderEditingModal state = case state.editingCard of
                             [ HH.text "▶" ]
                         ]
                       else
+                        -- Music cards: PR2 cue/play-armed flow.  Cue
+                        -- compiles + hot-loads on the backend; Play
+                        -- enables once a module is armed and invokes it.
+                        let armed = Map.lookup c.id state.armedModule
+                            playEnabled = isJust armed
+                            cueInFlight = Set.member c.id state.cuePending
+                        in
                         [ HH.button
-                            [ HP.class_ (H.ClassName "voice-card-btn voice-card-cue")
-                            , HE.onClick \_ -> CommitEdit c.id c.source
-                            , HP.title "cue (compile-armed in future; fires immediately today)"
-                            ]
-                            [ HH.text "cue" ]
+                            ( [ HP.class_
+                                  ( H.ClassName
+                                      ( "voice-card-btn voice-card-cue"
+                                          <> if cueInFlight then " is-disabled" else ""
+                                      )
+                                  )
+                              , HP.title
+                                  ( if cueInFlight
+                                      then "compile in progress"
+                                      else "cue — compile + hot-load this cell on the backend"
+                                  )
+                              , HP.disabled cueInFlight
+                              ]
+                              <> if cueInFlight then [] else
+                                   [ HE.onClick \_ -> CueCell c.id c.source ]
+                            )
+                            [ HH.text (if cueInFlight then "…" else "cue") ]
                         , HH.button
-                            [ HP.class_ (H.ClassName "voice-card-btn voice-card-play")
-                            , HE.onClick \_ -> CommitEdit c.id c.source
-                            , HP.title "play (Cmd-Enter)"
-                            ]
+                            ( [ HP.class_
+                                  ( H.ClassName
+                                      ( "voice-card-btn voice-card-play"
+                                          <> if playEnabled then "" else " is-disabled"
+                                      )
+                                  )
+                              , HP.title
+                                  ( case armed of
+                                      Just m  -> "play armed module " <> m
+                                      Nothing -> "play — disabled until a successful cue"
+                                  )
+                              , HP.disabled (not playEnabled)
+                              ]
+                              <> case armed of
+                                   Just m  -> [ HE.onClick \_ -> PlayArmed c.id m ]
+                                   Nothing -> []
+                            )
                             [ HH.text "▶" ]
                         ]
                   )
