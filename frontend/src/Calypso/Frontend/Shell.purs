@@ -1258,6 +1258,21 @@ stripLineComment line = case Str.indexOf (Pattern "--") line of
   Just i -> Str.trim (Str.take i line)
   Nothing -> Str.trim line
 
+-- | Strip both `--` and `#` line comments.  Used on module.source
+-- | (the routing-grammar portion of the session), where `#` is a
+-- | comment marker per `docs/composition-grammar.md`.  Distinct from
+-- | `stripLineComment`, which is used on cell text where `#` is the
+-- | Tidal-style parameter-attach operator and must be preserved.
+stripModuleLineComment :: String -> String
+stripModuleLineComment line =
+  let dashCut = case Str.indexOf (Pattern "--") line of
+        Just i -> Str.take i line
+        Nothing -> line
+      hashCut = case Str.indexOf (Pattern "#") dashCut of
+        Just i -> Str.take i dashCut
+        Nothing -> dashCut
+  in Str.trim hashCut
+
 -- | Composition sections — the structural taxonomy the code pane is
 -- | organised by.  Lines after a `# config` / `# voices` / `# patterns`
 -- | marker (until the next marker) belong to that section.  Lines
@@ -1333,13 +1348,16 @@ compositionStatements
 compositionStatements src =
   let lines = Str.split (Pattern "\n") src
       indexed = mapWithIndex
-        (\i s -> { lineNum: i + 1, source: stripLineComment s }) lines
+        (\i s -> { lineNum: i + 1, source: stripModuleLineComment s }) lines
       nonBlank = Array.filter (\e -> not (Str.null e.source)) indexed
       tagged = tagSections SecDefault nonBlank
       -- Drop the section marker rows themselves; they're
       -- presentational, not statements to fire.
       noMarkers = Array.filter (\e -> isNothing (sectionOfLine e.source)) tagged
-  in joinContinuations noMarkers
+  -- joinContinuations is intentionally NOT applied here: the new
+  -- routing grammar treats `#` as a line-comment marker (already
+  -- stripped above), not as Tidal's parameter-attach continuation.
+  in noMarkers
   where
   tagSections current xs = case Array.uncons xs of
     Nothing -> []
