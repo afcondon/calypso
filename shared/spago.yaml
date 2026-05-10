@@ -13,3 +13,9 @@ package:
     - codec
     - foreign-object
     - tuples
+    - parsing
+    - integers
+    - numbers
+    - identity
+    - transformers
+    - control
