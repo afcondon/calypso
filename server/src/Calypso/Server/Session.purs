@@ -138,7 +138,7 @@ initialStateFrom :: Maybe String -> SessionState
 initialStateFrom defaultBody =
   { runtime: "purerl-tidal-ws"
   , "module": UserModule { source: fromMaybe tidalStarterModule defaultBody }
-  , cells: [ Cell { id: "c1", kind: "expr", source: "hush", form: false, author: Nothing } ]
+  , cells: [ Cell { id: "c1", kind: "expr", source: "hush", form: false, author: Nothing, mvoice: Nothing, tvoice: Nothing } ]
   , nextCellId: 2
   , lastResponse: Nothing
   }
@@ -526,7 +526,7 @@ appendCellState
   -> SessionState
 appendCellState { source, kind, author } s =
   let newId = "c" <> show s.nextCellId
-      newCell = Cell { id: newId, kind, source, form: false, author }
+      newCell = Cell { id: newId, kind, source, form: false, author, mvoice: Nothing, tvoice: Nothing }
   in s { cells = snoc s.cells newCell, nextCellId = s.nextCellId + 1 }
 
 -- | Trial-apply a cell append — compile against the resulting cells
@@ -538,16 +538,24 @@ previewAppendCell
   -> Aff CompileResponse
 previewAppendCell store body = withPreview store (appendCellState body)
 
+type CellPatch =
+  { source :: Maybe String
+  , kind :: Maybe String
+  , form :: Maybe Boolean
+  , mvoice :: Maybe String
+  , tvoice :: Maybe String
+  }
+
 updateCell
   :: SessionStore
   -> String
-  -> { source :: Maybe String, kind :: Maybe String, form :: Maybe Boolean }
+  -> CellPatch
   -> Aff CompileResponse
 updateCell store cellId patch = withUpdate store (updateCellState cellId patch)
 
 updateCellState
   :: String
-  -> { source :: Maybe String, kind :: Maybe String, form :: Maybe Boolean }
+  -> CellPatch
   -> SessionState
   -> SessionState
 updateCellState cellId patch s = s { cells = applyPatch s.cells }
@@ -561,7 +569,15 @@ updateCellState cellId patch s = s { cells = applyPatch s.cells }
     , kind: fromMaybe c.kind p.kind
     , form: fromMaybe c.form p.form
     , author: c.author
+    -- mvoice/tvoice: empty-string sentinel clears the field; absent
+    -- key preserves existing.
+    , mvoice: applyMaybeStr p.mvoice c.mvoice
+    , tvoice: applyMaybeStr p.tvoice c.tvoice
     }
+  applyMaybeStr patchVal current = case patchVal of
+    Nothing -> current
+    Just "" -> Nothing
+    Just s  -> Just s
 
 -- | Trial-apply a cell update — compile against the resulting cells
 -- | but don't persist or broadcast. Counterpart to `updateCell` for
@@ -569,7 +585,7 @@ updateCellState cellId patch s = s { cells = applyPatch s.cells }
 previewUpdateCell
   :: SessionStore
   -> String
-  -> { source :: Maybe String, kind :: Maybe String, form :: Maybe Boolean }
+  -> CellPatch
   -> Aff CompileResponse
 previewUpdateCell store cellId patch = withPreview store (updateCellState cellId patch)
 

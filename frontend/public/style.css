@@ -1203,6 +1203,29 @@ body::before {
   overflow-y: auto;
 }
 
+.voice-cells-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.5rem;
+}
+
+.voice-cells-new {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  background: transparent;
+  color: var(--fg-dim);
+  border: 1px dashed var(--fg-dim);
+  border-radius: 3px;
+  padding: 0.2rem 0.6rem;
+  cursor: pointer;
+}
+.voice-cells-new:hover {
+  color: var(--fg-bright);
+  border-color: var(--fg-bright);
+  box-shadow: var(--glow-bright);
+}
+
 .voice-cells-canvas {
   display: flex;
   flex-wrap: wrap;
@@ -1268,32 +1291,6 @@ body::before {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-/* Swatch is positioned absolutely so it doesn't bubble click up to */
-/* the header (which would also trigger HeaderClick).               */
-.voice-card-swatch {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  background: rgba(0, 0, 0, 0.15);
-  border: 1px solid #000;
-  color: #000;
-  width: 1.1rem;
-  height: 1.1rem;
-  font-size: 0.9rem;
-  line-height: 1rem;
-  border-radius: 50%;
-  cursor: pointer;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 5;
-}
-
-.voice-card-swatch:hover {
-  background: rgba(0, 0, 0, 0.35);
 }
 
 .voice-card-body {
@@ -1426,99 +1423,58 @@ body::before {
 }
 .voice-card-v2.stack-config .voice-card-icon,
 .voice-card-v2.stack-config .voice-card-name,
-.voice-card-v2.stack-config .voice-edit-mvoice {
+.voice-card-v2.stack-config .voice-edit-mvoice,
+.voice-card-v2.stack-config .voice-edit-tvoice,
+.voice-card-v2.stack-config .voice-edit-tvoice-select,
+.voice-card-v2.stack-config .voice-edit-sep {
   color: var(--amber);
 }
 /* (No fanned-config wrapper styling — the dashed amber headers on  */
 /* each config card already do the visual work.)                    */
 
 /* ==========================================================================
-   Stack colours.  9 swatches: 0 = "no stack" (no colour fill on header
-   — phosphor-on-dark), 1..8 = vivid named-stack colours.
+   Tvoice-type colours.  The card header background is set by the
+   binding's signal type (MIDI cool blue, CV green, Gate magenta,
+   Sample amber); cards whose binding isn't (yet) registered with
+   the rig fall through to the dim TvUnknown look further down.
    ========================================================================== */
 
-.voice-card-v2.stack-color-none .voice-card-header {
+.voice-card-v2.tv-midi    .voice-card-header { background: #7aa9ff; }
+.voice-card-v2.tv-cv      .voice-card-header { background: #7eff8a; }
+.voice-card-v2.tv-gate    .voice-card-header { background: #ff5ec3; }
+.voice-card-v2.tv-sample  .voice-card-header { background: #ffaa3a; }
+
+/* TvUnknown — binding not registered yet (or freshly-created card
+   with no body).  Phosphor-on-dark, dashed border to read as
+   "placeholder, fill me in." */
+.voice-card-v2.tv-unknown .voice-card-header {
   background: var(--bg-elev);
   color: var(--fg-dim);
   border: 1px dashed var(--fg-dim);
 }
-.voice-card-v2.stack-color-none .voice-card-icon,
-.voice-card-v2.stack-color-none .voice-card-name,
-.voice-card-v2.stack-color-none .voice-edit-mvoice {
+.voice-card-v2.tv-unknown .voice-card-icon,
+.voice-card-v2.tv-unknown .voice-card-name,
+.voice-card-v2.tv-unknown .voice-edit-mvoice,
+.voice-card-v2.tv-unknown .voice-edit-tvoice,
+.voice-card-v2.tv-unknown .voice-edit-tvoice-select,
+.voice-card-v2.tv-unknown .voice-edit-sep {
   color: var(--fg-dim);
 }
-.voice-card-v2.stack-color-none .voice-card-swatch {
-  border-color: var(--fg-dim);
-  color: var(--fg-dim);
-  background: transparent;
-}
 
-.voice-card-v2.stack-color-1 .voice-card-header { background: #41ff7c; }
-.voice-card-v2.stack-color-2 .voice-card-header { background: #ffb84a; }
-.voice-card-v2.stack-color-3 .voice-card-header { background: #4afff0; }
-.voice-card-v2.stack-color-4 .voice-card-header { background: #b6ff5c; }
-.voice-card-v2.stack-color-5 .voice-card-header { background: #ff8a65; }
-.voice-card-v2.stack-color-6 .voice-card-header { background: #9bffb6; }
-.voice-card-v2.stack-color-7 .voice-card-header { background: #ffe066; }
-.voice-card-v2.stack-color-8 .voice-card-header { background: #ce93ff; }
-
-/* ==========================================================================
-   Colour picker popover.  3×3 grid of swatches; appears above the card.
-   ========================================================================== */
-
-.voice-card-picker {
-  position: absolute;
-  top: -2px;
-  right: -2px;
-  display: grid;
-  grid-template-columns: repeat(3, 1.5rem);
-  grid-auto-rows: 1.5rem;
-  gap: 0.25rem;
-  padding: 0.35rem;
-  background: var(--bg-deep);
-  border: 1px solid var(--fg);
-  border-radius: 4px;
-  box-shadow: 0 0 10px rgba(65, 255, 124, 0.55);
-  z-index: 2000;
-}
-
-.voice-picker-swatch {
-  border: 1px solid var(--fg-dim);
-  border-radius: 3px;
-  cursor: pointer;
+/* Type-label badge in the card header corner: small caps, low
+   weight; provides the sub-type readout (note/cc/pitch/mod/gate/
+   smp) once we add finer-grained classification.  Hidden when
+   the label string is empty (TvUnknown). */
+.voice-card-v2 .voice-card-tvtype {
+  margin-left: auto;
   font-family: var(--mono);
-  font-size: 0.7rem;
-  color: rgba(0, 0, 0, 0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
+  font-size: 0.65rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(0, 0, 0, 0.55);
+  padding: 0 0.35rem;
 }
-
-.voice-picker-swatch:hover {
-  border-color: var(--fg-bright);
-  box-shadow: var(--glow-bright);
-}
-
-.voice-picker-swatch.voice-picker-current {
-  outline: 2px solid var(--fg-bright);
-  outline-offset: -2px;
-}
-
-.voice-picker-swatch.stack-color-none {
-  background: var(--bg);
-  color: var(--fg-dim);
-  border-color: var(--fg-dim);
-  border-style: dashed;
-}
-.voice-picker-swatch.stack-color-1 { background: #41ff7c; }
-.voice-picker-swatch.stack-color-2 { background: #ffb84a; }
-.voice-picker-swatch.stack-color-3 { background: #4afff0; }
-.voice-picker-swatch.stack-color-4 { background: #b6ff5c; }
-.voice-picker-swatch.stack-color-5 { background: #ff8a65; }
-.voice-picker-swatch.stack-color-6 { background: #9bffb6; }
-.voice-picker-swatch.stack-color-7 { background: #ffe066; }
-.voice-picker-swatch.stack-color-8 { background: #ce93ff; }
+.voice-card-v2 .voice-card-tvtype:empty { display: none; }
 
 /* ==========================================================================
    Voice-card editing modal: pop-out card at 3× scale.
@@ -1579,7 +1535,9 @@ body::before {
    per-stack-state overrides below (stack-color-none, stack-config)
    apply to the input as well.  Border / focus colours adapt similarly
    via currentColor. */
-.voice-edit-mvoice {
+.voice-edit-mvoice,
+.voice-edit-tvoice,
+.voice-edit-tvoice-select {
   font: inherit;
   font-family: var(--mono);
   font-size: 1.2rem;
@@ -1588,14 +1546,46 @@ body::before {
   border: 1px solid currentColor;
   border-radius: 3px;
   padding: 0.1rem 0.4rem;
-  min-width: 6rem;
-  max-width: 14rem;
   opacity: 0.85;
 }
-.voice-edit-mvoice:focus {
+.voice-edit-mvoice {
+  min-width: 5rem;
+  max-width: 9rem;
+}
+.voice-edit-tvoice-select {
+  min-width: 7rem;
+  max-width: 12rem;
+  cursor: pointer;
+  /* Match the header colour scheme — options live in the native
+     OS popup so we can't restyle the menu itself, but the closed
+     control should match the inputs.  Native chevron stays. */
+}
+.voice-edit-tvoice {
+  min-width: 6rem;
+  max-width: 11rem;
+}
+.voice-edit-mvoice:focus,
+.voice-edit-tvoice:focus,
+.voice-edit-tvoice-select:focus {
   outline: none;
   opacity: 1;
   background: rgba(255, 255, 255, 0.08);
+}
+/* Dropdown options inherit black text for legibility against the
+   coloured header backgrounds.  Native menu styling otherwise. */
+.voice-edit-tvoice-select option {
+  color: #000;
+  background: #fff;
+}
+
+/* Colon separator between mvoice and tvoice inputs in the modal
+   header.  Inherits header foreground color so it tracks the type-
+   color the same way the inputs' borders do. */
+.voice-edit-sep {
+  font-family: var(--mono);
+  font-size: 1.2rem;
+  opacity: 0.7;
+  padding: 0 0.15rem;
 }
 
 /* Close × button on the right of the header. */

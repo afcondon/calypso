@@ -160,7 +160,15 @@ cellAppendBodyCodec = CAR.object "CellAppendBody"
 -- | codec-argonaut's `maybe` combinator expects a tagged-object wire
 -- | form for `Maybe`, not the missing-vs-present convention HTTP
 -- | clients will naturally use.
-parseCellPatch :: String -> Either String { source :: Maybe String, kind :: Maybe String, form :: Maybe Boolean }
+parseCellPatch
+  :: String
+  -> Either String
+       { source :: Maybe String
+       , kind :: Maybe String
+       , form :: Maybe Boolean
+       , mvoice :: Maybe String
+       , tvoice :: Maybe String
+       }
 parseCellPatch raw = case jsonParser raw of
   Left e -> Left ("bad JSON: " <> e)
   Right j -> case toObject j of
@@ -169,7 +177,12 @@ parseCellPatch raw = case jsonParser raw of
       source <- pickStr "source" o
       kind <- pickStr "kind" o
       form <- pickBool "form" o
-      pure { source, kind, form }
+      -- mvoice/tvoice use the empty-string sentinel for "clear":
+      -- key absent → preserve current value; key present and "" →
+      -- set to Nothing; key present and non-empty → set to Just s.
+      mvoice <- pickStr "mvoice" o
+      tvoice <- pickStr "tvoice" o
+      pure { source, kind, form, mvoice, tvoice }
   where
   pickStr key o = case Object.lookup key o of
     Nothing -> Right Nothing
@@ -451,7 +464,8 @@ handleProposalAccept ctx sid pid idx = do
                     Session.updateModule ctx.mainStore (UserModule { source: newSrc })
                   TgtCell cid ->
                     Session.updateCell ctx.mainStore cid
-                      { source: Just newSrc, kind: Nothing, form: Nothing }
+                      { source: Just newSrc, kind: Nothing, form: Nothing
+                      , mvoice: Nothing, tvoice: Nothing }
                 liftEffect $ Pen.heartbeat ctx.penStore sid
                 taken <- liftEffect $ Proposals.takeHunk ctx.proposalStore pid idx
                 case taken of

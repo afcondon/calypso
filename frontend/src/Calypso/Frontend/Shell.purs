@@ -100,13 +100,38 @@ import Calypso.Session
 -- | jam-partner) rather than authored at the helm. The cells pane shows a
 -- | small marker for those; on PromoteCellToCode the author becomes a
 -- | comment in the composition source.
-type CellRec = { id :: String, kind :: String, source :: String, author :: Maybe String }
+type CellRec =
+  { id :: String
+  , kind :: String
+  , source :: String
+  , author :: Maybe String
+  -- mvoice + tvoice live on the cell itself so they ride along with
+  -- every save / hydrate round-trip.  Both Nothing on freshly-
+  -- created cards; the renderer falls back to extractTvoice on the
+  -- source.
+  , mvoice :: Maybe String
+  , tvoice :: Maybe String
+  }
 
 cellRecOf :: Cell -> CellRec
-cellRecOf (Cell c) = { id: c.id, kind: c.kind, source: c.source, author: c.author }
+cellRecOf (Cell c) =
+  { id: c.id, kind: c.kind, source: c.source, author: c.author
+  , mvoice: c.mvoice, tvoice: c.tvoice
+  }
 
 cellOf :: CellRec -> Cell
-cellOf c = Cell { id: c.id, kind: c.kind, source: c.source, form: false, author: c.author }
+cellOf c = Cell
+  { id: c.id, kind: c.kind, source: c.source, form: false, author: c.author
+  , mvoice: c.mvoice, tvoice: c.tvoice
+  }
+
+-- | Apply f to the cell whose id matches; leave others untouched.
+-- | Used by the per-cell metadata edit handlers (mvoice, tvoice).
+mapCellInList :: String -> (CellRec -> CellRec) -> Array CellRec -> Array CellRec
+mapCellInList cellId f cells =
+  fromMaybe cells do
+    idx <- findIndex (_.id >>> (_ == cellId)) cells
+    modifyAt idx f cells
 
 -- | Infer which section a cell belongs to, by inspecting its source's
 -- | leading word.  Used to group cells in the accordion: `bind …` cells
@@ -355,6 +380,11 @@ type State =
   -- WS verb (read from the StateBus ETS table).  Refreshed on demand
   -- from the Config pane.  Pretty-printed before render.
   , configSnapshot :: Maybe String
+  -- Tvoice category lookup, derived from the snapshot's `voices`
+  -- array on each refresh.  Keyed by binding name; drives the type-
+  -- color and glyph on Voice Cells cards.  Empty until first refresh
+  -- — cards then render as TvUnknown until the first snapshot lands.
+  , tvoiceTypes :: Map String TvoiceType
   -- Last known BPM, displayed in the topbar widget.  Updated when
   -- the Config pane refreshes or when BpmCommit fires.  Initial
   -- value is the Main.purs default (120) until the first refresh
@@ -381,7 +411,7 @@ type State =
   -- to each editor instance.
   , proposals :: Array Proposal
   , lastSyncedModule :: String
-  , lastSyncedCells :: Map String { source :: String, kind :: String }
+  , lastSyncedCells :: Map String { source :: String, kind :: String, mvoice :: Maybe String, tvoice :: Maybe String }
   , lastSyncedRuntime :: String
   , visibility :: ColumnVisibility
   -- Voice Cells pane: user-defined "musical voice" stacks.  Each
@@ -394,16 +424,20 @@ type State =
   -- stack restacks.  Stack assignment + per-stack ordering are
   -- in-session only — not persisted, not in the .tidal.  See
   -- docs/voice-cells-design.md.
-  , stackOrder :: Map Int (Array String)
-                                      -- colour 1..8 → cellIds in
-                                      -- stack order, front first
-  , fannedStack :: Maybe Int          -- colour of currently-fanned
-                                      -- music stack, if any
+  , mvoiceOrder :: Map String (Array String)
+                                      -- mvoice label → cellIds in
+                                      -- stack order, front first.
+                                      -- Absent → cells in this group
+                                      -- render in original creation
+                                      -- order.  Populated only when
+                                      -- the user reorders via
+                                      -- HeaderClick (bring-to-front).
+  , fannedMvoice :: Maybe String      -- mvoice of the currently-
+                                      -- fanned music stack, if any.
   , configStackFanned :: Boolean      -- config cells form their own
                                       -- pseudo-stack (always present);
                                       -- this tracks whether it's
                                       -- fanned out
-  , colorPickerOpen :: Maybe String   -- cellId whose picker is open
   , editingCard :: Maybe String       -- cellId currently popped open
                                       -- in the modal editor, if any.
                                       -- One-at-a-time; backdrop /
@@ -423,14 +457,9 @@ type State =
                                       -- the modal shows "compiling…" while
                                       -- a cellId is in this set so a long
                                       -- wait doesn't read as a hang.
-  , cellMvoice :: Map String String   -- cellId → mvoice name (the
-                                      -- purerl-tidal binding to install
-                                      -- the cell's Pattern into).  PR3:
-                                      -- in-session only; default per-cell
-                                      -- is extractVoiceName(source).  Edit
-                                      -- via small input field in modal
-                                      -- header.  Persists per-session,
-                                      -- not across server restarts (yet).
+  -- mvoice/tvoice now ride on each CellRec (see Calypso.Session.Cell)
+  -- so they persist through hydrate/save round-trips.  No separate
+  -- state maps needed.
   , cellHistory :: Map String (Array { body :: String, modul :: String })
                                       -- Per-cell version log: every
                                       -- successful Cue prepends a
@@ -494,11 +523,9 @@ data Action
   | ForcePenAction
   | DismissPenBanner
   | ToggleColumn ColumnKey
-  -- Voice Cells pane: stack assignment via colour picker, fan-out
-  -- to edit a stack's contents.  See docs/voice-cells-design.md.
-  | OpenColorPicker String                  -- cellId
-  | CloseColorPicker
-  | SetCardColor String (Maybe Int)         -- cellId, Just N (assign) | Nothing (clear)
+  -- Voice Cells pane: fan-out / restack / bring-to-front via
+  -- HeaderClick.  Stack assignment is by mvoice label (set via the
+  -- modal header's mvoice input) — no separate color picker.
   | HeaderClick String                      -- cellId; resolves to
                                             -- bring-to-front /
                                             -- fan / restack based
@@ -513,8 +540,15 @@ data Action
   -- and Play wires into the voice install.  Backend integrated test
   -- on per-cell-compile branch (purerl-tidal).
   | CueCell String String                   -- cellId, source
-  | PlayArmed String String String          -- cellId, mvoiceName, moduleName
-  | UpdateCellMvoice String String          -- cellId, new mvoice name
+  | PlayArmed String String String          -- cellId, tvoiceName, moduleName
+  | UpdateCellTvoice String String          -- cellId, new tvoice name (binding to dispatch into)
+  | UpdateCellMvoice String String          -- cellId, new mvoice column label
+  | NewVoiceCard                            -- creates a fresh empty Voice
+                                            -- Cells card and pops it open
+                                            -- in the modal editor.  Default
+                                            -- mvoice/tvoice are blank — the
+                                            -- pickers in the modal header
+                                            -- prompt the user.
   | LoadHistoryEntry String String String   -- cellId, body, moduleName.
                                             -- Re-selects a previous cued
                                             -- version: replaces editor doc,
@@ -548,6 +582,7 @@ initialState _ =
   , compositionStatus: Nothing
   , compositionFireLines: []
   , configSnapshot: Nothing
+  , tvoiceTypes: Map.empty
   , bpmDisplay: 120.0
   , cellTypes: Map.empty
   , pendingCompile: Nothing
@@ -564,14 +599,12 @@ initialState _ =
   , lastSyncedCells: Map.empty
   , lastSyncedRuntime: ""
   , visibility: defaultVisibility
-  , stackOrder: Map.empty
-  , fannedStack: Nothing
+  , mvoiceOrder: Map.empty
+  , fannedMvoice: Nothing
   , configStackFanned: false
-  , colorPickerOpen: Nothing
   , editingCard: Nothing
   , armedModule: Map.empty
   , cuePending: Set.empty
-  , cellMvoice: Map.empty
   , cellHistory: Map.empty
   }
 
@@ -604,6 +637,10 @@ handleAction = case _ of
     handleAction (FavoritesLoaded favs)
     vocab <- H.liftAff Vocabulary.fetchVocabulary
     handleAction (VocabularyLoaded vocab)
+    -- Pull the rig snapshot so the tvoice picker + card colors have
+    -- options on first paint.  No-op if the WS isn't open yet — the
+    -- ↻ refresh button covers that case.
+    handleAction RefreshConfigState
   FavoritesLoaded favs ->
     H.modify_ _ { favorites = favs }
   VocabularyLoaded vocab ->
@@ -619,13 +656,16 @@ handleAction = case _ of
     -- Send the `state` verb through /eval; purerl-tidal returns the
     -- StateBus snapshot as the reply.  Stored verbatim; rendered with
     -- a JSON pretty-printer at draw time.  Also extracts bpm so the
-    -- topbar widget reflects what the rig actually thinks tempo is.
+    -- topbar widget reflects what the rig actually thinks tempo is,
+    -- and rebuilds the tvoice-type map so cards re-color from
+    -- whatever bindings are currently registered.
     result <- evalSource "state"
     case result of
       Left err -> H.modify_ _ { configSnapshot = Just ("ERR: " <> err) }
       Right snap -> H.modify_ \s -> s
         { configSnapshot = Just snap
         , bpmDisplay = fromMaybe s.bpmDisplay (extractBpmFromSnapshot snap)
+        , tvoiceTypes = extractTvoiceTypes snap
         }
   BpmInputChanged _ -> pure unit  -- live-input updates are observed via the input element's value
   BpmCommit n -> do
@@ -645,9 +685,23 @@ handleAction = case _ of
   AddCell -> do
     H.modify_ \s ->
       let newId = "c" <> show s.nextCellId
-          newCell = { id: newId, kind: "expr", source: "", author: Nothing }
+          newCell = { id: newId, kind: "expr", source: "", author: Nothing, mvoice: Nothing, tvoice: Nothing }
       in s { cells = snoc s.cells newCell, nextCellId = s.nextCellId + 1 }
     handleAction ScheduleCompile
+  NewVoiceCard -> do
+    -- Creates an empty CellRec and immediately opens it in the
+    -- editing modal.  No tvoice/mvoice override seeded — the pickers
+    -- in the modal header prompt the user.  Card defaults to lone
+    -- (no stack-color); column assignment happens via the existing
+    -- color picker until drag-to-reparent ships.
+    H.modify_ \s ->
+      let newId = "c" <> show s.nextCellId
+          newCell = { id: newId, kind: "expr", source: "", author: Nothing, mvoice: Nothing, tvoice: Nothing }
+      in s
+        { cells = snoc s.cells newCell
+        , nextCellId = s.nextCellId + 1
+        , editingCard = Just newId
+        }
   RemoveCell id -> do
     H.modify_ \s -> s
       { cells = filter (_.id >>> (_ /= id)) s.cells
@@ -701,7 +755,7 @@ handleAction = case _ of
       Just (Just { text }) | not (Str.null (Str.trim text)) -> do
         H.modify_ \s ->
           let newId = "c" <> show s.nextCellId
-              newCell = { id: newId, kind: "expr", source: text, author: Nothing }
+              newCell = { id: newId, kind: "expr", source: text, author: Nothing, mvoice: Nothing, tvoice: Nothing }
           in s { cells = snoc s.cells newCell, nextCellId = s.nextCellId + 1 }
         handleAction ScheduleCompile
       _ -> pure unit
@@ -798,47 +852,36 @@ handleAction = case _ of
     sendClientMsg ForcePen
     H.modify_ _ { requestingPen = true }
   DismissPenBanner -> H.modify_ _ { penBanner = Nothing }
-  OpenColorPicker cellId ->
-    H.modify_ _ { colorPickerOpen = Just cellId }
-  CloseColorPicker ->
-    H.modify_ _ { colorPickerOpen = Nothing }
-  SetCardColor cellId Nothing ->
-    H.modify_ \s -> s
-      { stackOrder = removeFromAllStacks cellId s.stackOrder
-      , colorPickerOpen = Nothing
-      }
-  SetCardColor cellId (Just n) ->
-    H.modify_ \s ->
-      let cleaned = removeFromAllStacks cellId s.stackOrder
-          inserted = Map.alter
-            (\mArr -> Just (Array.cons cellId (fromMaybe [] mArr)))
-            n
-            cleaned
-      in s { stackOrder = inserted, colorPickerOpen = Nothing }
   HeaderClick cellId -> do
     s <- H.get
-    let isConfig = case Array.find (\c -> c.id == cellId) s.cells of
-          Just c -> let sec = cellSection c in sec == SecConfig || sec == SecVoices
-          Nothing -> false
-    if isConfig
-      then H.modify_ _ { configStackFanned = not s.configStackFanned }
-      else case cellInColor s.stackOrder cellId of
-        Nothing -> pure unit  -- lone music card; header click is a no-op
-        Just color
-          | s.fannedStack == Just color ->
-              H.modify_ _ { fannedStack = Nothing }
-          | otherwise -> do
-              let stack = fromMaybe [] (Map.lookup color s.stackOrder)
-              if Array.head stack == Just cellId
-                then H.modify_ _ { fannedStack = Just color }
-                else
-                  -- Bring to front: remove + prepend within this stack.
-                  H.modify_ \st -> st
-                    { stackOrder = Map.update
-                        (\arr -> Just (Array.cons cellId (Array.filter (_ /= cellId) arr)))
-                        color
-                        st.stackOrder
-                    }
+    case Array.find (\c -> c.id == cellId) s.cells of
+      Nothing -> pure unit
+      Just c ->
+        let isConfig = let sec = cellSection c in sec == SecConfig || sec == SecVoices
+        in if isConfig
+             then H.modify_ _ { configStackFanned = not s.configStackFanned }
+             else
+               let mvoice = effectiveMvoice s c
+                   groupCells = mvoiceGroupCells s mvoice
+                   ordered = orderedMvoiceCells s mvoice groupCells
+                   isFront = Array.head ordered == Just c
+                   isAlone = Array.length ordered <= 1
+               in if isAlone then pure unit
+                  else if s.fannedMvoice == Just mvoice
+                    -- Already fanned: any header click restacks.
+                    then H.modify_ _ { fannedMvoice = Nothing }
+                    else if isFront
+                      -- Front of a collapsed stack: fan it out.
+                      then H.modify_ _ { fannedMvoice = Just mvoice }
+                      else
+                        -- Back of a collapsed stack: bring to front.
+                        let currentOrder = case Map.lookup mvoice s.mvoiceOrder of
+                              Just ids -> ids
+                              Nothing -> map _.id ordered
+                            newOrder = Array.cons cellId
+                              (Array.filter (_ /= cellId) currentOrder)
+                        in H.modify_ _
+                             { mvoiceOrder = Map.insert mvoice newOrder s.mvoiceOrder }
   OpenEditor cellId -> do
     -- One-at-a-time: opening a new card replaces any in-flight edit.
     -- Mirroring is automatic — the modal's editor emits Editor.Changed
@@ -890,26 +933,37 @@ handleAction = case _ of
                     , cellHistory = Map.insert cellId updated s.cellHistory
                     }
               Nothing -> pure unit
-  PlayArmed cellId mvoiceName moduleName -> do
-    -- PR3: Install the previously-cued module's pattern into the
-    -- named mvoice on the backend.  Backend looks up the binding
-    -- registered for mvoiceName via `bind` and hands the loaded
+  PlayArmed cellId tvoiceName moduleName -> do
+    -- Install the previously-cued module's pattern into the named
+    -- tvoice (binding) on the backend.  Backend looks up the binding
+    -- registered for tvoiceName via `bind` and hands the loaded
     -- Pattern String to tidal_voice_sup:set_voice_pat.  Pattern
     -- starts firing through the rig immediately.
     result <- evalSource
-      ("play-armed " <> mvoiceName <> " " <> moduleName)
+      ("play-armed " <> tvoiceName <> " " <> moduleName)
     case result of
       Left err -> H.modify_ _ { transportError = Just err }
       Right reply ->
         H.modify_ \s -> s { cellResults = Map.insert cellId reply s.cellResults }
-  UpdateCellMvoice cellId name -> do
-    -- The mvoice name binds the cell's pattern to a purerl-tidal
+  UpdateCellTvoice cellId name -> do
+    -- The tvoice name binds the cell's pattern to a purerl-tidal
     -- voice (set up via `bind`).  Empty string clears (defaults
-    -- back to extractVoiceName at fire time).
+    -- back to extractTvoice at fire time).  Stored on the cell
+    -- itself so it survives hydrate/save round-trips.
     let trimmed = Str.trim name
-    if Str.null trimmed
-      then H.modify_ \s -> s { cellMvoice = Map.delete cellId s.cellMvoice }
-      else H.modify_ \s -> s { cellMvoice = Map.insert cellId trimmed s.cellMvoice }
+        newVal = if Str.null trimmed then Nothing else Just trimmed
+        updateOne c = c { tvoice = newVal }
+    H.modify_ \s -> s { cells = mapCellInList cellId updateOne s.cells }
+    handleAction ScheduleCompile
+  UpdateCellMvoice cellId name -> do
+    -- The mvoice is the user-assigned column label; no backend
+    -- meaning.  Empty string clears (card falls back to displaying
+    -- its tvoice as the column label).
+    let trimmed = Str.trim name
+        newVal = if Str.null trimmed then Nothing else Just trimmed
+        updateOne c = c { mvoice = newVal }
+    H.modify_ \s -> s { cells = mapCellInList cellId updateOne s.cells }
+    handleAction ScheduleCompile
   LoadHistoryEntry cellId body modul -> do
     -- Re-select a previous cued version.  The module is still
     -- loaded (modules stay live for the BEAM session), so arming
@@ -968,9 +1022,12 @@ runGranularCompile
   -> H.HalogenM State Action Slots o m Unit
 runGranularCompile s = do
   let moduleDirty = s.moduleSource /= s.lastSyncedModule
-      cellsDirty = Array.filter cellSourceChanged s.cells
-      cellSourceChanged c = case Map.lookup c.id s.lastSyncedCells of
-        Just last -> last.source /= c.source
+      cellsDirty = Array.filter cellChanged s.cells
+      cellChanged c = case Map.lookup c.id s.lastSyncedCells of
+        Just last ->
+          last.source /= c.source
+            || last.mvoice /= c.mvoice
+            || last.tvoice /= c.tvoice
         Nothing -> true
   if not moduleDirty && Array.null cellsDirty
     then H.modify_ _ { compiling = false }
@@ -981,7 +1038,7 @@ runGranularCompile s = do
           else pure Nothing
       cellResps <- for cellsDirty \c -> httpJson PATCH
         (backendUrl <> "/session/cells/" <> c.id)
-        (stringify (encodeJsonObject [ Tuple "source" c.source ]))
+        (encodeCellPatch c)
       let lastResp = Array.last cellResps <|> moduleResp
       case lastResp of
         Just (Right resp) -> applyCompileResponse resp
@@ -1016,6 +1073,18 @@ sendModuleEdit old new =
             , Tuple "text" (AJ.fromString text)
             ]))
       ])
+
+-- | Encode a cell patch body for PATCH /session/cells/:id.  Always
+-- | emits source + mvoice + tvoice so any of those fields changing
+-- | round-trips through the server.  The empty-string sentinel is
+-- | how the server hears "clear this field" (Maybe Nothing).
+encodeCellPatch :: CellRec -> String
+encodeCellPatch c =
+  stringify $ AJ.fromObject $ Object.fromFoldable
+    [ Tuple "source" (AJ.fromString c.source)
+    , Tuple "mvoice" (AJ.fromString (fromMaybe "" c.mvoice))
+    , Tuple "tvoice" (AJ.fromString (fromMaybe "" c.tvoice))
+    ]
 
 data ModuleDiff
   = DiffAppend String
@@ -1093,7 +1162,10 @@ applyCompileResponse (CompileResponse r) = do
       ( map (\(CellType ct) -> Tuple ct.id ct.signature) r.types )
     UserModule rm = r."module"
     syncedCells = Map.fromFoldable
-      ( map (\(Cell c) -> Tuple c.id { source: c.source, kind: c.kind }) r.cells )
+      ( map (\(Cell c) -> Tuple c.id
+              { source: c.source, kind: c.kind
+              , mvoice: c.mvoice, tvoice: c.tvoice
+              }) r.cells )
     resultsMap = Map.fromFoldable
       ( map (\(CellEmit e) -> Tuple e.id e.value) r.emits )
   H.modify_ \s -> s
@@ -1653,7 +1725,10 @@ applyRemote r = do
       resultsMap = Map.fromFoldable
         ( map (\(CellEmit e) -> Tuple e.id e.value) r.emits )
       syncedCells = Map.fromFoldable
-        ( map (\(Cell c) -> Tuple c.id { source: c.source, kind: c.kind }) r.cells )
+        ( map (\(Cell c) -> Tuple c.id
+                { source: c.source, kind: c.kind
+                , mvoice: c.mvoice, tvoice: c.tvoice
+                }) r.cells )
       -- Pull the highest-numbered cell from the snapshot so a fresh
       -- AddCell never collides with a pre-existing id.  Cell ids
       -- match `c<N>`; anything else is treated as 0 (still safe —
@@ -1849,6 +1924,83 @@ extractBpmFromSnapshot raw = case jsonParser raw of
     cfgObj <- AJ.toObject cfgJ
     bpmJ <- Object.lookup "bpm" cfgObj
     AJ.toNumber bpmJ
+
+-- | Tvoice category — the four-color taxonomy applied to bindings
+-- | based on their first sink's destination/element.  Drives the
+-- | type-color and glyph on Voice Cells cards so visual identity
+-- | tracks "what kind of signal does this card emit" rather than
+-- | "which mvoice column."  Envelope is reserved for a future
+-- | user-assignable role tag (no SinkType for it today; ADSRs go
+-- | out as continuous CV like LFOs do).
+data TvoiceType
+  = TvMidi
+  | TvCV
+  | TvGate
+  | TvSample
+  | TvUnknown
+
+derive instance eqTvoiceType :: Eq TvoiceType
+
+-- | CSS class for a tvoice type — used in addition to the legacy
+-- | stack-color-N class on `voice-card-v2`.  CSS rules under these
+-- | selectors override the stack header background.
+tvoiceTypeClass :: TvoiceType -> String
+tvoiceTypeClass = case _ of
+  TvMidi -> "tv-midi"
+  TvCV -> "tv-cv"
+  TvGate -> "tv-gate"
+  TvSample -> "tv-sample"
+  TvUnknown -> "tv-unknown"
+
+-- | Compact label rendered in the corner of a card to disambiguate
+-- | sub-types within a category (note vs. cc, pitch vs. mod, etc.).
+-- | Empty for TvUnknown so unmapped tvoices don't get a misleading
+-- | label.
+tvoiceTypeLabel :: TvoiceType -> String
+tvoiceTypeLabel = case _ of
+  TvMidi -> "midi"
+  TvCV -> "cv"
+  TvGate -> "gate"
+  TvSample -> "smp"
+  TvUnknown -> ""
+
+-- | Pull `voices: [{name, signature, sinks}, ...]` out of a StateBus
+-- | snapshot and classify each tvoice by the first sink's destKind +
+-- | element.  Returns an empty map if the snapshot is unparseable or
+-- | malformed.  Used by Voice Cells card rendering to color cards by
+-- | binding type.
+extractTvoiceTypes :: String -> Map String TvoiceType
+extractTvoiceTypes raw = case jsonParser raw of
+  Left _ -> Map.empty
+  Right j -> fromMaybe Map.empty do
+    obj <- AJ.toObject j
+    voicesJ <- Object.lookup "voices" obj
+    voices <- AJ.toArray voicesJ
+    pure (Map.fromFoldable (Array.mapMaybe parseVoice voices))
+  where
+    parseVoice j = do
+      obj <- AJ.toObject j
+      nameJ <- Object.lookup "name" obj
+      name <- AJ.toString nameJ
+      sinksJ <- Object.lookup "sinks" obj
+      sinks <- AJ.toArray sinksJ
+      firstSink <- Array.head sinks
+      sinkObj <- AJ.toObject firstSink
+      destKindJ <- Object.lookup "destKind" sinkObj
+      destKind <- AJ.toString destKindJ
+      elementJ <- Object.lookup "element" sinkObj
+      element <- AJ.toString elementJ
+      pure (Tuple name (classifyTvoice destKind element))
+
+    classifyTvoice :: String -> String -> TvoiceType
+    classifyTvoice destKind element = case destKind, element of
+      "ToMidi", _        -> TvMidi
+      "ToGate", _        -> TvGate
+      "ToES5",  _        -> TvGate
+      "ToCV",   "Sample" -> TvSample
+      "ToCV",   _        -> TvCV
+      "ToESX",  _        -> TvCV
+      _,        _        -> TvUnknown
 
 -- | Topbar BPM widget — number input that fires `bpm <n>` over WS
 -- | on commit (Enter or blur).  The value reflects the most-recent
@@ -2255,7 +2407,15 @@ renderMiniNotationColumn _ =
 renderVoiceCellsColumn :: forall m. MonadAff m => State -> H.ComponentHTML Action Slots m
 renderVoiceCellsColumn state =
   HH.section [ HP.class_ (H.ClassName "pane pane-voice-cells") ]
-    [ HH.div [ HP.class_ (H.ClassName "voice-cells-canvas") ]
+    [ HH.div [ HP.class_ (H.ClassName "voice-cells-toolbar") ]
+        [ HH.button
+            [ HP.class_ (H.ClassName "voice-cells-new")
+            , HE.onClick \_ -> NewVoiceCard
+            , HP.title "Create a new Voice Cells card and open it for editing."
+            ]
+            [ HH.text "+ new card" ]
+        ]
+    , HH.div [ HP.class_ (H.ClassName "voice-cells-canvas") ]
         (renderCanvas state)
     ]
 
@@ -2275,41 +2435,79 @@ renderCanvas state =
     isConfigCell c =
       let sec = cellSection c in sec == SecConfig || sec == SecVoices
     configCells = Array.filter isConfigCell state.cells
+    -- Group music cells by their effective mvoice.  Order of first
+    -- appearance in state.cells determines column position; cards
+    -- within a group obey mvoiceOrder if set, otherwise creation
+    -- order (i.e. the order the cells appear in state.cells).
     walk
       :: Array CellRec
-      -> Set Int                    -- music-stack colours already rendered
+      -> Set String                 -- mvoices already rendered
       -> Boolean                    -- config stack already rendered?
       -> Array (H.ComponentHTML Action Slots m)
-    walk remaining renderedStacks renderedConfig = case Array.uncons remaining of
+    walk remaining renderedMvoices renderedConfig = case Array.uncons remaining of
       Nothing -> []
       Just { head: c, tail: rest }
         | isConfigCell c ->
             if renderedConfig
-              then walk rest renderedStacks renderedConfig
+              then walk rest renderedMvoices renderedConfig
               else renderConfigStack state configCells
-                Array.: walk rest renderedStacks true
-        | otherwise -> case cellInColor state.stackOrder c.id of
-            Nothing ->
-              renderVoiceCard state CardLone c
-                Array.: walk rest renderedStacks renderedConfig
-            Just color
-              | Set.member color renderedStacks ->
-                  walk rest renderedStacks renderedConfig
-              | otherwise ->
-                  let
-                    -- Render in stackOrder (front first).  Look up each
-                    -- cellId in the cell list to get the CellRec.
-                    cellsById = Map.fromFoldable (map (\c2 -> Tuple c2.id c2) state.cells)
-                    orderedIds = fromMaybe [] (Map.lookup color state.stackOrder)
-                    stackCells = Array.mapMaybe (\cid -> Map.lookup cid cellsById) orderedIds
-                    rendered =
-                      if state.fannedStack == Just color
-                        then renderFannedMusicStack state color stackCells
-                        else renderCollapsedMusicStack state color stackCells
-                  in
-                    rendered Array.: walk rest (Set.insert color renderedStacks) renderedConfig
+                Array.: walk rest renderedMvoices true
+        | otherwise ->
+            let mvoice = effectiveMvoice state c
+            in if Set.member mvoice renderedMvoices
+                 then walk rest renderedMvoices renderedConfig
+                 else
+                   let
+                     groupCells = mvoiceGroupCells state mvoice
+                     stackCells = orderedMvoiceCells state mvoice groupCells
+                     rendered =
+                       if Array.length stackCells <= 1
+                         then renderVoiceCard state CardLone c
+                         else if state.fannedMvoice == Just mvoice
+                           then renderFannedMusicStack state mvoice stackCells
+                           else renderCollapsedMusicStack state mvoice stackCells
+                   in
+                     rendered Array.: walk rest (Set.insert mvoice renderedMvoices) renderedConfig
   in
     walk state.cells Set.empty false
+
+-- | The mvoice label a cell currently belongs to: cellMvoice
+-- | override, else cellTvoice override, else extracted from the
+-- | source's first identifier.  Drives column-grouping in the
+-- | Voice Cells canvas — cards sharing an effective mvoice stack
+-- | together.
+effectiveMvoice :: State -> CellRec -> String
+effectiveMvoice _ c =
+  let tvoiceName = fromMaybe (extractTvoice c.source) c.tvoice
+  in fromMaybe tvoiceName c.mvoice
+
+-- | All non-config cells whose effective mvoice equals the given
+-- | label.  Used by the canvas walker to assemble a stack.
+mvoiceGroupCells :: State -> String -> Array CellRec
+mvoiceGroupCells state mvoice =
+  Array.filter
+    (\c ->
+      let sec = cellSection c
+          isConfig = sec == SecConfig || sec == SecVoices
+      in not isConfig && effectiveMvoice state c == mvoice)
+    state.cells
+
+-- | Apply user-specified ordering (mvoiceOrder) to a group of
+-- | cells, falling back to the natural creation order in
+-- | state.cells when no override is recorded.  IDs in the override
+-- | that no longer exist as cells are silently dropped; cells that
+-- | are missing from the override list (e.g. newly-created in this
+-- | mvoice) get appended at the end.
+orderedMvoiceCells :: State -> String -> Array CellRec -> Array CellRec
+orderedMvoiceCells state mvoice groupCells =
+  case Map.lookup mvoice state.mvoiceOrder of
+    Nothing -> groupCells
+    Just ids ->
+      let byId = Map.fromFoldable (map (\c -> Tuple c.id c) groupCells)
+          ordered = Array.mapMaybe (\cid -> Map.lookup cid byId) ids
+          orderedSet = Set.fromFoldable (map _.id ordered)
+          extras = Array.filter (\c -> not (Set.member c.id orderedSet)) groupCells
+      in ordered <> extras
 
 -- | A collapsed music stack: cards overlap with only the front fully
 -- | visible.  No toolbar — header click on the front fans, header
@@ -2318,10 +2516,10 @@ renderCanvas state =
 renderCollapsedMusicStack
   :: forall m. MonadAff m
   => State
-  -> Int                           -- color
+  -> String                        -- mvoice label
   -> Array CellRec                 -- in stack order, front first
   -> H.ComponentHTML Action Slots m
-renderCollapsedMusicStack state color cells =
+renderCollapsedMusicStack state _mvoice cells =
   let
     total = Array.length cells
     -- (total-1) cards behind, each peeking ~22px (header row),
@@ -2329,7 +2527,7 @@ renderCollapsedMusicStack state color cells =
     stackHeightPx = (total - 1) * 22 + 140
   in
     HH.div
-      [ HP.class_ (H.ClassName ("voice-stack stack-color-" <> show color))
+      [ HP.class_ (H.ClassName "voice-stack")
       , HP.style ("height: " <> show stackHeightPx <> "px;")
       ]
       (mapWithIndex (renderStackedCard state total) cells)
@@ -2339,12 +2537,12 @@ renderCollapsedMusicStack state color cells =
 renderFannedMusicStack
   :: forall m. MonadAff m
   => State
-  -> Int
+  -> String
   -> Array CellRec
   -> H.ComponentHTML Action Slots m
-renderFannedMusicStack state color cells =
+renderFannedMusicStack state _mvoice cells =
   HH.div
-    [ HP.class_ (H.ClassName ("voice-stack voice-stack-fanned stack-color-" <> show color)) ]
+    [ HP.class_ (H.ClassName "voice-stack voice-stack-fanned") ]
     [ HH.div [ HP.class_ (H.ClassName "voice-stack-fan-grid") ]
         (map (renderVoiceCard state CardFanned) cells)
     ]
@@ -2459,20 +2657,26 @@ renderVoiceCard
   -> H.ComponentHTML Action Slots m
 renderVoiceCard state kind c =
   let
-    -- mvoice override (set in modal header) takes precedence over the
-    -- heuristic source-extracted name.  Same resolution rule as
-    -- renderEditingModal — keeps small card and modal in sync.
-    voiceName = fromMaybe (extractVoiceName c.source)
-                          (Map.lookup c.id state.cellMvoice)
+    -- tvoice = bind name (cellTvoice override else heuristic from
+    -- cell source).  mvoice = user-assigned column label (cellMvoice
+    -- override else default to tvoice so a freshly-created card reads
+    -- "bass:bass" rather than ":bass").  Same resolution as the
+    -- modal so card and modal stay in sync.
+    tvoiceName = fromMaybe (extractTvoice c.source) c.tvoice
+    mvoiceName = fromMaybe tvoiceName c.mvoice
+    cardTitle = mvoiceName <> ":" <> tvoiceName
     bodyPreview = previewBody c.source
-    color = cellInColor state.stackOrder c.id
     isConfig = kind == CardConfigFront || kind == CardConfigBehind || kind == CardConfigFanned
     isCompact = kind == CardStackedBehind || kind == CardConfigBehind
-    colorClass =
-      if isConfig then " stack-config"
-      else case color of
-        Just n -> " stack-color-" <> show n
-        Nothing -> " stack-color-none"
+    -- Tvoice category drives the card header background.  Resolved
+    -- against the snapshot-derived tvoiceTypes map; falls back to
+    -- TvUnknown when the binding hasn't been registered yet.
+    tvoiceType = fromMaybe TvUnknown (Map.lookup tvoiceName state.tvoiceTypes)
+    typeClass = " " <> tvoiceTypeClass tvoiceType
+    -- Config cards keep the amber-dashed treatment via the
+    -- stack-config class; non-config cards use only the type-color
+    -- (or fall through to the dim TvUnknown look).
+    colorClass = if isConfig then " stack-config" else ""
     kindClass = case kind of
       CardLone -> " voice-card-lone"
       CardStackedFront -> " voice-card-front"
@@ -2481,20 +2685,19 @@ renderVoiceCard state kind c =
       CardConfigFront -> " voice-card-front"
       CardConfigBehind -> " voice-card-compact"
       CardConfigFanned -> " voice-card-fanned"
-    isPickerOpen = state.colorPickerOpen == Just c.id
     typeIcon = inferTypeIcon c.source
   in
     HH.div
       [ HP.class_
           ( H.ClassName
-              ("voice-card-v2" <> colorClass <> kindClass)
+              ("voice-card-v2" <> colorClass <> kindClass <> typeClass)
           )
       ]
       ( [ HH.div
             [ HP.class_ (H.ClassName "voice-card-header")
             , HE.onClick \_ -> HeaderClick c.id
             , HP.title (case kind of
-                CardLone -> "lone card — assign a colour to stack it"
+                CardLone -> "lone card — set its mvoice in the editor to stack it with peers"
                 CardStackedFront -> "click to fan the stack"
                 CardStackedBehind -> "click to bring this card to the front"
                 CardFanned -> "click to restack"
@@ -2505,23 +2708,11 @@ renderVoiceCard state kind c =
             [ HH.span [ HP.class_ (H.ClassName "voice-card-icon") ]
                 [ HH.text typeIcon ]
             , HH.span [ HP.class_ (H.ClassName "voice-card-name") ]
-                [ HH.text voiceName ]
+                [ HH.text cardTitle ]
+            , HH.span [ HP.class_ (H.ClassName "voice-card-tvtype") ]
+                [ HH.text (tvoiceTypeLabel tvoiceType) ]
             ]
-        -- Colour swatch is a SIBLING of the header (not a descendant)
-        -- so its click doesn't bubble up to the header's HeaderClick
-        -- handler.  Positioned absolutely at top-right via CSS.
-        -- Suppressed for config cards (they aren't user-stackable).
-        ] <> (if isConfig then [] else
-              [ HH.button
-                  [ HP.class_ (H.ClassName "voice-card-swatch")
-                  , HE.onClick \_ ->
-                      if isPickerOpen then CloseColorPicker
-                      else OpenColorPicker c.id
-                  , HP.title "pick a stack colour"
-                  ]
-                  [ HH.text "●" ]
-              ])
-        <> (if isCompact then [] else
+        ] <> (if isCompact then [] else
             [ HH.div
                 [ HP.class_ (H.ClassName "voice-card-body")
                 , HE.onClick \_ -> OpenEditor c.id
@@ -2554,45 +2745,7 @@ renderVoiceCard state kind c =
                       ]
                 )
             ])
-        <> (if isPickerOpen && not isConfig
-              then [ renderColorPicker c.id color ]
-              else [])
       )
-
--- | 9-swatch popover.  3×3 grid; first cell is "no stack" (clears the
--- | assignment), the other 8 are stack colours.  Current colour gets
--- | a subtle highlight ring.  Clicking outside the picker doesn't
--- | dismiss yet — click the swatch trigger again, or pick a colour.
-renderColorPicker
-  :: forall m. MonadAff m
-  => String                        -- cellId
-  -> Maybe Int                     -- current color (Nothing = lone)
-  -> H.ComponentHTML Action Slots m
-renderColorPicker cellId current =
-  HH.div [ HP.class_ (H.ClassName "voice-card-picker") ]
-    ( [ swatch Nothing ]
-        <> map (\n -> swatch (Just n)) (Array.range 1 8)
-    )
-  where
-    swatch :: Maybe Int -> H.ComponentHTML Action Slots m
-    swatch n =
-      let
-        cls = case n of
-          Just k -> "voice-picker-swatch stack-color-" <> show k
-          Nothing -> "voice-picker-swatch stack-color-none"
-        isCurrent = n == current
-        markedCls = if isCurrent then cls <> " voice-picker-current" else cls
-      in
-        HH.button
-          [ HP.class_ (H.ClassName markedCls)
-          , HE.onClick \_ -> SetCardColor cellId n
-          , HP.title (case n of
-              Nothing -> "no stack (lone card)"
-              Just k -> "stack " <> show k)
-          ]
-          [ HH.text (case n of
-              Nothing -> "∅"
-              Just _ -> "") ]
 
 -- | Modal pop-out editor.  When `editingCard = Just id`, renders a
 -- | dim backdrop + a 3×-scale card on top, hosting the existing
@@ -2613,20 +2766,22 @@ renderEditingModal state = case state.editingCard of
     Nothing -> HH.text ""
     Just c ->
       let
-        voiceName = extractVoiceName c.source
-        -- The mvoice the cell will install into when Play is pressed.
-        -- Override via the small input in the modal header; falls back
-        -- to the heuristic-extracted first identifier from the source.
-        mvoice = fromMaybe voiceName (Map.lookup c.id state.cellMvoice)
+        defaultTvoice = extractTvoice c.source
+        -- tvoice = bind name the cell will install into when Play is
+        -- pressed.  Override via the picker / input in the modal
+        -- header; falls back to the heuristic-extracted first
+        -- identifier.
+        tvoiceName = fromMaybe defaultTvoice c.tvoice
+        -- mvoice = user-assigned column label.  Defaults to the
+        -- tvoice when not set (so a freshly-created card reads
+        -- "bass:bass" rather than ":bass").
+        mvoiceName = fromMaybe tvoiceName c.mvoice
         typeIcon = inferTypeIcon c.source
-        color = cellInColor state.stackOrder c.id
         sec = cellSection c
         isConfig = sec == SecConfig || sec == SecVoices
-        colorClass =
-          if isConfig then " stack-config"
-          else case color of
-            Just n -> " stack-color-" <> show n
-            Nothing -> " stack-color-none"
+        tvoiceType = fromMaybe TvUnknown (Map.lookup tvoiceName state.tvoiceTypes)
+        typeClass = " " <> tvoiceTypeClass tvoiceType
+        colorClass = if isConfig then " stack-config" else ""
       in
         HH.div [ HP.class_ (H.ClassName "voice-edit-overlay") ]
           [ -- Backdrop is a SIBLING of the modal, decorative only:
@@ -2640,28 +2795,60 @@ renderEditingModal state = case state.editingCard of
           , HH.div
               [ HP.class_
                   ( H.ClassName
-                      ("voice-edit-modal voice-card-v2" <> colorClass)
+                      ("voice-edit-modal voice-card-v2" <> colorClass <> typeClass)
                   )
               ]
               [ HH.div [ HP.class_ (H.ClassName "voice-card-header") ]
                   [ HH.span [ HP.class_ (H.ClassName "voice-card-icon") ]
                       [ HH.text typeIcon ]
-                  -- Mvoice input: small text field showing the
-                  -- purerl-tidal binding name the cell installs
-                  -- into.  Default = extractVoiceName(source);
-                  -- editable inline.  Empty value clears the
-                  -- override (falls back to the default).
+                  -- Mvoice input: user-assigned column label.
+                  -- Defaults to the tvoice name when not set, so the
+                  -- card title reads "<mvoice>:<tvoice>".  Freeform —
+                  -- column-grouping is still by stack-color today;
+                  -- this label is just the display.
                   , HH.input
                       [ HP.class_ (H.ClassName "voice-edit-mvoice")
-                      , HP.value mvoice
-                      , HP.title "mvoice — the binding to install this cell's pattern into.  Commit on blur or Enter."
-                      -- onValueChange fires on commit (blur/Enter), not
-                      -- every keystroke.  This avoids the controlled-
-                      -- input race where Halogen re-renders mid-typing
-                      -- and snaps HP.value back, eating characters.
-                      -- Same pattern the topbar BPM widget uses.
+                      , HP.value mvoiceName
+                      , HP.placeholder "mvoice"
+                      , HP.title "mvoice — column label (user-assigned).  Commit on blur or Enter."
                       , HE.onValueChange \v -> UpdateCellMvoice c.id v
                       ]
+                  , HH.span [ HP.class_ (H.ClassName "voice-edit-sep") ]
+                      [ HH.text ":" ]
+                  -- Tvoice picker: <select> populated from registered
+                  -- bindings.  Native dropdown UI — deterministic
+                  -- across browsers.  If the cell currently references
+                  -- a tvoice that isn't (yet) a registered binding,
+                  -- it's prepended as an option so the value displays
+                  -- correctly rather than snapping to the first
+                  -- registered binding.  Freeform "type a new tvoice"
+                  -- is deferred — declare new bindings in the
+                  -- Composition pane (`bind <name> ...`) and they'll
+                  -- show up here on the next state refresh.
+                  , let knownOpts = Array.fromFoldable (Map.keys state.tvoiceTypes)
+                        allOpts =
+                          if tvoiceName == "" || Array.elem tvoiceName knownOpts
+                            then knownOpts
+                            else Array.cons tvoiceName knownOpts
+                        placeholder =
+                          if tvoiceName == ""
+                            then [ HH.option [ HP.value "" ] [ HH.text "— pick tvoice —" ] ]
+                            else []
+                    in HH.select
+                         [ HP.class_ (H.ClassName "voice-edit-tvoice-select")
+                         , HP.value tvoiceName
+                         , HP.title "registered bindings — pick one to set this cell's tvoice."
+                         , HE.onValueChange \v -> UpdateCellTvoice c.id v
+                         ]
+                         ( placeholder <>
+                           map
+                             (\n -> HH.option
+                               [ HP.value n
+                               , HP.selected (n == tvoiceName)
+                               ]
+                               [ HH.text n ])
+                             allOpts
+                         )
                   , HH.button
                       [ HP.class_ (H.ClassName "voice-edit-close")
                       , HE.onClick \_ -> CloseEditor
@@ -2785,7 +2972,7 @@ renderEditingModal state = case state.editingCard of
                               , HP.disabled (not playEnabled)
                               ]
                               <> case armed of
-                                   Just m  -> [ HE.onClick \_ -> PlayArmed c.id mvoice m ]
+                                   Just m  -> [ HE.onClick \_ -> PlayArmed c.id tvoiceName m ]
                                    Nothing -> []
                             )
                             [ HH.text "▶" ]
@@ -2807,25 +2994,6 @@ renderEditingModal state = case state.editingCard of
 -- | Cheap heuristic: pick a glyph based on the first verb/word of
 -- | the cell's source.  Type icons are vector-graphics-y placeholders
 -- | until we wire real binding info from the dispatcher snapshot.
--- | Reverse lookup: which stack colour (if any) does a cellId belong
--- | to?  Walks the small stackOrder map; up to 8 entries so cheap.
-cellInColor :: Map Int (Array String) -> String -> Maybe Int
-cellInColor m cellId =
-  Array.findMap
-    (\(Tuple n cells) -> if Array.elem cellId cells then Just n else Nothing)
-    (Map.toUnfoldable m :: Array (Tuple Int (Array String)))
-
--- | Remove a cellId from every stack in the map, dropping any stack
--- | that becomes empty.  Used when re-assigning a card's colour.
-removeFromAllStacks :: String -> Map Int (Array String) -> Map Int (Array String)
-removeFromAllStacks cellId =
-  Map.mapMaybe
-    (\arr ->
-      let arr' = Array.filter (_ /= cellId) arr
-      in case Array.length arr' of
-           0 -> Nothing
-           _ -> Just arr')
-
 inferTypeIcon :: String -> String
 inferTypeIcon src =
   let lines = Str.split (Pattern "\n") src
@@ -2862,8 +3030,8 @@ inferTypeIcon src =
 -- | First word of the first non-comment, non-empty line.  For music
 -- | cells this is the voice name (`bass`, `kick`, `bass-cutoff`); for
 -- | config cells it's the verb (`bind`, `midi-device`, …).
-extractVoiceName :: String -> String
-extractVoiceName src =
+extractTvoice :: String -> String
+extractTvoice src =
   let lines = Str.split (Pattern "\n") src
       firstStmt = Array.find (\l -> not (Str.null (stripLineComment l))) lines
   in case firstStmt of

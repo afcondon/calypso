@@ -37,6 +37,15 @@ newtype Cell = Cell
   , source :: String
   , form :: Boolean
   , author :: Maybe String
+  -- | mvoice = user-assigned column label.  Drives card-grouping in
+  -- | the Voice Cells pane.  When Nothing, the card displays under
+  -- | its tvoice (or, failing that, the source's first identifier).
+  , mvoice :: Maybe String
+  -- | tvoice = the registered binding the cell's pattern dispatches
+  -- | to (`bind <name> ...`).  Override of the heuristic that takes
+  -- | the source's first identifier; explicit when the user has
+  -- | picked a binding from the dropdown.
+  , tvoice :: Maybe String
   }
 
 cellCodec :: JsonCodec Cell
@@ -47,20 +56,25 @@ cellCodec = CA.prismaticCodec "Cell" toCell fromCell $
     , source: CA.string
     , form: CAR.optional CA.boolean
     , author: CAR.optional CA.string
+    , mvoice: CAR.optional CA.string
+    , tvoice: CAR.optional CA.string
     }
   where
-  -- Missing `form` / `author` decode as false / Nothing so old snapshots keep working.
+  -- Missing fields decode to defaults so old snapshots keep working.
   toCell r = Just $ Cell
     { id: r.id, kind: r.kind, source: r.source
     , form: fromMaybe false r.form, author: r.author
+    , mvoice: r.mvoice, tvoice: r.tvoice
     }
-  -- Encode `form: true` and `author` only when set; omit otherwise.
+  -- Encode optional fields only when set; omit otherwise.
   fromCell (Cell r) =
     { id: r.id
     , kind: r.kind
     , source: r.source
     , form: if r.form then Just true else Nothing
     , author: r.author
+    , mvoice: r.mvoice
+    , tvoice: r.tvoice
     }
 
 -- | What the frontend submits on each compile.
