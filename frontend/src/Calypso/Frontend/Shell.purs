@@ -56,6 +56,8 @@ import Calypso.Frontend.Favorite as Favorite
 import Calypso.Frontend.Primer as Primer
 import Calypso.Frontend.Vocabulary as Vocabulary
 import Calypso.Frontend.WsClient as WsClient
+import Calypso.Composition as Comp
+import Calypso.Composition.Parser as Comp
 import Calypso.Favorite (Favorite(..))
 import Calypso.Vocabulary as CV
 import Calypso.Vocabulary (Vocabulary)
@@ -662,11 +664,12 @@ handleAction = case _ of
     result <- evalSource "state"
     case result of
       Left err -> H.modify_ _ { configSnapshot = Just ("ERR: " <> err) }
-      Right snap -> H.modify_ \s -> s
-        { configSnapshot = Just snap
-        , bpmDisplay = fromMaybe s.bpmDisplay (extractBpmFromSnapshot snap)
-        , tvoiceTypes = extractTvoiceTypes snap
-        }
+      Right snap -> H.modify_ \s ->
+        let s' = s
+              { configSnapshot = Just snap
+              , bpmDisplay = fromMaybe s.bpmDisplay (extractBpmFromSnapshot snap)
+              }
+        in s' { tvoiceTypes = recomputeTvoiceTypes s' }
   BpmInputChanged _ -> pure unit  -- live-input updates are observed via the input element's value
   BpmCommit n -> do
     -- Send `bpm <n>` to purerl-tidal, which forwards `/link/set-tempo`
@@ -677,7 +680,9 @@ handleAction = case _ of
     _ <- evalSource ("bpm " <> show n)
     pure unit
   ModuleChanged src -> do
-    H.modify_ _ { moduleSource = src }
+    H.modify_ \s ->
+      let s' = s { moduleSource = src }
+      in s' { tvoiceTypes = recomputeTvoiceTypes s' }
     handleAction ScheduleCompile
   CellChanged id src -> do
     H.modify_ \s -> s { cells = updateCell id src s.cells }
@@ -1735,20 +1740,22 @@ applyRemote r = do
       -- max with the existing local counter keeps it monotonic).
       maxRemoteN = foldr max 0
         ( Array.mapMaybe (\(Cell c) -> parseCellNumber c.id) r.cells )
-  H.modify_ \s -> s
-    { moduleSource = rm.source
-    , cells = cellRecs
-    , nextCellId = max s.nextCellId (maxRemoteN + 1)
-    , runtime = r.runtime
-    , cellTypes = typesMap
-    , cellResults = Map.union resultsMap s.cellResults
-    , cellRanges = r.cellLines
-    , errors = r.errors
-    , warnings = r.warnings
-    , lastSyncedModule = rm.source
-    , lastSyncedCells = syncedCells
-    , lastSyncedRuntime = r.runtime
-    }
+  H.modify_ \s ->
+    let s' = s
+          { moduleSource = rm.source
+          , cells = cellRecs
+          , nextCellId = max s.nextCellId (maxRemoteN + 1)
+          , runtime = r.runtime
+          , cellTypes = typesMap
+          , cellResults = Map.union resultsMap s.cellResults
+          , cellRanges = r.cellLines
+          , errors = r.errors
+          , warnings = r.warnings
+          , lastSyncedModule = rm.source
+          , lastSyncedCells = syncedCells
+          , lastSyncedRuntime = r.runtime
+          }
+    in s' { tvoiceTypes = recomputeTvoiceTypes s' }
   decorateErrors r.errors r.cellLines
 
 parseCellNumber :: String -> Maybe Int
@@ -2001,6 +2008,63 @@ extractTvoiceTypes raw = case jsonParser raw of
       "ToCV",   _        -> TvCV
       "ToESX",  _        -> TvCV
       _,        _        -> TvUnknown
+
+-- | Parser-driven tvoice-type map: derive directly from the
+-- | composition text in `module.source`.  The verb tells us the
+-- | signal kind (`gate`, `cv`, `midi-*`); the device-decl tells us
+-- | the device-type the binding targets; together they classify into
+-- | a TvoiceType for card colouring.  Returns an empty map if the
+-- | text doesn't parse — caller falls back to the snapshot path.
+-- |
+-- | This runs on every module-source change so the picker + card
+-- | colours track the user's edits live, without waiting for a
+-- | snapshot refresh.
+extractTvoiceTypesFromComposition :: String -> Map String TvoiceType
+extractTvoiceTypesFromComposition src = case Comp.parseComposition src of
+  Left _ -> Map.empty
+  Right (Comp.Composition stmts) ->
+    let
+      -- First pass: alias → device-type kind.  Used to classify CV
+      -- bindings against destination (esx-8cv vs es9 etc.) when the
+      -- type-color depends on it.
+      deviceKinds = Map.fromFoldable
+        (Array.mapMaybe deviceAliasKind stmts)
+    in
+      Map.fromFoldable (Array.mapMaybe (bindingType deviceKinds) stmts)
+  where
+    deviceAliasKind = case _ of
+      Comp.StmtDevice (Comp.DevMidi    r) -> Just (Tuple r.alias "midi")
+      Comp.StmtDevice (Comp.DevEs9     r) -> Just (Tuple r.alias "es9")
+      Comp.StmtDevice (Comp.DevFh2     r) -> Just (Tuple r.alias "fh2")
+      Comp.StmtDevice (Comp.DevYarns   r) -> Just (Tuple r.alias "yarns")
+      Comp.StmtDevice (Comp.DevOsc     r) -> Just (Tuple r.alias "osc")
+      Comp.StmtDevice (Comp.DevEs5     r) -> Just (Tuple r.alias "es5")
+      Comp.StmtDevice (Comp.DevEsx8Gt  r) -> Just (Tuple r.alias "esx-8gt")
+      Comp.StmtDevice (Comp.DevEsx8Cv  r) -> Just (Tuple r.alias "esx-8cv")
+      Comp.StmtDevice (Comp.DevFhx8Gt  r) -> Just (Tuple r.alias "fhx-8gt")
+      _ -> Nothing
+    bindingType deviceKinds = case _ of
+      Comp.StmtBinding (Comp.BindMidiNote   b) -> Just (Tuple b.name TvMidi)
+      Comp.StmtBinding (Comp.BindMidiCc     b) -> Just (Tuple b.name TvMidi)
+      Comp.StmtBinding (Comp.BindMidiCcCont b) -> Just (Tuple b.name TvMidi)
+      Comp.StmtBinding (Comp.BindGate       b) -> Just (Tuple b.name TvGate)
+      Comp.StmtBinding (Comp.BindCv         b) -> Just (Tuple b.name (cvType b.mode))
+      _ -> Nothing
+    cvType = case _ of
+      Comp.CvSampleMap -> TvSample
+      _ -> TvCV
+
+-- | Recompute tvoiceTypes from both sources.  Parser-derived entries
+-- | (from `module.source` text) override snapshot entries when both
+-- | name the same binding.  The snapshot path remains as a fallback
+-- | for bindings registered on the rig but not in the user's text.
+recomputeTvoiceTypes :: State -> Map String TvoiceType
+recomputeTvoiceTypes s =
+  let fromText = extractTvoiceTypesFromComposition s.moduleSource
+      fromSnapshot = case s.configSnapshot of
+        Nothing -> Map.empty
+        Just raw -> extractTvoiceTypes raw
+  in Map.union fromText fromSnapshot
 
 -- | Topbar BPM widget — number input that fires `bpm <n>` over WS
 -- | on commit (Enter or blur).  The value reflects the most-recent
