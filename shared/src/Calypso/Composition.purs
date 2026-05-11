@@ -15,6 +15,7 @@ module Calypso.Composition
   , DeviceConfig(..)
   , Fh2VoiceConfig
   , Fh2VoiceMode(..)
+  , Fh2ModeConfig
   , OutRef(..)
   , Binding(..)
   , MidiNoteBinding
@@ -285,25 +286,49 @@ fh2VoiceConfigCodec = CAR.object "Fh2VoiceConfig"
   , channel: CA.int
   }
 
-data DeviceConfig = Fh2VoiceCfg Fh2VoiceConfig
+-- | Whole-rig mode change: names a mode from the fh2-config mode
+-- | library (Ochd, Pam's New Workout, …) to apply to the addressed
+-- | FH-2 alias. Distinct from `Fh2VoiceCfg`, which is per-voice wiring;
+-- | this swaps the entire (Config, Preset) pair in one statement.
+type Fh2ModeConfig =
+  { device :: String      -- alias of the FH-2 device
+  , modeName :: String    -- e.g. "ochd", "pnw" — looked up by fh2-config
+  }
+
+fh2ModeConfigCodec :: JsonCodec Fh2ModeConfig
+fh2ModeConfigCodec = CAR.object "Fh2ModeConfig"
+  { device: CA.string
+  , modeName: CA.string
+  }
+
+data DeviceConfig
+  = Fh2VoiceCfg Fh2VoiceConfig
+  | Fh2ModeCfg Fh2ModeConfig
 
 derive instance eqDeviceConfig :: Eq DeviceConfig
 
-data DeviceConfigTag = TagFh2Voice
+data DeviceConfigTag = TagFh2Voice | TagFh2Mode
 
 derive instance eqDeviceConfigTag :: Eq DeviceConfigTag
 
 deviceConfigCodec :: JsonCodec DeviceConfig
 deviceConfigCodec = CAS.taggedSum "DeviceConfig" printTag parseTag decodeBy encodeBy
   where
-  printTag _ = "fh2Voice"
+  printTag = case _ of
+    TagFh2Voice -> "fh2Voice"
+    TagFh2Mode  -> "fh2Mode"
   parseTag = case _ of
     "fh2Voice" -> Just TagFh2Voice
+    "fh2Mode"  -> Just TagFh2Mode
     _ -> Nothing
   decodeBy :: DeviceConfigTag -> Either DeviceConfig (Json -> Either JsonDecodeError DeviceConfig)
-  decodeBy _ = Right (map Fh2VoiceCfg <<< Codec.decode fh2VoiceConfigCodec)
+  decodeBy = case _ of
+    TagFh2Voice -> Right (map Fh2VoiceCfg <<< Codec.decode fh2VoiceConfigCodec)
+    TagFh2Mode  -> Right (map Fh2ModeCfg  <<< Codec.decode fh2ModeConfigCodec)
   encodeBy :: DeviceConfig -> Tuple DeviceConfigTag (Maybe Json)
-  encodeBy (Fh2VoiceCfg c) = Tuple TagFh2Voice (Just (Codec.encode fh2VoiceConfigCodec c))
+  encodeBy = case _ of
+    Fh2VoiceCfg c -> Tuple TagFh2Voice (Just (Codec.encode fh2VoiceConfigCodec c))
+    Fh2ModeCfg  c -> Tuple TagFh2Mode  (Just (Codec.encode fh2ModeConfigCodec  c))
 
 -- ───────────────────────────────────────────────────────────────────
 -- Bindings
@@ -367,6 +392,10 @@ data Binding
   | BindMidiCcCont MidiCcBinding
   | BindGate       GateBinding
   | BindCv         CvBinding
+  -- | `cv-cont`: continuous-CV binding. Reuses CvBinding's shape;
+  -- | the `mode` field is meaningless for cv-cont (always literal)
+  -- | and its value is ignored on the wire and during dispatch.
+  | BindCvCont     CvBinding
 
 derive instance eqBinding :: Eq Binding
 
@@ -376,6 +405,7 @@ data BindingTag
   | TagMidiCcCont
   | TagGate
   | TagCv
+  | TagCvCont
 
 derive instance eqBindingTag :: Eq BindingTag
 
@@ -425,12 +455,14 @@ bindingCodec = CAS.taggedSum "Binding" printTag parseTag decodeBy encodeBy
     TagMidiCcCont -> "midi-cc-cont"
     TagGate       -> "gate"
     TagCv         -> "cv"
+    TagCvCont     -> "cv-cont"
   parseTag = case _ of
     "midi-note"    -> Just TagMidiNote
     "midi-cc"      -> Just TagMidiCc
     "midi-cc-cont" -> Just TagMidiCcCont
     "gate"         -> Just TagGate
     "cv"           -> Just TagCv
+    "cv-cont"      -> Just TagCvCont
     _ -> Nothing
   decodeBy :: BindingTag -> Either Binding (Json -> Either JsonDecodeError Binding)
   decodeBy = case _ of
@@ -439,6 +471,7 @@ bindingCodec = CAS.taggedSum "Binding" printTag parseTag decodeBy encodeBy
     TagMidiCcCont -> Right (map BindMidiCcCont <<< Codec.decode midiCcBindingCodec)
     TagGate       -> Right (map BindGate       <<< Codec.decode gateBindingCodec)
     TagCv         -> Right (map BindCv         <<< Codec.decode cvBindingCodec)
+    TagCvCont     -> Right (map BindCvCont     <<< Codec.decode cvBindingCodec)
   encodeBy :: Binding -> Tuple BindingTag (Maybe Json)
   encodeBy = case _ of
     BindMidiNote   r -> Tuple TagMidiNote   (Just (Codec.encode midiNoteBindingCodec r))
@@ -446,3 +479,4 @@ bindingCodec = CAS.taggedSum "Binding" printTag parseTag decodeBy encodeBy
     BindMidiCcCont r -> Tuple TagMidiCcCont (Just (Codec.encode midiCcBindingCodec   r))
     BindGate       r -> Tuple TagGate       (Just (Codec.encode gateBindingCodec     r))
     BindCv         r -> Tuple TagCv         (Just (Codec.encode cvBindingCodec       r))
+    BindCvCont     r -> Tuple TagCvCont     (Just (Codec.encode cvBindingCodec       r))

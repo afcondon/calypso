@@ -24,6 +24,7 @@ import Calypso.Composition
   , ExpanderDevice
   , Fh2VoiceConfig
   , Fh2VoiceMode(..)
+  , Fh2ModeConfig
   , GateBinding
   , Latency
   , MidiCcBinding
@@ -243,7 +244,12 @@ hostnameP = takeWhile1 isHostCP
 -- ───────────────────────────────────────────────────────────────────
 
 deviceConfigP :: Parser String DeviceConfig
-deviceConfigP = Fh2VoiceCfg <$> fh2ConfigP
+deviceConfigP = choice $ map try
+  -- fh2-mode must precede fh2-config: the `keyword` parser consumes the
+  -- "fh2-" prefix and would otherwise commit to the wrong branch.
+  [ Fh2ModeCfg  <$> fh2ModeConfigP
+  , Fh2VoiceCfg <$> fh2ConfigP
+  ]
 
 -- | `fh2-config <alias>:<mode> voice=N out=O ch=K`.
 fh2ConfigP :: Parser String Fh2VoiceConfig
@@ -259,6 +265,19 @@ fh2ConfigP = do
   _ <- hspace1
   channel <- kvIntP "ch"
   pure { device, mode, voice, out, channel }
+
+-- | `fh2-mode <alias>:<name>`. Names refer to entries in the fh2-config
+-- | mode registry (`FH2.Modes.availableModes` — currently "ochd", "pnw").
+-- | The parser doesn't validate the name against the registry — that's
+-- | the dispatch layer's job at apply time, so the grammar stays decoupled
+-- | from the mode catalogue.
+fh2ModeConfigP :: Parser String Fh2ModeConfig
+fh2ModeConfigP = do
+  _ <- keyword "fh2-mode"
+  device <- identP
+  _ <- char ':'
+  modeName <- identP
+  pure { device, modeName }
 
 fh2VoiceModeP :: Parser String Fh2VoiceMode
 fh2VoiceModeP = do
@@ -278,6 +297,9 @@ bindingP = choice $ map try
   , BindMidiCcCont <$> midiCcShape "midi-cc-cont"
   , BindMidiCc     <$> midiCcShape "midi-cc"
   , BindGate       <$> gateBindingP
+  -- cv-cont must precede cv: keyword "cv" would otherwise consume
+  -- the prefix of "cv-cont" and then fail when it doesn't see a mode.
+  , BindCvCont     <$> cvContBindingP
   , BindCv         <$> cvBindingP
   ]
 
@@ -347,3 +369,18 @@ cvModeP = do
     "literal" -> pure CvLiteral
     "sample-map" -> pure CvSampleMap
     other -> fail ("unknown cv mode: " <> other)
+
+-- | `cv-cont <name> <device> <bus> [latency N]`. No mode word — the
+-- | continuous-CV action only sets a sustained value, no V/oct or
+-- | sample-map shaping.  Parses into a CvBinding with mode=CvLiteral
+-- | as a no-op placeholder; the field is ignored downstream.
+cvContBindingP :: Parser String CvBinding
+cvContBindingP = do
+  _ <- keyword "cv-cont"
+  name <- identP
+  _ <- hspace1
+  device <- identP
+  _ <- hspace1
+  busOrSlot <- intDecimal
+  latency <- latencyClauseP
+  pure { name, device, busOrSlot, mode: CvLiteral, latency }
