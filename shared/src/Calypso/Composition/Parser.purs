@@ -982,6 +982,18 @@ bankToWire = case _ of
   BankCv n -> "cv" <> show n
   BankGt n -> "gt" <> show n
 
+-- | Cell-text rendering of a Bank — 1-indexed, mirroring the parser
+-- | which accepts `cv1`/`gt1` for the first expander. The AST itself
+-- | is 0-indexed (`BankCv 0` = first FHX-8CV), and `bankToWire` keeps
+-- | that 0-indexed form for the JSON envelope to fh2-config. Use this
+-- | function whenever you're producing text the user will read or
+-- | re-parse — most importantly `prettyPolySignal`'s autoformat output.
+bankToCellText :: Bank -> String
+bankToCellText = case _ of
+  BankMain -> "main"
+  BankCv n -> "cv" <> show (n + 1)
+  BankGt n -> "gt" <> show (n + 1)
+
 familyToWire :: PolyFamily -> String
 familyToWire = case _ of
   PFPolyLfo         -> "polylfo"
@@ -1044,7 +1056,7 @@ envToCellName spec env =
 prettyPolySignal :: PolySignalConfig -> String
 prettyPolySignal cfg =
   let
-    headerLine = familyToWire cfg.family <> " " <> cfg.alias <> " " <> bankToWire cfg.bank
+    headerLine = familyToWire cfg.family <> " " <> cfg.alias <> " " <> bankToCellText cfg.bank
     rangeLine = map (\r -> "  range " <> r) cfg.outputRange
     -- Param names come from slot 0; the parser produces same-key
     -- slots across the bank so this is sufficient. AST keys are the
