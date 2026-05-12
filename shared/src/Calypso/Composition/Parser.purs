@@ -13,6 +13,8 @@ module Calypso.Composition.Parser
   , collapsePolySignalBlocks
   , collapsePolySignalEntries
   , polySignalEnvelopeJson
+  , prettyPolySignal
+  , autoformatPolySignalCell
   ) where
 
 import Prelude
@@ -48,13 +50,14 @@ import Data.Array as Array
 import Data.CodePoint.Unicode as CP
 import Data.Either (Either(..))
 import Data.Foldable (elem) as F
+import Data.Foldable (foldl)
 import Data.Int as Int
-import Data.Maybe (Maybe(..))
+import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.String (CodePoint, codePointFromChar)
-import Data.String (Pattern(..), joinWith, null, split, stripSuffix, trim) as Str
+import Data.String (Pattern(..), joinWith, length, null, split, stripSuffix, trim) as Str
 import Data.String.CodeUnits as SCU
 import Data.Traversable (traverse)
-import Data.Tuple (Tuple(..))
+import Data.Tuple (Tuple(..), fst, snd)
 import Parsing (ParseError, Parser, fail, runParser)
 import Parsing.Combinators (choice, optionMaybe, try)
 import Parsing.String (char, eof, satisfy, string)
@@ -999,3 +1002,142 @@ pvToJson = case _ of
   PVInt n -> show n
   PVNumber n -> show n
   PVToken s -> "\"" <> s <> "\""
+
+-- ───────────────────────────────────────────────────────────────────
+-- Pretty-printer for polysignal blocks
+-- ───────────────────────────────────────────────────────────────────
+--
+-- Round-trips through the parser: `parse >>> pretty >>> parse` yields
+-- the same `PolySignalConfig`. Used by the cell-fire path to canonicalise
+-- cell text on commit — column-aligned value vectors, explicit `<>`
+-- continuation markers on every line except the last.
+
+-- | Look up the FamilySpec for a family. Total — there's one spec
+-- | per constructor — but kept as a case to stay future-proof if
+-- | new families land.
+familySpecFor :: PolyFamily -> FamilySpec
+familySpecFor = case _ of
+  PFPolyLfo         -> polyLfoSpec
+  PFPolyClock       -> polyClockSpec
+  PFPolyEnv         -> polyEnvSpec
+  PFPolyEuclid      -> polyEuclidSpec
+  PFPolyEuclidPairs -> polyEuclidPairsSpec
+  PFPolyRand        -> polyRandSpec
+
+-- | Map an envName (AST/wire form, e.g. `ratio`) back to the cellName
+-- | (user-facing form, e.g. `ratios`). Falls through to the envName
+-- | when the family has no rename for that param — the two are
+-- | identical for most params anyway.
+envToCellName :: FamilySpec -> String -> String
+envToCellName spec env =
+  case Array.find (\p -> p.envName == env) spec.params of
+    Just p -> p.cellName
+    Nothing -> env
+
+-- | Re-emit a `PolySignalConfig` as canonical cell text. The output
+-- | starts with the verb-line header, then optionally a `range`
+-- | singleton, then one line per parameter name (in slot 0's
+-- | declaration order). Values within each parameter row are
+-- | column-aligned: every column is padded to the widest rendered
+-- | value at that slot index, computed across all parameter rows so
+-- | numbers and tokens line up vertically.
+prettyPolySignal :: PolySignalConfig -> String
+prettyPolySignal cfg =
+  let
+    headerLine = familyToWire cfg.family <> " " <> cfg.alias <> " " <> bankToWire cfg.bank
+    rangeLine = map (\r -> "  range " <> r) cfg.outputRange
+    -- Param names come from slot 0; the parser produces same-key
+    -- slots across the bank so this is sufficient. AST keys are the
+    -- envName form (singular: `ratio`, `shape`); translate back to
+    -- the cellName form (plural: `ratios`, `shapes`) for the user.
+    spec = familySpecFor cfg.family
+    paramNames = case Array.head cfg.slots of
+      Nothing -> []
+      Just s0 -> map fst s0
+    paramRows = map (\name ->
+      { name: envToCellName spec name
+      , values: map (\slot -> renderPolyValue (lookupParam name slot)) cfg.slots
+      }) paramNames
+    colCount = Array.length cfg.slots
+    -- Per-column width across every parameter row, so the columns
+    -- line up vertically even when one row has a long token and
+    -- another has a short integer at the same slot index.
+    colWidths = map (\i ->
+      foldl max 1
+        (Array.mapMaybe (\row -> Str.length <$> Array.index row.values i) paramRows)
+      ) (Array.range 0 (colCount - 1))
+    paramLines = map (renderParamRow colWidths) paramRows
+    allLines = [headerLine]
+      <> (maybe [] (\r -> [r]) rangeLine)
+      <> paramLines
+  in joinWithContinuations allLines
+
+-- | Render `[v0, v1, ..., vN]` with each value followed by `, ` and
+-- | right-padded to its column width. The comma hugs its own value
+-- | (reads as "this value, next value") instead of drifting away from
+-- | the value into the gap. The closing `]` sits flush against the
+-- | last value (no trailing separator) but the last column is still
+-- | padded to width so brackets align vertically across rows.
+renderParamRow :: Array Int -> { name :: String, values :: Array String } -> String
+renderParamRow colWidths row =
+  "  " <> row.name <> " ["
+    <> Str.joinWith "" (Array.mapWithIndex renderCell row.values)
+    <> "]"
+  where
+  lastIdx = Array.length row.values - 1
+  renderCell i v =
+    let width = fromMaybe 0 (Array.index colWidths i)
+        separator = if i == lastIdx then "" else ", "
+    in padRight (width + Str.length separator) (v <> separator)
+
+renderPolyValue :: Maybe PolyValue -> String
+renderPolyValue = case _ of
+  Nothing -> "?"
+  Just (PVInt n) -> show n
+  Just (PVNumber n) -> showNumberCompact n
+  Just (PVToken s) -> s
+
+-- | PureScript's `show 1.0` emits "1.0" which is fine but slightly
+-- | noisier than the bare integer form the user types. Trim the
+-- | trailing `.0` for whole numbers; leave fractional values alone.
+showNumberCompact :: Number -> String
+showNumberCompact n =
+  let s = show n
+  in case Str.stripSuffix (Str.Pattern ".0") s of
+    Just s' -> s'
+    Nothing -> s
+
+lookupParam :: String -> PolySlot -> Maybe PolyValue
+lookupParam name slot = map snd $ Array.find ((_ == name) <<< fst) slot
+
+padRight :: Int -> String -> String
+padRight n s = s <> SCU.fromCharArray (Array.replicate (max 0 (n - Str.length s)) ' ')
+
+-- | Glue lines with `\n` and append a column-aligned `<>` marker to
+-- | every line except the last. The marker placement matches the
+-- | grammar — the parser requires `<>` end-of-line to extend a block
+-- | past its header, and we want the formatted output to round-trip
+-- | cleanly back to the same AST. Marker column is the max line
+-- | width + 4 spaces of gap.
+joinWithContinuations :: Array String -> String
+joinWithContinuations ls = case Array.unsnoc ls of
+  Nothing -> ""
+  Just { init, last } | Array.null init -> last
+  Just { init, last } ->
+    let maxLen = foldl max 0 (map Str.length (init <> [last]))
+        gap = 4
+        withMarkers = map (\s -> padRight maxLen s <> SCU.fromCharArray (Array.replicate gap ' ') <> "<>") init
+    in Str.joinWith "\n" (withMarkers <> [last])
+
+-- | Try to autoformat a cell's text as a polysignal block. Succeeds
+-- | only when the cell parses cleanly as *exactly one* polysignal
+-- | statement; returns Nothing for any other content (multi-statement
+-- | cells, non-polysignal cells, parse errors). The caller decides
+-- | what to do on Nothing — typically: skip autoformat and fire the
+-- | original text as-is.
+autoformatPolySignalCell :: String -> Maybe String
+autoformatPolySignalCell src = case parseComposition src of
+  Left _ -> Nothing
+  Right (Composition stmts) -> case stmts of
+    [StmtDeviceConfig (PolySignalCfg cfg)] -> Just (prettyPolySignal cfg)
+    _ -> Nothing

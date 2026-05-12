@@ -773,7 +773,25 @@ handleAction = case _ of
     -- `cellStatements` runs the polysignal collapser, so multi-line
     -- polysignal blocks come through as single `polysignal <json>`
     -- statements rather than fragments.
-    let stmts = cellStatements src
+    --
+    -- Polysignal autoformat: cells that parse as exactly one
+    -- polysignal block get re-printed canonical (column-aligned
+    -- vectors, `<>` continuation markers) before firing. The fire
+    -- is the natural commit moment for the cleanup — cue is too
+    -- early (user may still be mid-edit). Cells that aren't single-
+    -- polysignal blocks are passed through unchanged.
+    fired <- case Comp.autoformatPolySignalCell src of
+      Just pretty | pretty /= src -> do
+        H.modify_ \s -> s
+          { cells = map
+              (\c -> if c.id == cellId then c { source = pretty } else c)
+              s.cells
+          }
+        _ <- H.tell _cellEditor cellId (Editor.ReplaceContent pretty)
+        _ <- H.tell _editorModal unit (Editor.ReplaceContent pretty)
+        pure pretty
+      _ -> pure src
+    let stmts = cellStatements fired
     if Array.null stmts
       then H.modify_ \s -> s
         { cellResults = Map.insert cellId "(no statements)" s.cellResults }
