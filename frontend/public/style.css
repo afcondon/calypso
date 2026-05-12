@@ -1444,6 +1444,22 @@ body::before {
 .voice-card-v2.tv-gate    .voice-card-header { background: #ff5ec3; }
 .voice-card-v2.tv-sample  .voice-card-header { background: #ffaa3a; }
 
+/* Polysignal — autonomous device config. The FH-2 generates the
+   signal; no Pattern feeds it. Lavender header sets it apart from the
+   four tvoice categories; the double-border treatment lives on the
+   companion .voice-card-polysignal class (added when the cell parses
+   as a polysignal block). */
+.voice-card-v2.tv-polysignal .voice-card-header { background: #c69ff8; }
+
+.voice-card-v2.voice-card-polysignal {
+  border-color: #c69ff8;
+  outline: 1px solid #c69ff8;
+  outline-offset: 2px;
+}
+.voice-card-v2.voice-card-polysignal:hover {
+  outline-color: #a677e8;
+}
+
 /* TvUnknown — binding not registered yet (or freshly-created card
    with no body).  Phosphor-on-dark, dashed border to read as
    "placeholder, fill me in." */

@@ -1963,6 +1963,12 @@ data TvoiceType
   | TvCV
   | TvGate
   | TvSample
+  -- | Polysignal cells are autonomous: no incoming pattern, the FH-2
+  -- | generates its own modulation/clocks/gates. The family carries
+  -- | the short label rendered in the card-tvtype slot (lfo/clk/env/
+  -- | euc/eucp/rnd). All families share a single header colour and a
+  -- | double-border treatment to read as "this is not pattern-fed."
+  | TvPolySignal Comp.PolyFamily
   | TvUnknown
 
 derive instance eqTvoiceType :: Eq TvoiceType
@@ -1976,6 +1982,7 @@ tvoiceTypeClass = case _ of
   TvCV -> "tv-cv"
   TvGate -> "tv-gate"
   TvSample -> "tv-sample"
+  TvPolySignal _ -> "tv-polysignal"
   TvUnknown -> "tv-unknown"
 
 -- | Compact label rendered in the corner of a card to disambiguate
@@ -1988,7 +1995,20 @@ tvoiceTypeLabel = case _ of
   TvCV -> "cv"
   TvGate -> "gate"
   TvSample -> "smp"
+  TvPolySignal f -> polyFamilyShortLabel f
   TvUnknown -> ""
+
+-- | 3-4 char family label for the card-tvtype corner badge. Picks the
+-- | usual modular-synth-rack abbreviations so readers scanning the
+-- | grid spot "lfo", "env", "clk" instantly without parsing the body.
+polyFamilyShortLabel :: Comp.PolyFamily -> String
+polyFamilyShortLabel = case _ of
+  Comp.PFPolyLfo         -> "lfo"
+  Comp.PFPolyClock       -> "clk"
+  Comp.PFPolyEnv         -> "env"
+  Comp.PFPolyEuclid      -> "euc"
+  Comp.PFPolyEuclidPairs -> "eucp"
+  Comp.PFPolyRand        -> "rnd"
 
 -- | Pull `voices: [{name, signature, sinks}, ...]` out of a StateBus
 -- | snapshot and classify each tvoice by the first sink's destKind +
@@ -2069,6 +2089,11 @@ extractTvoiceTypesFromComposition src = case Comp.parseComposition src of
       Comp.StmtBinding (Comp.BindGate       b) -> Just (Tuple b.name TvGate)
       Comp.StmtBinding (Comp.BindCv         b) -> Just (Tuple b.name (cvType b.mode))
       Comp.StmtBinding (Comp.BindCvCont     b) -> Just (Tuple b.name TvCV)
+      -- Polysignals: autonomous device configs. The alias names the
+      -- bank that hosts the polysignal; tag it so the card carrying
+      -- its block gets the polysignal colour + double-border.
+      Comp.StmtDeviceConfig (Comp.PolySignalCfg cfg) ->
+        Just (Tuple cfg.alias (TvPolySignal cfg.family))
       _ -> Nothing
     cvType = case _ of
       Comp.CvSampleMap -> TvSample
@@ -2743,8 +2768,21 @@ renderVoiceCard state kind c =
     -- Tvoice category drives the card header background.  Resolved
     -- against the snapshot-derived tvoiceTypes map; falls back to
     -- TvUnknown when the binding hasn't been registered yet.
-    tvoiceType = fromMaybe TvUnknown (Map.lookup tvoiceName state.tvoiceTypes)
+    -- Polysignal classification is cell-local: the cell's first word
+    -- tells us directly which family it is. Don't route this through
+    -- state.tvoiceTypes (which is a composition-source view); a cell
+    -- can carry a polysignal block before it's registered in the
+    -- composition pane, and the card should colour correctly anyway.
+    tvoiceType = case cellPolyFamily c.source of
+      Just family -> TvPolySignal family
+      Nothing -> fromMaybe TvUnknown (Map.lookup tvoiceName state.tvoiceTypes)
     typeClass = " " <> tvoiceTypeClass tvoiceType
+    -- Polysignal cells get an extra class for the double-border
+    -- treatment — the visual signal that this cell is autonomous
+    -- (no incoming Pattern); the FH-2 generates the signal itself.
+    polySignalClass = case tvoiceType of
+      TvPolySignal _ -> " voice-card-polysignal"
+      _ -> ""
     -- Config cards keep the amber-dashed treatment via the
     -- stack-config class; non-config cards use only the type-color
     -- (or fall through to the dim TvUnknown look).
@@ -2762,7 +2800,7 @@ renderVoiceCard state kind c =
     HH.div
       [ HP.class_
           ( H.ClassName
-              ("voice-card-v2" <> colorClass <> kindClass <> typeClass)
+              ("voice-card-v2" <> colorClass <> kindClass <> typeClass <> polySignalClass)
           )
       ]
       ( [ HH.div
@@ -2851,8 +2889,13 @@ renderEditingModal state = case state.editingCard of
         typeIcon = inferTypeIcon c.source
         sec = cellSection c
         isConfig = sec == SecConfig || sec == SecVoices
-        tvoiceType = fromMaybe TvUnknown (Map.lookup tvoiceName state.tvoiceTypes)
+        tvoiceType = case cellPolyFamily c.source of
+          Just family -> TvPolySignal family
+          Nothing -> fromMaybe TvUnknown (Map.lookup tvoiceName state.tvoiceTypes)
         typeClass = " " <> tvoiceTypeClass tvoiceType
+        polySignalClass = case tvoiceType of
+          TvPolySignal _ -> " voice-card-polysignal"
+          _ -> ""
         colorClass = if isConfig then " stack-config" else ""
       in
         HH.div [ HP.class_ (H.ClassName "voice-edit-overlay") ]
@@ -2867,7 +2910,7 @@ renderEditingModal state = case state.editingCard of
           , HH.div
               [ HP.class_
                   ( H.ClassName
-                      ("voice-edit-modal voice-card-v2" <> colorClass <> typeClass)
+                      ("voice-edit-modal voice-card-v2" <> colorClass <> typeClass <> polySignalClass)
                   )
               ]
               [ HH.div [ HP.class_ (H.ClassName "voice-card-header") ]
@@ -3084,6 +3127,14 @@ inferTypeIcon src =
     "fh2-shape" -> "⌇"
     "hush" -> "■"
     "bpm" -> "♩"
+    -- Polysignals: per-family glyph picks the shape closest to what
+    -- the family makes audible/visible at the jacks.
+    "polylfo"          -> "∿"  -- waveform
+    "polyclock"        -> "▣"  -- pulse grid
+    "polyenv"          -> "◣"  -- attack/decay ramp
+    "polyeuclid"       -> "◇"  -- rotating shape
+    "polyeuclid-pairs" -> "◈"  -- paired
+    "polyrand"         -> "⌖"  -- crosshair / target / chance
     -- Music cells: glyph by clues in the body.
     _ ->
       let body = Str.toLower src
@@ -3102,6 +3153,12 @@ inferTypeIcon src =
 -- | First word of the first non-comment, non-empty line.  For music
 -- | cells this is the voice name (`bass`, `kick`, `bass-cutoff`); for
 -- | config cells it's the verb (`bind`, `midi-device`, …).
+-- |
+-- | Polysignal cells are an exception: their first word is the family
+-- | verb (`polylfo` etc.) and the second word is the user-chosen
+-- | alias (`myLFO`). We return the alias so the tvoice lookup in
+-- | `state.tvoiceTypes` resolves against `PolySignalCfg.alias` and
+-- | the card title reads `myLFO:myLFO` rather than `polylfo:polylfo`.
 extractTvoice :: String -> String
 extractTvoice src =
   let lines = Str.split (Pattern "\n") src
@@ -3110,7 +3167,47 @@ extractTvoice src =
     Nothing -> "(empty)"
     Just l ->
       let words = Array.filter (not <<< Str.null) (Str.split (Pattern " ") (stripLineComment l))
-      in fromMaybe "?" (Array.head words)
+          firstWord = fromMaybe "?" (Array.head words)
+      in if isPolySignalVerb firstWord then
+           fromMaybe firstWord (Array.index words 1)
+         else
+           firstWord
+
+-- | True for any of the six polysignal verbs. Listed verbatim rather
+-- | than dispatched through the parser because this fires per-render —
+-- | a string check is fine for a six-element set.
+isPolySignalVerb :: String -> Boolean
+isPolySignalVerb = case _ of
+  "polylfo"          -> true
+  "polyclock"        -> true
+  "polyenv"          -> true
+  "polyeuclid"       -> true
+  "polyeuclid-pairs" -> true
+  "polyrand"         -> true
+  _ -> false
+
+-- | Cell-local polysignal detection: inspect the first non-comment
+-- | line's first word and classify by family. Used by `renderVoiceCard`
+-- | to colour polysignal cards even when the polysignal block isn't
+-- | (yet) in the composition pane's `module.source` (so the
+-- | composition-driven `extractTvoiceTypesFromComposition` hasn't
+-- | discovered it).
+cellPolyFamily :: String -> Maybe Comp.PolyFamily
+cellPolyFamily src =
+  let lines = Str.split (Pattern "\n") src
+      firstStmt = Array.find (\l -> not (Str.null (stripLineComment l))) lines
+      firstWord = case firstStmt of
+        Nothing -> ""
+        Just l -> fromMaybe "" $ Array.head
+          (Array.filter (not <<< Str.null) (Str.split (Pattern " ") (stripLineComment l)))
+  in case firstWord of
+    "polylfo"          -> Just Comp.PFPolyLfo
+    "polyclock"        -> Just Comp.PFPolyClock
+    "polyenv"          -> Just Comp.PFPolyEnv
+    "polyeuclid"       -> Just Comp.PFPolyEuclid
+    "polyeuclid-pairs" -> Just Comp.PFPolyEuclidPairs
+    "polyrand"         -> Just Comp.PFPolyRand
+    _ -> Nothing
 
 -- | Compact body preview for the card face.  Strips comments, joins
 -- | non-empty lines with a separator, truncates with an ellipsis.
