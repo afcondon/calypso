@@ -16,6 +16,11 @@ module Calypso.Composition
   , Fh2VoiceConfig
   , Fh2VoiceMode(..)
   , Fh2ModeConfig
+  , PolySignalConfig
+  , PolyFamily(..)
+  , Bank(..)
+  , PolyValue(..)
+  , PolySlot
   , OutRef(..)
   , Binding(..)
   , MidiNoteBinding
@@ -35,6 +40,7 @@ import Data.Argonaut.Core (Json)
 import Data.Codec as Codec
 import Data.Codec.Argonaut (JsonCodec, JsonDecodeError)
 import Data.Codec.Argonaut as CA
+import Data.Codec.Argonaut.Common as CAC
 import Data.Codec.Argonaut.Record as CAR
 import Data.Codec.Argonaut.Sum as CAS
 import Data.Either (Either(..))
@@ -301,13 +307,162 @@ fh2ModeConfigCodec = CAR.object "Fh2ModeConfig"
   , modeName: CA.string
   }
 
+-- | Output bank addressing for poly-family macros — matches the FH-2
+-- | rig topology (main FH-2 panel + up to 7 FHX-8CV + up to 8 FHX-8GT
+-- | expanders). Mirrors `FH2.Roles.Bank` in `fh2-config`; encoded as a
+-- | small string ("main"/"cv0"/"gt1"/…) for human-readable JSON.
+-- |
+-- | Cell-text input is 1-indexed (`cv1`, `gt1` — first expander) but
+-- | the AST is 0-indexed throughout (`BankCv 0`, `BankGt 0`). The
+-- | parser translates once at the cell boundary.
+data Bank
+  = BankMain
+  | BankCv Int     -- 0-indexed: BankCv 0 = first FHX-8CV
+  | BankGt Int     -- 0-indexed: BankGt 0 = first FHX-8GT
+
+derive instance eqBank :: Eq Bank
+
+-- | The six poly-family verbs supported by the cell-text grammar. Each
+-- | dictates which parameter names the slot decoder will accept (the
+-- | per-family vocabulary lives in `fh2-config`'s `FH2.PolyBank`).
+data PolyFamily
+  = PFPolyLfo
+  | PFPolyClock
+  | PFPolyEnv
+  | PFPolyEuclid
+  | PFPolyEuclidPairs
+  | PFPolyRand
+
+derive instance eqPolyFamily :: Eq PolyFamily
+
+-- | One slot-major parameter value. Slots are opaque on the Calypso
+-- | side — we don't typecheck per-family parameter sets here, only
+-- | preserve enough type info to round-trip values through JSON and
+-- | encode them into the fh2-config envelope shape.
+data PolyValue
+  = PVInt Int
+  | PVNumber Number
+  | PVToken String     -- enum token like "tri", "fwd", "c#"
+
+derive instance eqPolyValue :: Eq PolyValue
+
+-- | One slot — the parameters for one output (or pair, in
+-- | `polyeuclid-pairs`). Stored as an ordered list of (name, value)
+-- | pairs rather than a Map so source order survives round-trips and
+-- | duplicate-key inputs can be flagged.
+type PolySlot = Array (Tuple String PolyValue)
+
+-- | A whole poly-family macro: alias of the target FH-2, family
+-- | (verb), bank (panel), output range (optional voltage swing for
+-- | the bank's 8 jacks), and an array of slots — 8 for most families,
+-- | 4 for `polyeuclid-pairs`. Arity validation happens at parse time
+-- | and at the `fh2-config` decoder.
+-- |
+-- | `outputRange` is an opaque string label (`"bipolar5v"`,
+-- | `"unipolar5v"`, …) — fh2-config's `FH2.OutputRange.parseOutputRange`
+-- | is authoritative on the supported vocabulary. Calypso stays
+-- | label-agnostic so the parser doesn't need updating when fh2-config
+-- | adds new range names.
+type PolySignalConfig =
+  { alias :: String
+  , family :: PolyFamily
+  , bank :: Bank
+  , outputRange :: Maybe String
+  , slots :: Array PolySlot
+  }
+
+bankCodec :: JsonCodec Bank
+bankCodec = CAS.taggedSum "Bank" printTag parseTag decodeBy encodeBy
+  where
+  printTag = case _ of
+    TagBankMain -> "main"
+    TagBankCv   -> "cv"
+    TagBankGt   -> "gt"
+  parseTag = case _ of
+    "main" -> Just TagBankMain
+    "cv"   -> Just TagBankCv
+    "gt"   -> Just TagBankGt
+    _ -> Nothing
+  decodeBy = case _ of
+    TagBankMain -> Left BankMain
+    TagBankCv   -> Right (map BankCv <<< Codec.decode CA.int)
+    TagBankGt   -> Right (map BankGt <<< Codec.decode CA.int)
+  encodeBy = case _ of
+    BankMain  -> Tuple TagBankMain Nothing
+    BankCv n  -> Tuple TagBankCv   (Just (Codec.encode CA.int n))
+    BankGt n  -> Tuple TagBankGt   (Just (Codec.encode CA.int n))
+
+data BankTag = TagBankMain | TagBankCv | TagBankGt
+
+derive instance eqBankTag :: Eq BankTag
+
+polyFamilyCodec :: JsonCodec PolyFamily
+polyFamilyCodec = CAS.enumSum printFamily parseFamily
+  where
+  printFamily = case _ of
+    PFPolyLfo         -> "polylfo"
+    PFPolyClock       -> "polyclock"
+    PFPolyEnv         -> "polyenv"
+    PFPolyEuclid      -> "polyeuclid"
+    PFPolyEuclidPairs -> "polyeuclid-pairs"
+    PFPolyRand        -> "polyrand"
+  parseFamily = case _ of
+    "polylfo"          -> Just PFPolyLfo
+    "polyclock"        -> Just PFPolyClock
+    "polyenv"          -> Just PFPolyEnv
+    "polyeuclid"       -> Just PFPolyEuclid
+    "polyeuclid-pairs" -> Just PFPolyEuclidPairs
+    "polyrand"         -> Just PFPolyRand
+    _ -> Nothing
+
+polyValueCodec :: JsonCodec PolyValue
+polyValueCodec = CAS.taggedSum "PolyValue" printTag parseTag decodeBy encodeBy
+  where
+  printTag = case _ of
+    TagPvInt    -> "int"
+    TagPvNumber -> "number"
+    TagPvToken  -> "token"
+  parseTag = case _ of
+    "int"    -> Just TagPvInt
+    "number" -> Just TagPvNumber
+    "token"  -> Just TagPvToken
+    _ -> Nothing
+  decodeBy = case _ of
+    TagPvInt    -> Right (map PVInt    <<< Codec.decode CA.int)
+    TagPvNumber -> Right (map PVNumber <<< Codec.decode CA.number)
+    TagPvToken  -> Right (map PVToken  <<< Codec.decode CA.string)
+  encodeBy = case _ of
+    PVInt    n -> Tuple TagPvInt    (Just (Codec.encode CA.int    n))
+    PVNumber n -> Tuple TagPvNumber (Just (Codec.encode CA.number n))
+    PVToken  s -> Tuple TagPvToken  (Just (Codec.encode CA.string s))
+
+data PolyValueTag = TagPvInt | TagPvNumber | TagPvToken
+
+derive instance eqPolyValueTag :: Eq PolyValueTag
+
+-- | Codec for one slot: an array of (name, value) pairs. Each pair is
+-- | encoded as a 2-element JSON array `[name, value]` so source order
+-- | survives.
+polySlotCodec :: JsonCodec PolySlot
+polySlotCodec = CA.array (CAC.tuple CA.string polyValueCodec)
+
+polySignalConfigCodec :: JsonCodec PolySignalConfig
+polySignalConfigCodec = CAR.object "PolySignalConfig"
+  { alias: CA.string
+  , family: polyFamilyCodec
+  , bank: bankCodec
+  , outputRange: CAR.optional CA.string
+  , slots: CA.array polySlotCodec
+  }
+
 data DeviceConfig
   = Fh2VoiceCfg Fh2VoiceConfig
   | Fh2ModeCfg Fh2ModeConfig
+  | PolySignalCfg PolySignalConfig
 
 derive instance eqDeviceConfig :: Eq DeviceConfig
 
-data DeviceConfigTag = TagFh2Voice | TagFh2Mode
+data DeviceConfigTag = TagFh2Voice | TagFh2Mode | TagPolySignal
 
 derive instance eqDeviceConfigTag :: Eq DeviceConfigTag
 
@@ -315,20 +470,24 @@ deviceConfigCodec :: JsonCodec DeviceConfig
 deviceConfigCodec = CAS.taggedSum "DeviceConfig" printTag parseTag decodeBy encodeBy
   where
   printTag = case _ of
-    TagFh2Voice -> "fh2Voice"
-    TagFh2Mode  -> "fh2Mode"
+    TagFh2Voice  -> "fh2Voice"
+    TagFh2Mode   -> "fh2Mode"
+    TagPolySignal -> "polySignal"
   parseTag = case _ of
-    "fh2Voice" -> Just TagFh2Voice
-    "fh2Mode"  -> Just TagFh2Mode
+    "fh2Voice"  -> Just TagFh2Voice
+    "fh2Mode"   -> Just TagFh2Mode
+    "polySignal" -> Just TagPolySignal
     _ -> Nothing
   decodeBy :: DeviceConfigTag -> Either DeviceConfig (Json -> Either JsonDecodeError DeviceConfig)
   decodeBy = case _ of
-    TagFh2Voice -> Right (map Fh2VoiceCfg <<< Codec.decode fh2VoiceConfigCodec)
-    TagFh2Mode  -> Right (map Fh2ModeCfg  <<< Codec.decode fh2ModeConfigCodec)
+    TagFh2Voice  -> Right (map Fh2VoiceCfg  <<< Codec.decode fh2VoiceConfigCodec)
+    TagFh2Mode   -> Right (map Fh2ModeCfg   <<< Codec.decode fh2ModeConfigCodec)
+    TagPolySignal -> Right (map PolySignalCfg <<< Codec.decode polySignalConfigCodec)
   encodeBy :: DeviceConfig -> Tuple DeviceConfigTag (Maybe Json)
   encodeBy = case _ of
-    Fh2VoiceCfg c -> Tuple TagFh2Voice (Just (Codec.encode fh2VoiceConfigCodec c))
-    Fh2ModeCfg  c -> Tuple TagFh2Mode  (Just (Codec.encode fh2ModeConfigCodec  c))
+    Fh2VoiceCfg  c -> Tuple TagFh2Voice  (Just (Codec.encode fh2VoiceConfigCodec  c))
+    Fh2ModeCfg   c -> Tuple TagFh2Mode   (Just (Codec.encode fh2ModeConfigCodec   c))
+    PolySignalCfg c -> Tuple TagPolySignal (Just (Codec.encode polySignalConfigCodec c))
 
 -- ───────────────────────────────────────────────────────────────────
 -- Bindings

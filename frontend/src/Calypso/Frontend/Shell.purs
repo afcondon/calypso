@@ -53,6 +53,7 @@ import Calypso.Frontend.Config (backendUrl, formatNumber, prettyPrintJson, readH
 import Calypso.Frontend.Completion (Completion, completionsFromVocabulary)
 import Calypso.Frontend.Editor as Editor
 import Calypso.Frontend.Favorite as Favorite
+import Calypso.Frontend.FilePicker (pickJsonFile)
 import Calypso.Frontend.Primer as Primer
 import Calypso.Frontend.Vocabulary as Vocabulary
 import Calypso.Frontend.WsClient as WsClient
@@ -504,6 +505,7 @@ data Action
   | FireCell String String        -- cell id, current source
   | FireComposition String        -- current composition source
   | WipeAndRestore                -- clear all cells, re-fire code pane
+  | LoadWorkspace                 -- open file picker → POST /session/compile
   | AcceptHunk ProposalId Int     -- POST /proposals/:id/hunks/:idx/accept
   | RejectHunk ProposalId Int     -- POST .../reject
   | ToggleFavoriteMenu
@@ -764,22 +766,18 @@ handleAction = case _ of
         handleAction ScheduleCompile
       _ -> pure unit
   FireCell cellId src -> do
-    -- Tidal-style fire: Mod-Enter on a cell sends just that cell's
-    -- text via /eval to the daemon.  The daemon's reply line lands
-    -- in cellResults; errors land in transportError.  Strip blank
-    -- lines and `--` comments first (same rule as the composition
-    -- pane) so users can park notes inline.
-    let stmts = compositionStatements src
-        cleaned = Str.joinWith "\n" (map _.source stmts)
-    if Str.null cleaned
+    -- Tidal-style fire: Mod-Enter on a cell sends each statement
+    -- separately via /eval to the daemon (the daemon parses one
+    -- statement per call). Replies are joined with newlines and
+    -- land in cellResults; transport errors land in transportError.
+    -- `cellStatements` runs the polysignal collapser, so multi-line
+    -- polysignal blocks come through as single `polysignal <json>`
+    -- statements rather than fragments.
+    let stmts = cellStatements src
+    if Array.null stmts
       then H.modify_ \s -> s
         { cellResults = Map.insert cellId "(no statements)" s.cellResults }
-      else do
-        result <- evalSource cleaned
-        case result of
-          Left err -> H.modify_ _ { transportError = Just err }
-          Right reply ->
-            H.modify_ \s -> s { cellResults = Map.insert cellId reply s.cellResults }
+      else fireCellStatements cellId stmts
   FireComposition src -> do
     -- Composition is "all or nothing" but the daemon parses one
     -- statement per /eval call, so we split by line, drop blanks and
@@ -811,6 +809,44 @@ handleAction = case _ of
     if Array.null stmts
       then H.modify_ _ { compositionStatus = Just "(cells wiped — code pane is empty)" }
       else fireStatements stmts
+  LoadWorkspace -> do
+    -- Open a browser file picker, read the chosen JSON, validate it
+    -- decodes as a CompileRequest, and POST it to /session/compile.
+    -- The server's replaceAll path swaps the in-memory state, persists
+    -- to main/calypso-session.json, and broadcasts the snapshot to all
+    -- subscribers (this client included).  Use this to swap workspaces
+    -- without restarting the backend.
+    picked <- H.liftAff pickJsonFile
+    case picked of
+      Left "cancelled" -> pure unit
+      Left err -> H.modify_ _ { transportError = Just ("load: " <> err) }
+      Right text -> case jsonParser text of
+        Left err -> H.modify_ _ { transportError = Just ("load: bad JSON: " <> err) }
+        Right j -> case CA.decode compileRequestCodec j of
+          Left err -> H.modify_ _ { transportError = Just
+            ("load: not a calypso-session.json: " <> CA.printJsonDecodeError err) }
+          Right (CompileRequest req) -> do
+            -- Push the loaded payload at the server's replaceAll endpoint
+            -- (it updates in-memory state, persists, and broadcasts).
+            result <- httpJson POST (backendUrl <> "/session/compile") text
+            case result of
+              Left err -> H.modify_ _ { transportError = Just ("load: " <> err) }
+              Right resp -> do
+                applyCompileResponse resp
+                -- applyCompileResponse only refreshes "lastSynced" fields;
+                -- the live moduleSource and cells need explicit replacement
+                -- so a subsequent `▶ fire` walks the loaded composition,
+                -- not the editor's prior content.
+                let UserModule rm = req."module"
+                    loadedCells = map cellRecOf req.cells
+                H.modify_ \s -> s
+                  { moduleSource = rm.source
+                  , cells = loadedCells
+                  , transportError = Nothing
+                  , compositionStatus = Just "(workspace loaded — click ▶ fire to register on daemon)"
+                  }
+                _ <- H.tell _moduleEditor unit (Editor.ReplaceContent rm.source)
+                pure unit
   AcceptHunk pid idx -> proposalAction "accept" pid idx
   RejectHunk pid idx -> proposalAction "reject" pid idx
   ToggleFavoriteMenu -> H.modify_ \s -> s { favoriteMenuOpen = not s.favoriteMenuOpen }
@@ -896,7 +932,9 @@ handleAction = case _ of
     -- loads, replies `OK: cue M<hash>` or `ERR cue: <stderr>`.  On
     -- success we record the module name in armedModule; the modal's
     -- Play button enables.  On error we just show the reply text.
-    let stmts = compositionStatements src
+    -- `#` is preserved (sharp accidentals + Tidal param-attach), so
+    -- this uses cellStatements not compositionStatements.
+    let stmts = cellStatements src
         cleaned = Str.joinWith "\n" (map _.source stmts)
     if Str.null cleaned
       then H.modify_ \s -> s
@@ -1288,7 +1326,23 @@ compositionStatements src =
   let lines = Str.split (Pattern "\n") src
       indexed = mapWithIndex
         (\i s -> { lineNum: i + 1, source: stripModuleLineComment s }) lines
-  in Array.filter (\e -> not (Str.null e.source)) indexed
+      nonEmpty = Array.filter (\e -> not (Str.null (Str.trim e.source))) indexed
+  in Comp.collapsePolySignalEntries nonEmpty
+
+-- | Cell-text counterpart to `compositionStatements`. Strips only
+-- | `--` line comments — `#` is the Tidal parameter-attach operator
+-- | inside cell text, and also appears inside note tokens (`d#2`),
+-- | so the module-level rule that treats `#` as a comment marker
+-- | would break cell sources.
+cellStatements
+  :: String
+  -> Array { lineNum :: Int, source :: String }
+cellStatements src =
+  let lines = Str.split (Pattern "\n") src
+      indexed = mapWithIndex
+        (\i s -> { lineNum: i + 1, source: stripLineComment s }) lines
+      nonEmpty = Array.filter (\e -> not (Str.null (Str.trim e.source))) indexed
+  in Comp.collapsePolySignalEntries nonEmpty
 
 -- | Fire a list of statements in order against /eval.  Stops on the
 -- | first error and reports the failing line; on full success reports
@@ -1324,6 +1378,36 @@ fireStatements stmts = go [] stmts
   isErr r = case r.reply of
     Left _ -> true
     Right _ -> false
+
+-- | Fire a list of statements one at a time against /eval and stash
+-- | the combined replies in `cellResults` for the given cell. Differs
+-- | from `fireStatements` (composition-target) in two ways: per-cell
+-- | UI state, and the daemon-frame discipline is identical (one
+-- | statement per WS frame) so multi-line polysignal blocks reach
+-- | purerl-tidal as their collapsed wire form without trailing-line
+-- | contamination.
+fireCellStatements
+  :: forall o m
+   . MonadAff m
+  => String
+  -> Array { lineNum :: Int, source :: String }
+  -> H.HalogenM State Action Slots o m Unit
+fireCellStatements cellId stmts = go [] stmts
+  where
+  go acc remaining = case Array.uncons remaining of
+    Nothing ->
+      let combined = Str.joinWith "\n" (Array.reverse acc)
+      in H.modify_ \s -> s
+           { cellResults = Map.insert cellId combined s.cellResults }
+    Just { head: e, tail } -> do
+      result <- evalSource e.source
+      case result of
+        Left err -> do
+          H.modify_ _ { transportError = Just err }
+          -- Surface the transport failure in the cell too so the user
+          -- sees something — otherwise the cell looks idle.
+          go (Array.cons ("transport: " <> err) acc) tail
+        Right reply -> go (Array.cons reply acc) tail
 
 -- | POST `{source, imports: []}` to /eval.  Returns the daemon's
 -- | reply line on success, a human transport error on failure.  The
@@ -1984,6 +2068,7 @@ extractTvoiceTypesFromComposition src = case Comp.parseComposition src of
       Comp.StmtBinding (Comp.BindMidiCcCont b) -> Just (Tuple b.name TvMidi)
       Comp.StmtBinding (Comp.BindGate       b) -> Just (Tuple b.name TvGate)
       Comp.StmtBinding (Comp.BindCv         b) -> Just (Tuple b.name (cvType b.mode))
+      Comp.StmtBinding (Comp.BindCvCont     b) -> Just (Tuple b.name TvCV)
       _ -> Nothing
     cvType = case _ of
       Comp.CvSampleMap -> TvSample
@@ -2132,6 +2217,12 @@ renderCompositionColumn state =
             , HP.title "Fire the whole composition (Mod-Enter inside the editor)"
             ]
             [ HH.text "▶ fire" ]
+        , HH.button
+            [ HP.class_ (H.ClassName "fire-btn")
+            , HE.onClick \_ -> LoadWorkspace
+            , HP.title "Load a calypso-session.json from disk"
+            ]
+            [ HH.text "↥ load…" ]
         , HH.button
             [ HP.class_ (H.ClassName "fire-btn")
             , HE.onClick \_ -> DemoteCursorLineToCell
