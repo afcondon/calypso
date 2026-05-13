@@ -97,7 +97,7 @@ aliases can coexist in one cell (for multi-panel rigs).
 polylfo myLFO main                                                <>
   ratios [1,     2,     4,     8,     1.3,   2.6,   5.2,   10.4 ] <>
   shapes [tri,   tri,   tri,   tri,   tri,   tri,   tri,   tri  ] <>
-  ranges [+/-5v, +/-5v, +/-5v, +/-5v, +5v,   +5v,   +5v,   +5v  ]
+  ranges [±5v,   ±5v,   ±5v,   ±5v,   +5v,   +5v,   +5v,   +5v  ]
 ```
 
 Parameters:
@@ -196,6 +196,28 @@ Same parameter set as polyeuclid (single `Slot` type internally), but
 **4-vectors not 8-vectors** — pairs are the unit. Each pair drives
 two adjacent jacks (gate + accent).
 
+**Silencing accent jacks** (polyeuclidpairs only):
+
+```
+polyeuclidpairs myPair gt1     <>
+  beats      [3,  5,  4,  7 ]  <>
+  steps      [8,  8,  8,  16]  <>
+  rate       [12, 12, 12, 12]  <>
+  accent off
+```
+
+`accent off` is a block-level continuation (sibling of `range <label>`)
+that silences every accent jack on the bank. It exists because
+**`accentRate 0` is now rejected at parse time** — 0 is ambiguous in
+polyeuclidpairs (does it mean "every step" or "no steps"?) and the
+firmware silences-on-zero, which made it a footgun in practice. To
+silence accents, write `accent off`; for rare-accent effects, use a
+small non-zero rate.
+
+In `polyeuclid` (gates-only), `accentRate 0` remains the documented
+default — accent jacks are inert there, so there's no footgun to guard
+against.
+
 **Layout question (fh2-config concern, not Calypso):** yesterday's
 implementation lays out adjacent pairs on the jacks (`gate→start+2N`,
 `accent→start+2N+1`, so jack 1=e1 gate, jack 2=e1 accent, …). Andrew's
@@ -255,22 +277,38 @@ polylfo myLFO main                              <>
 
 Labels (verified empirically against FH-2 hardware capture):
 
-| Canonical (short) | Verbose alias | Range            |
-|-------------------|---------------|------------------|
-| `+10v`            | `unipolar10v` | unipolar, full   |
-| `+/-5v`           | `bipolar5v` (also `pm5v`) | **bipolar** |
-| `+1v`             | `unipolar1v`  | unipolar, tiny   |
-| `+5v`             | `unipolar5v`  | unipolar, half   |
-| `+8v`             | `unipolar8v`  | unipolar, ~full  |
+| Canonical (short) | Aliases                              | Range            |
+|-------------------|--------------------------------------|------------------|
+| `+10v`            | `unipolar10v`                        | unipolar, full   |
+| `±5v`             | `+/-5v`, `pm5v`, `bipolar5v`         | **bipolar**      |
+| `+1v`             | `unipolar1v`                         | unipolar, tiny   |
+| `+5v`             | `unipolar5v`                         | unipolar, half   |
+| `+8v`             | `unipolar8v`                         | unipolar, ~full  |
 
-The `+Nv` shorthand reads naturally — `+5v` says "zero to plus five
-volts unipolar", `+/-5v` says "plus or minus five volts bipolar". Both
-the short and verbose forms parse equivalently; the short form is
-canonical for cell text. fh2-config's `parseOutputRange` is
-authoritative on the supported labels; Calypso ships the token
-verbatim.
+The shorthand reads naturally — `+5v` says "zero to plus five volts
+unipolar", `±5v` says "plus or minus five volts bipolar". All forms
+parse equivalently; the canonical column is what autoformat-on-fire
+emits. The `+/-5v` ASCII digraph is accepted for back-compat but
+normalised to `±5v` in the AST. fh2-config's `parseOutputRange` is
+authoritative on the supported labels.
 
-Omitting `range` leaves the bank's existing output ranges untouched.
+**Defaults when `range` is omitted.** fh2-config applies a per-family
+default so the jacks come up in a sensible shape regardless of what a
+previous family left on them:
+
+| Family             | Default     | Why                                            |
+|--------------------|-------------|------------------------------------------------|
+| `polyclock`        | `+5v`       | Triggers are conventionally unipolar           |
+| `polyeuclid`       | `+5v`       | Same — gate output                             |
+| `polyeuclidpairs`  | `+5v`       | Same — gate + accent output                    |
+| `polyenv`          | `+5v`       | Modular convention: envelopes go positive; attenuverters at the patch point handle inversion. Verified on-rig 2026-05-13 — bipolar default makes envelopes idle at -5V (the "all-blue capture" gotcha). |
+| `polylfo`          | *unchanged* | LFOs are naturally bipolar at the source       |
+| `polyrand`         | *unchanged* | Random CV: user-decides per cell               |
+
+For families with a default, omitting `range` is the same as writing
+the default explicitly — the bank's jacks get set every fire, so the
+range can't drift between fires. For the *unchanged* families, the
+prior range survives across re-fires.
 
 `range` doesn't make sense for `gt*` banks (gate outputs emit fixed-
 level pulses with no voltage range). fh2-config rejects that

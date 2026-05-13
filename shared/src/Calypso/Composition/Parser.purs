@@ -50,7 +50,7 @@ import Data.Array as Array
 import Data.CodePoint.Unicode as CP
 import Data.Either (Either(..))
 import Data.Foldable (elem) as F
-import Data.Foldable (foldl)
+import Data.Foldable (all, foldl)
 import Data.Int as Int
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.String (CodePoint, codePointFromChar)
@@ -491,17 +491,29 @@ polyLfoSpec =
       -- calypso/docs/fh2-config-migration-2026-05-12.md.
   }
 
--- | The output-range token vocabulary. Both the modular-idiomatic
--- | `+/-5v` / `+Nv` short form and the verbose `bipolar5v` /
--- | `unipolar*v` form are accepted. fh2-config's `parseOutputRange`
--- | is authoritative; this list shadows the canonical tokens for
--- | parser-time error messages and is in sync as of 2026-05-12.
+-- | The output-range token vocabulary. `±5v` is the canonical short
+-- | form for bipolar 5V; `+/-5v` and `pm5v` are accepted aliases that
+-- | `canonicaliseRangeToken` normalises to `±5v` at parse time so the
+-- | AST and autoformat output stay canonical. The verbose `bipolar5v`
+-- | / `unipolar*v` forms are also accepted (no canonicalisation —
+-- | they aren't covered by the s/+\\/-/±/ substitution). fh2-config's
+-- | `parseOutputRange` is authoritative.
 outputRangeTokens :: Array String
 outputRangeTokens =
-  [ "+/-5v", "+10v", "+5v", "+1v", "+8v"
+  [ "±5v", "+/-5v", "+10v", "+5v", "+1v", "+8v"
   , "bipolar5v", "unipolar10v", "unipolar5v", "unipolar1v", "unipolar8v"
   , "pm5v"
   ]
+
+-- | Map alias forms to the canonical short form. The user-visible
+-- | rule (per 2026-05-13 decision) is "± is a single character, prefer
+-- | it over the ASCII `+/-` digraph everywhere in range specs." Applied
+-- | at parse time so the AST stores `±5v` regardless of which form the
+-- | user typed; autoformat-on-fire then echoes `±5v` back.
+canonicaliseRangeToken :: String -> String
+canonicaliseRangeToken = case _ of
+  "+/-5v" -> "±5v"
+  s -> s
 
 polyClockSpec :: FamilySpec
 polyClockSpec =
@@ -672,7 +684,41 @@ data BlockLine
   | BlParam { name :: String, values :: Array PolyValue }
 
 rangeOrParamLineP :: FamilySpec -> Parser String BlockLine
-rangeOrParamLineP spec = try rangeLineP <|> (BlParam <$> paramLineP spec)
+rangeOrParamLineP spec =
+  accentOffLineP spec
+    <|> try rangeLineP
+    <|> (BlParam <$> paramLineP spec)
+
+-- | `accent off` — polyeuclidpairs-only block-line that silences every
+-- | accent jack. Sugars to `accentRate [0, 0, 0, 0]` at parse time; the
+-- | pretty-printer detects the same shape and re-emits `accent off` on
+-- | autoformat, so round-trip is preserved without an AST field.
+-- |
+-- | The cell-text `accent off` form exists because `accentRate 0` is
+-- | now rejected by `paramLineP` for polyeuclidpairs — silencing is
+-- | the user's intent often enough that the literal-zero shape is a
+-- | footgun (does 0 mean "every step" or "no steps"?). `accent off`
+-- | is unambiguous.
+-- |
+-- | The prefix `accent` + whitespace + `off` is parsed inside `try` so
+-- | that "accentRate" (the parameter name) and "accent" variants like
+-- | `accent maybe` backtrack cleanly to let `paramLineP` handle them.
+-- | Once the prefix is committed, the family check fires as a *hard*
+-- | error so the user sees the specific message instead of a generic
+-- | "not a polyeuclid parameter: 'accent'" fall-through.
+accentOffLineP :: FamilySpec -> Parser String BlockLine
+accentOffLineP spec = do
+  _ <- try do
+    skipInterLineFiller
+    _ <- string "accent"
+    _ <- hspace1
+    _ <- string "off"
+    pure unit
+  if spec.family /= PFPolyEuclidPairs
+    then fail "`accent off` is only valid in polyeuclid-pairs"
+    else pure (BlParam { name: "accentRate"
+                       , values: Array.replicate 4 (PVInt 0)
+                       })
 
 rangeLineP :: Parser String BlockLine
 rangeLineP = do
@@ -680,10 +726,16 @@ rangeLineP = do
   _ <- string "range"
   _ <- hspace1
   -- Same token vocabulary as the per-slot `ranges` 8-vector, so we
-  -- accept modular-synth-idiomatic tokens like `+/-5v` and `+5v`.
-  -- `identP` here would reject anything starting with `+`.
+  -- accept modular-synth-idiomatic tokens like `±5v`, `+/-5v` and
+  -- `+5v`. `identP` here would reject anything starting with `+`
+  -- or `±`. Validate against the canonical token list so an unknown
+  -- label fails at parse time with a useful message rather than
+  -- being passed through to fh2-config for a late rejection.
   label <- valueTokenP
-  pure (BlRange label)
+  if label `F.elem` outputRangeTokens
+    then pure (BlRange (canonicaliseRangeToken label))
+    else fail $ "unknown range token '" <> label <> "' (expected: "
+                <> Str.joinWith " / " outputRangeTokens <> ")"
 
 partitionBlockLines
   :: Array BlockLine
@@ -709,7 +761,22 @@ paramLineP spec = do
     Just ps -> do
       _ <- hspace1
       values <- valueListP ps.shape
+      -- accentRate 0 silences accent jacks. In polyeuclid-pairs that's
+      -- almost certainly not what the user meant (and if it is, the
+      -- canonical spelling is `accent off`). In polyeuclid (gates-only)
+      -- the accent jacks are inert so accentRate 0 is fine and is in
+      -- fact the documented default.
+      when (spec.family == PFPolyEuclidPairs
+            && name == "accentRate"
+            && Array.any isPVZero values) $
+        fail $ "accentRate 0 silences accent jacks in polyeuclid-pairs"
+            <> " — use `accent off` to silence all 4 pairs explicitly,"
+            <> " or a small non-zero rate for rare accents."
       pure { name, values }
+  where
+  isPVZero = case _ of
+    PVInt 0 -> true
+    _ -> false
 
 -- | Optional whitespace, newlines, and comments between continuation
 -- | lines. Returns unit; consumes everything up to the next non-blank,
@@ -745,7 +812,7 @@ valueP = case _ of
   ShToken allowed -> do
     word <- valueTokenP
     if word `F.elem` allowed
-      then pure (PVToken word)
+      then pure (PVToken (canonicaliseRangeToken word))
       else fail $ "unknown token '" <> word <> "' (expected: "
                   <> Str.joinWith " / " allowed <> ")"
 
@@ -754,9 +821,11 @@ valueP = case _ of
 -- |     tokens commonly do
 -- |   * may start with `+` (`+5v`, `+10v`, `+/-5v`, …) — voltage-range
 -- |     tokens use this modular-synth-idiomatic notation
+-- |   * may start with `±` (`±5v`) — canonical bipolar range token
 -- |   * `#` is allowed in the middle (`c#`, `f#`) — sharps for the
 -- |     pitch-class vocabulary
--- |   * `/` is allowed in the middle (`+/-5v`) — bipolar range token
+-- |   * `/` is allowed in the middle (`+/-5v`) — legacy bipolar range
+-- |     alias
 -- |
 -- | Used only inside `[...]` value lists; outside, `#` is the comment
 -- | character per the existing grammar.
@@ -770,6 +839,7 @@ valueTokenP = do
   where
   isTokenStartCP cp = CP.isAlphaNum cp
     || cp == codePointFromChar '+'
+    || cp == codePointFromChar '±'
   isTokenRestCP cp = isIdentRestCP cp
     || cp == codePointFromChar '#'
     || cp == codePointFromChar '+'
@@ -1058,6 +1128,15 @@ prettyPolySignal cfg =
   let
     headerLine = familyToWire cfg.family <> " " <> cfg.alias <> " " <> bankToCellText cfg.bank
     rangeLine = map (\r -> "  range " <> r) cfg.outputRange
+    -- Polyeuclid-pairs with all-zero accentRate slots is the wire shape
+    -- produced by the cell-text `accent off` sugar — re-emit that
+    -- canonical form (and drop the accentRate row) for clean round-trip.
+    accentOffShortcut = cfg.family == PFPolyEuclidPairs
+      && all (\slot -> case lookupParam "accentRate" slot of
+                Just (PVInt 0) -> true
+                _ -> false) cfg.slots
+      && not (Array.null cfg.slots)
+    accentOffLine = if accentOffShortcut then ["  accent off"] else []
     -- Param names come from slot 0; the parser produces same-key
     -- slots across the bank so this is sufficient. AST keys are the
     -- envName form (singular: `ratio`, `shape`); translate back to
@@ -1065,7 +1144,10 @@ prettyPolySignal cfg =
     spec = familySpecFor cfg.family
     paramNames = case Array.head cfg.slots of
       Nothing -> []
-      Just s0 -> map fst s0
+      Just s0 -> map fst (Array.filter (\(Tuple n _) ->
+        -- When we'd emit `accent off`, drop the accentRate row from the
+        -- per-param sweep so both forms aren't shown for the same data.
+        not (accentOffShortcut && n == "accentRate")) s0)
     paramRows = map (\name ->
       { name: envToCellName spec name
       , values: map (\slot -> renderPolyValue (lookupParam name slot)) cfg.slots
@@ -1081,6 +1163,7 @@ prettyPolySignal cfg =
     paramLines = map (renderParamRow colWidths) paramRows
     allLines = [headerLine]
       <> (maybe [] (\r -> [r]) rangeLine)
+      <> accentOffLine
       <> paramLines
   in joinWithContinuations allLines
 

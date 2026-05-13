@@ -19,3 +19,16 @@ package:
     - identity
     - transformers
     - control
+  test:
+    main: Test.Main
+    dependencies:
+      - prelude
+      - effect
+      - aff
+      - spec
+      - either
+      - maybe
+      - arrays
+      - tuples
+      - parsing
+      - strings

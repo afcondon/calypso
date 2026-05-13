@@ -322,6 +322,11 @@ data Bank
 
 derive instance eqBank :: Eq Bank
 
+instance showBank :: Show Bank where
+  show BankMain    = "BankMain"
+  show (BankCv n)  = "BankCv " <> show n
+  show (BankGt n)  = "BankGt " <> show n
+
 -- | The six poly-family verbs supported by the cell-text grammar. Each
 -- | dictates which parameter names the slot decoder will accept (the
 -- | per-family vocabulary lives in `fh2-config`'s `FH2.PolyBank`).
@@ -335,6 +340,14 @@ data PolyFamily
 
 derive instance eqPolyFamily :: Eq PolyFamily
 
+instance showPolyFamily :: Show PolyFamily where
+  show PFPolyLfo         = "PFPolyLfo"
+  show PFPolyClock       = "PFPolyClock"
+  show PFPolyEnv         = "PFPolyEnv"
+  show PFPolyEuclid      = "PFPolyEuclid"
+  show PFPolyEuclidPairs = "PFPolyEuclidPairs"
+  show PFPolyRand        = "PFPolyRand"
+
 -- | One slot-major parameter value. Slots are opaque on the Calypso
 -- | side — we don't typecheck per-family parameter sets here, only
 -- | preserve enough type info to round-trip values through JSON and
@@ -345,6 +358,11 @@ data PolyValue
   | PVToken String     -- enum token like "tri", "fwd", "c#"
 
 derive instance eqPolyValue :: Eq PolyValue
+
+instance showPolyValue :: Show PolyValue where
+  show (PVInt n)    = "PVInt " <> show n
+  show (PVNumber x) = "PVNumber " <> show x
+  show (PVToken s)  = "PVToken " <> show s
 
 -- | One slot — the parameters for one output (or pair, in
 -- | `polyeuclid-pairs`). Stored as an ordered list of (name, value)
