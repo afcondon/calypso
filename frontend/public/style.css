@@ -288,6 +288,55 @@ body::before {
   line-height: 1;
 }
 
+/* ===== Clk-source reminder (corner toast) =============================== */
+/* Shown at most once per session, on first fire of a clock-dependent     */
+/* polysignal (polyclock / polyeuclid / polyeuclid-pairs / polyrand).      */
+/* Catches the "FH-2 loaded the config but is in Clk: USB with no source  */
+/* — nothing happens" failure mode. Separate visual language from         */
+/* .pen-banner so the two can coexist without competing for attention.    */
+.clk-reminder {
+  position: fixed;
+  bottom: 1.25rem;
+  right: 1.25rem;
+  max-width: 28rem;
+  background: var(--bg-elev);
+  color: var(--fg-mid);
+  border: 1px solid var(--amber);
+  border-radius: 4px;
+  padding: 0.9rem 1rem 0.75rem 1rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  z-index: 1000;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.clk-reminder-title {
+  font-weight: 600;
+  color: var(--amber);
+  margin-bottom: 0.4rem;
+  letter-spacing: 0.02em;
+}
+
+.clk-reminder-body {
+  margin-bottom: 0.75rem;
+}
+
+.clk-reminder-dismiss {
+  font: inherit;
+  background: transparent;
+  border: 1px solid var(--amber);
+  color: var(--amber);
+  padding: 0.25rem 0.75rem;
+  cursor: pointer;
+  float: right;
+  line-height: 1.2;
+}
+
+.clk-reminder-dismiss:hover {
+  background: var(--amber);
+  color: var(--bg-deep);
+}
+
 /* ===== Settings panel =================================================== */
 .settings-panel {
   background: var(--bg-deep);

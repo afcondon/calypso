@@ -364,6 +364,17 @@ type State =
   , cellRanges :: Array CellRange
   , transportError :: Maybe String
   , runtimeError :: Maybe String
+  -- Clk-source reminder. The clock-dependent polysignal families
+  -- (polyclock, polyeuclid, polyeuclid-pairs, polyrand) silently load
+  -- their config but produce no output when the FH-2's front-panel
+  -- `Clk:` setting is USB/DIN/X-in with no source running. Surfacing
+  -- this once per session catches the "I fired it but nothing's
+  -- playing" failure mode that's painful to diagnose. `clkReminder` is
+  -- the current toast text (Nothing = hidden). `clkReminderShown`
+  -- latches true after the first fire and never re-fires the reminder
+  -- (per design — first-fire-per-session, not every-fire).
+  , clkReminder :: Maybe String
+  , clkReminderShown :: Boolean
   -- Per-cell most-recent reply text from the daemon (e.g. "OK: hush" or
   -- "ERR: ...").  In a future pass this gains structure (parsed
   -- mini-notation AST + ok/err split) so the hylograph pane can render
@@ -525,6 +536,7 @@ data Action
   | YieldPenAction
   | ForcePenAction
   | DismissPenBanner
+  | DismissClkReminder
   | ToggleColumn ColumnKey
   -- Voice Cells pane: fan-out / restack / bring-to-front via
   -- HeaderClick.  Stack assignment is by mvoice label (set via the
@@ -581,6 +593,8 @@ initialState _ =
   , cellRanges: []
   , transportError: Nothing
   , runtimeError: Nothing
+  , clkReminder: Nothing
+  , clkReminderShown: false
   , cellResults: Map.empty
   , compositionStatus: Nothing
   , compositionFireLines: []
@@ -791,6 +805,7 @@ handleAction = case _ of
         _ <- H.tell _editorModal unit (Editor.ReplaceContent pretty)
         pure pretty
       _ -> pure src
+    maybeShowClkReminder fired
     let stmts = cellStatements fired
     if Array.null stmts
       then H.modify_ \s -> s
@@ -802,6 +817,7 @@ handleAction = case _ of
     -- `--` comments (the directive comments aren't for the daemon),
     -- and fire each statement in sequence.  Stop on the first error
     -- and report which line failed.
+    maybeShowClkReminder src
     let stmts = compositionStatements src
     H.modify_ _ { compositionStatus = Nothing, compositionFireLines = [], transportError = Nothing }
     if Array.null stmts
@@ -900,6 +916,8 @@ handleAction = case _ of
     sendClientMsg ForcePen
     H.modify_ _ { requestingPen = true }
   DismissPenBanner -> H.modify_ _ { penBanner = Nothing }
+  DismissClkReminder -> H.modify_ _ { clkReminder = Nothing }
+    -- clkReminderShown stays true — don't re-surface this session.
   HeaderClick cellId -> do
     s <- H.get
     case Array.find (\c -> c.id == cellId) s.cells of
@@ -1427,6 +1445,27 @@ fireCellStatements cellId stmts = go [] stmts
           go (Array.cons ("transport: " <> err) acc) tail
         Right reply -> go (Array.cons reply acc) tail
 
+-- | If the about-to-fire source contains a clock-dependent polysignal
+-- | (polyclock / polyeuclid / polyeuclid-pairs / polyrand) AND we
+-- | haven't shown the reminder this session yet, surface the Clk-
+-- | source toast. First-fire-per-session: latches `clkReminderShown`
+-- | so subsequent fires don't re-surface it even after the user
+-- | dismisses (dismiss only clears the visible message; the latch
+-- | stays). User-facing rationale: the gotcha is real but you only
+-- | need to hear about it once.
+maybeShowClkReminder
+  :: forall o m
+   . MonadAff m
+  => String
+  -> H.HalogenM State Action Slots o m Unit
+maybeShowClkReminder src = do
+  s <- H.get
+  when (not s.clkReminderShown && hasClockDependentPolySignal src) do
+    H.modify_ _
+      { clkReminder = Just clkReminderText
+      , clkReminderShown = true
+      }
+
 -- | POST `{source, imports: []}` to /eval.  Returns the daemon's
 -- | reply line on success, a human transport error on failure.  The
 -- | server's EvalResponse wraps the reply text as `value`; an
@@ -1902,6 +1941,7 @@ render state =
         )
     , renderErrorPanel state
     , renderEditingModal state
+    , renderClkReminder state
     ]
 
 renderPenBanner :: forall m. State -> H.ComponentHTML Action Slots m
@@ -1915,6 +1955,27 @@ renderPenBanner state = case state.penBanner of
           , HE.onClick \_ -> DismissPenBanner
           ]
           [ HH.text "×" ]
+      ]
+
+-- | Corner toast surfaced on first fire of a clock-dependent polysignal
+-- | in this session. Dismissable; latches so it won't re-surface after
+-- | dismissal (the `clkReminderShown` flag in State). Positioned via
+-- | the `.clk-reminder` CSS class — bottom-right toast, separate visual
+-- | language from the top-banner `.pen-banner` so they can coexist.
+renderClkReminder :: forall m. State -> H.ComponentHTML Action Slots m
+renderClkReminder state = case state.clkReminder of
+  Nothing -> HH.text ""
+  Just msg ->
+    HH.div [ HP.class_ (H.ClassName "clk-reminder") ]
+      [ HH.div [ HP.class_ (H.ClassName "clk-reminder-title") ]
+          [ HH.text "FH-2 clock check" ]
+      , HH.div [ HP.class_ (H.ClassName "clk-reminder-body") ]
+          [ HH.text msg ]
+      , HH.button
+          [ HP.class_ (H.ClassName "clk-reminder-dismiss")
+          , HE.onClick \_ -> DismissClkReminder
+          ]
+          [ HH.text "Got it" ]
       ]
 
 stateIdleMsFor :: State -> Number
@@ -3203,6 +3264,58 @@ isPolySignalVerb = case _ of
   "polyeuclid-pairs" -> true
   "polyrand"         -> true
   _ -> false
+
+-- | True for polysignal families that need the FH-2's internal clock
+-- | to be ticking to produce output. polyclock divides/multiplies the
+-- | clock; polyeuclid and polyeuclid-pairs advance their Euclidean
+-- | step counters from the clock; polyrand's `rate` is in 24ppqn ticks.
+-- |
+-- | polylfo is free-running at its speed-byte rate (independent of the
+-- | clock) and polyenv is MCV-note-triggered (independent of the
+-- | clock), so they're not in this set.
+-- |
+-- | When a cell with one of these verbs fires, the FH-2 will silently
+-- | load the config and produce no output if the front-panel `Clk:`
+-- | setting is `USB`/`DIN`/`X-in` with no source running. The Clk-
+-- | reminder toast (shown at most once per session) flags this so the
+-- | "I fired it but heard nothing" failure mode becomes diagnosable
+-- | without needing to remember the rig's clock state.
+isClockDependentPolyVerb :: String -> Boolean
+isClockDependentPolyVerb = case _ of
+  "polyclock"        -> true
+  "polyeuclid"       -> true
+  "polyeuclid-pairs" -> true
+  "polyrand"         -> true
+  _ -> false
+
+-- | Does the given source text contain at least one cell-text line
+-- | whose first word names a clock-dependent polysignal family? Used
+-- | by the fire path to decide whether to surface the Clk reminder.
+-- | Cheap string scan — no parser invocation, just per-line first-word
+-- | inspection. Works equally on a single cell's source and on the
+-- | full composition pane's body.
+hasClockDependentPolySignal :: String -> Boolean
+hasClockDependentPolySignal src =
+  let lines = Str.split (Pattern "\n") src
+      firstWord l =
+        let trimmed = Str.trim (stripLineComment l)
+        in case Array.head (Array.filter (not <<< Str.null) (Str.split (Pattern " ") trimmed)) of
+             Just w -> w
+             Nothing -> ""
+  in Array.any (isClockDependentPolyVerb <<< firstWord) lines
+
+-- | Reminder text shown in the Clk-reminder toast. Phrasing matters —
+-- | the truthful invariant is "FH-2 must be clocked", not "FH-2 must
+-- | be in Clk: USB" (which was an earlier, wrong framing — the
+-- | 2026-05-13 polyeuclid-pairs experience showed the opposite case,
+-- | where Clk: USB with no source was the failure mode and Clk: Int
+-- | was the fix).
+clkReminderText :: String
+clkReminderText =
+  "This polysignal needs the FH-2 to be clocked. "
+    <> "Confirm front-panel shows Clk: Int (always runs at displayed BPM) "
+    <> "— or USB/DIN/X-in with an active source — otherwise the FH-2 will "
+    <> "load the config silently and produce no output."
 
 -- | Cell-local polysignal detection: inspect the first non-comment
 -- | line's first word and classify by family. Used by `renderVoiceCard`
