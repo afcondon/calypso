@@ -12,6 +12,7 @@ module Calypso.Composition.Parser
   , statementP
   , collapsePolySignalBlocks
   , collapsePolySignalEntries
+  , collapseMacroEntries
   , polySignalEnvelopeJson
   , prettyPolySignal
   , autoformatPolySignalCell
@@ -1017,6 +1018,91 @@ collapsePolySignalEntries entries = go [] entries
   stmtToPolySignal = case _ of
     StmtDeviceConfig (PolySignalCfg cfg) -> Just cfg
     _ -> Nothing
+
+-- ───────────────────────────────────────────────────────────────────
+-- Macro-verb block collapser — for wire serialisation
+--
+-- Cell text contains multi-line macro blocks such as:
+--
+--   drumkit kitA [bd sn hh cp]
+--     gates gt0
+--     pitch main
+--     ch 10
+--
+-- Unlike polysignal blocks, there's no JSON-envelope transformation
+-- on this side — the Erlang-side parser handles the joined source as
+-- whitespace-tokenised text. The collapser's only job is to bundle
+-- the multi-line block into one wire frame.
+--
+-- Same trailing-`<>` continuation convention as polysignals: a line
+-- is consumed iff the PREVIOUS line ended with `<>`. Trailing
+-- markers are stripped on join so the wire-format reads cleanly.
+-- ───────────────────────────────────────────────────────────────────
+
+-- | Verbs whose multi-line cell blocks are collapsed into a single
+-- | wire frame for purerl-tidal. Single-line cells pass through
+-- | as no-ops (no trailing `<>`, no block to collect).
+macroVerbs :: Array String
+macroVerbs =
+  [ "drumkit"
+  , "kit"
+  , "yarns"
+  , "chord"
+  , "mutes"
+  , "veils"
+  ]
+
+-- | Collapse macro-verb blocks (drumkit / kit / yarns / chord /
+-- | mutes / veils). Preserves the verb-line lineNum for error
+-- | reporting and strips trailing `<>` continuation markers as it
+-- | joins. Lines whose verb isn't in `macroVerbs` pass through
+-- | unchanged.
+collapseMacroEntries
+  :: Array { lineNum :: Int, source :: String }
+  -> Array { lineNum :: Int, source :: String }
+collapseMacroEntries entries = go [] entries
+  where
+  go acc remaining = case Array.uncons remaining of
+    Nothing -> Array.reverse acc
+    Just { head, tail } -> case macroVerbForLine head.source of
+      Nothing -> go (Array.cons head acc) tail
+      Just _ ->
+        let { block, rest } = collectBlock head tail
+            joined = Str.joinWith " "
+              (map (stripTrailingMarker <<< _.source) block)
+        in go (Array.cons { lineNum: head.lineNum, source: joined } acc)
+              rest
+
+  -- Same block-collection convention as the polysignal collapser:
+  -- consume the next line iff the PREVIOUS line ended with `<>`.
+  collectBlock firstEntry xs =
+    let consume taken lastEntry rest =
+          if not (endsWithMarker lastEntry) then
+            { block: Array.reverse taken, rest }
+          else case Array.uncons rest of
+            Nothing -> { block: Array.reverse taken, rest: [] }
+            Just { head, tail } ->
+              consume (Array.cons head taken) head tail
+    in consume [firstEntry] firstEntry xs
+
+  endsWithMarker :: { lineNum :: Int, source :: String } -> Boolean
+  endsWithMarker entry =
+    case Str.stripSuffix (Str.Pattern "<>") (Str.trim entry.source) of
+      Just _ -> true
+      Nothing -> false
+
+  -- Strip a trailing `<>` (with optional surrounding whitespace) so
+  -- the joined wire text reads as plain tokens. `<>` on a line by
+  -- itself becomes empty here, which is harmless under whitespace
+  -- tokenisation on the Erlang side.
+  stripTrailingMarker s =
+    case Str.stripSuffix (Str.Pattern "<>") (Str.trim s) of
+      Just stripped -> Str.trim stripped
+      Nothing -> Str.trim s
+
+  macroVerbForLine line = do
+    word <- firstIdent line
+    if Array.elem word macroVerbs then Just word else Nothing
 
 -- | First whitespace-delimited word of a source line, stripped of
 -- | leading whitespace.

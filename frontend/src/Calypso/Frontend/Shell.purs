@@ -1363,7 +1363,8 @@ compositionStatements src =
       indexed = mapWithIndex
         (\i s -> { lineNum: i + 1, source: stripModuleLineComment s }) lines
       nonEmpty = Array.filter (\e -> not (Str.null (Str.trim e.source))) indexed
-  in Comp.collapsePolySignalEntries nonEmpty
+  in Comp.collapsePolySignalEntries
+       (Comp.collapseMacroEntries nonEmpty)
 
 -- | Cell-text counterpart to `compositionStatements`. Strips only
 -- | `--` line comments — `#` is the Tidal parameter-attach operator
@@ -1378,7 +1379,8 @@ cellStatements src =
       indexed = mapWithIndex
         (\i s -> { lineNum: i + 1, source: stripLineComment s }) lines
       nonEmpty = Array.filter (\e -> not (Str.null (Str.trim e.source))) indexed
-  in Comp.collapsePolySignalEntries nonEmpty
+  in Comp.collapsePolySignalEntries
+       (Comp.collapseMacroEntries nonEmpty)
 
 -- | Fire a list of statements in order against /eval.  Stops on the
 -- | first error and reports the failing line; on full success reports
