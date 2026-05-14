@@ -128,6 +128,46 @@ tiderlPhase1Spec = describe "tiderl phase-1 statements" do
           r.body `shouldEqual` body
         other -> failWith "StmtCue b1" other
 
+  describe "multi-line cue (Phase 1.1)" do
+    it "parses a single-line indented body (no `=` separator)" do
+      let src = "cue d1 [mvoice=drums tvoice=qd1]\n  mini \"x ~ x ~\"\n"
+      case parseFirst src of
+        Right (StmtCue r) -> do
+          r.id `shouldEqual` "d1"
+          r.mvoice `shouldEqual` Just "drums"
+          r.tvoice `shouldEqual` Just "qd1"
+          r.body `shouldEqual` "mini \"x ~ x ~\""
+        other -> failWith "StmtCue d1 (indented)" other
+
+    it "parses two indented body lines and joins with \\n, dedenting" do
+      let src = "cue d2 [mvoice=drums]\n  mini \"x ~ x ~\"\n  # ascii line two\n"
+      case parseFirst src of
+        Right (StmtCue r) -> do
+          r.id `shouldEqual` "d2"
+          r.body `shouldEqual` "mini \"x ~ x ~\"\n# ascii line two"
+        other -> failWith "StmtCue d2 (2 lines)" other
+
+    it "preserves internal indentation beyond the common prefix" do
+      let src = "cue p1\n  polylfo banks main <>\n    ratios [1, 2, 4, 8]\n"
+      case parseFirst src of
+        Right (StmtCue r) -> do
+          r.id `shouldEqual` "p1"
+          r.body `shouldEqual` "polylfo banks main <>\n  ratios [1, 2, 4, 8]"
+        other -> failWith "StmtCue p1 (nested indent)" other
+
+    it "ends the body at the next zero-indent statement" do
+      let src = "cue d3\n  mini \"x ~\"\nbpm 124\n"
+      case parseComposition src of
+        Left e -> fail $ "parse failed: " <> parseErrorMessage e
+        Right (Composition stmts) -> do
+          Array.length stmts `shouldEqual` 2
+          case Array.index stmts 0, Array.index stmts 1 of
+            Just (StmtCue r), Just (StmtBpm n) -> do
+              r.body `shouldEqual` "mini \"x ~\""
+              n `shouldEqual` 124.0
+            _, _ -> fail $ "expected [StmtCue, StmtBpm], got "
+                            <> show (Array.length stmts) <> " stmts"
+
   describe "mixed file" do
     it "parses a small .tiderl-shaped composition" do
       let src =

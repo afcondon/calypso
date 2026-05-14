@@ -58,7 +58,7 @@ import Data.Foldable (all, foldl)
 import Data.Int as Int
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.String (CodePoint, codePointFromChar)
-import Data.String (Pattern(..), joinWith, length, null, split, stripSuffix, trim) as Str
+import Data.String (Pattern(..), joinWith, length, null, split, stripPrefix, stripSuffix, trim) as Str
 import Data.String.CodeUnits as SCU
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..), fst, snd)
@@ -265,19 +265,25 @@ tagDeclP = do
   -- accept quoted strings if values need spaces or special chars.
   tagValueP = identP
 
--- | `cue <id> [<key>=<value> ...] = <body>`. Single-line body
--- | for v1 — captures everything from `=` to newline as the body
--- | string. Multi-line bodies (via `<>` continuation or indented
--- | blocks) deferred to Phase 1.1.
+-- | `cue <id> [<key>=<value> ...] <body>`. Two forms:
+-- |
+-- | Inline (compact, for short bodies):
+-- |   cue d1 [mvoice=drums tvoice=qd1] = mini "x ~ x ~"
+-- |
+-- | Indented continuation (canonical, supports multi-line):
+-- |   cue d1 [mvoice=drums tvoice=qd1]
+-- |     mini "x ~ x ~"
+-- |
+-- | For the indented form, the body is the concatenation of one or
+-- | more continuation lines that share at least one column of leading
+-- | horizontal whitespace. The common indent is stripped on capture,
+-- | so the stored `body` reads exactly as cell text.
 cueP :: Parser String CueStmt
 cueP = do
   _ <- keyword "cue"
   id <- identP
   meta <- optionMaybe (try (hspace1 *> cueMetaP))
-  _ <- hspace
-  _ <- char '='
-  _ <- hspace
-  body <- takeWhile1 (\cp -> cp /= cpNewline && cp /= cpReturn)
+  body <- (try inlineCueBodyP) <|> indentedCueBodyP
   let
     m = fromMaybe emptyMeta meta
   pure
@@ -285,10 +291,93 @@ cueP = do
     , mvoice: m.mvoice
     , tvoice: m.tvoice
     , whenTag: m.whenTag
-    , body: Str.trim body
+    , body
     }
   where
   emptyMeta = { mvoice: Nothing, tvoice: Nothing, whenTag: Nothing }
+
+-- | `= <body>` on the same line as the header.
+inlineCueBodyP :: Parser String String
+inlineCueBodyP = do
+  _ <- hspace
+  _ <- char '='
+  _ <- hspace
+  raw <- takeWhile1 (\cp -> cp /= cpNewline && cp /= cpReturn)
+  pure (Str.trim raw)
+
+-- | Continuation lines after the header. The header line is consumed
+-- | up to (and including) its terminating newline; then one or more
+-- | indented lines form the body. Body terminates at the first
+-- | non-blank line whose first column is non-whitespace.
+indentedCueBodyP :: Parser String String
+indentedCueBodyP = do
+  _ <- hspace
+  _ <- optionMaybe commentP
+  _ <- lineEndingP
+  -- Allow blank lines between header and first body line.
+  _ <- many blankLineP
+  firstLine <- indentedCueLineP
+  rest <- many (try (blankPreceded indentedCueLineP))
+  let lines = Array.cons firstLine rest
+  pure (dedentJoin lines)
+
+-- | One indented body line: leading horizontal whitespace (the indent),
+-- | then at least one character of content. Returns the (indent, content)
+-- | pair so the caller can compute the common indent for dedent.
+indentedCueLineP :: Parser String { indent :: String, content :: String }
+indentedCueLineP = do
+  indent <- takeWhile1 isHSpaceCP
+  content <- takeWhile1 (\cp -> cp /= cpNewline && cp /= cpReturn)
+  _ <- optionMaybe lineEndingP
+  pure { indent, content }
+
+-- | One line ending: `\r\n`, `\n`, or bare `\r`. Returns unit.
+lineEndingP :: Parser String Unit
+lineEndingP =
+  try (void (string "\r\n"))
+    <|> void (char '\n')
+    <|> void (char '\r')
+
+-- | A line that is entirely blank (zero or more whitespace, then newline).
+blankLineP :: Parser String Unit
+blankLineP = try do
+  _ <- many (satisfy (\c -> c == ' ' || c == '\t'))
+  lineEndingP
+
+-- | Consume zero-or-more blank lines, then parse the inner combinator.
+-- | Used to allow user comments / spacing inside an indented cue body
+-- | without breaking the block.
+blankPreceded :: forall a. Parser String a -> Parser String a
+blankPreceded p = do
+  _ <- many blankLineP
+  p
+
+-- | Strip the common leading indent from a non-empty list of body
+-- | lines and join with `\n`. The common indent is the longest prefix
+-- | of horizontal whitespace shared by every line's stored indent.
+dedentJoin :: Array { indent :: String, content :: String } -> String
+dedentJoin lines =
+  let common = commonPrefix (map _.indent lines)
+      stripCommon line = case Str.stripPrefix (Str.Pattern common) line.indent of
+        Just suffix -> suffix <> line.content
+        Nothing -> line.content
+  in Str.joinWith "\n" (map stripCommon lines)
+
+-- | Longest shared leading-character prefix of an array of strings.
+commonPrefix :: Array String -> String
+commonPrefix = case _ of
+  [] -> ""
+  arr -> case Array.head arr of
+    Nothing -> ""
+    Just first -> foldl shared first (fromMaybe [] (Array.tail arr))
+  where
+  shared a b =
+    let n = sharedLength a b 0
+    in SCU.take n a
+  sharedLength a b i =
+    case SCU.charAt i a, SCU.charAt i b of
+      Just ca, Just cb | ca == cb -> sharedLength a b (i + 1)
+      _, _ -> i
 
 -- | `[key=value key=value ...]` — bracketed metadata for cue
 -- | declarations. Whitespace-separated key=value pairs.

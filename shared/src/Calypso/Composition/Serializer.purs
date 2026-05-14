@@ -1,0 +1,242 @@
+-- | Canonical serializer for the Calypso composition grammar.
+-- |
+-- | `serializeComposition` is the inverse of `parseComposition` from
+-- | `Calypso.Composition.Parser`: emits each statement in source order
+-- | using a canonical form per statement kind. Round-trip property:
+-- |
+-- |   parseComposition (serializeComposition ast) ≡ Right ast
+-- |
+-- | The current implementation is "one statement per logical block,
+-- | joined by newlines" — no section headers, no reordering. Section
+-- | grouping (`-- # Devices`, `-- # Cues`, …) is a Phase-4 UX concern
+-- | layered on top.
+-- |
+-- | Polysignal blocks delegate to `prettyPolySignal` (already canonical
+-- | via the autoformat-on-fire path).
+module Calypso.Composition.Serializer
+  ( serializeComposition
+  , serializeStatement
+  ) where
+
+import Prelude
+
+import Calypso.Composition
+  ( Binding(..)
+  , Composition(..)
+  , CueStmt
+  , CvBinding
+  , CvMode(..)
+  , Device(..)
+  , DeviceConfig(..)
+  , ExpanderDevice
+  , Fh2VoiceConfig
+  , Fh2VoiceMode(..)
+  , Fh2ModeConfig
+  , GateBinding
+  , Latency
+  , MidiCcBinding
+  , MidiNoteBinding
+  , OscDevice
+  , OutRef(..)
+  , RootDevice
+  , Statement(..)
+  )
+import Calypso.Composition.Parser (prettyPolySignal)
+import Data.Array as Array
+import Data.Maybe (Maybe(..))
+import Data.String (Pattern(..), Replacement(..), joinWith, replaceAll, split, trim) as Str
+
+-- ───────────────────────────────────────────────────────────────────
+-- Public API
+-- ───────────────────────────────────────────────────────────────────
+
+-- | Render a whole composition as a `\n`-separated string. No trailing
+-- | newline — callers append one if their downstream surface expects it.
+serializeComposition :: Composition -> String
+serializeComposition (Composition stmts) =
+  Str.joinWith "\n" (map serializeStatement stmts)
+
+-- | Render one statement to its canonical text form. Multi-line forms
+-- | (polysignal blocks, multi-line cue bodies) emit embedded newlines.
+serializeStatement :: Statement -> String
+serializeStatement = case _ of
+  StmtBpm n -> "bpm " <> renderNumber n
+  StmtLinkSync b -> "link sync " <> if b then "on" else "off"
+  StmtControl c -> "control " <> c.name <> " = " <> renderNumber c.value
+  StmtTag t -> "tag " <> t.name <> " = " <> t.defaultValue
+  StmtCue c -> renderCue c
+  StmtDevice d -> renderDevice d
+  StmtDeviceConfig dc -> renderDeviceConfig dc
+  StmtBinding b -> renderBinding b
+
+-- ───────────────────────────────────────────────────────────────────
+-- Numbers
+-- ───────────────────────────────────────────────────────────────────
+
+-- | Render a `Number` as the user would type it: integer when whole,
+-- | otherwise plain decimal. Matches the parser's `number` combinator
+-- | so round-trip is preserved.
+renderNumber :: Number -> String
+renderNumber n =
+  let s = show n
+  in case Str.split (Str.Pattern ".") s of
+    [whole, "0"] -> whole
+    _ -> s
+
+renderLatency :: Maybe Latency -> String
+renderLatency = case _ of
+  Nothing -> ""
+  Just n -> " lat " <> renderNumber n
+
+-- ───────────────────────────────────────────────────────────────────
+-- Cue
+-- ───────────────────────────────────────────────────────────────────
+
+-- | Cue rendering picks one of two forms based on the body:
+-- |
+-- |   * No newlines, body fits on one line: inline `=` form.
+-- |   * Otherwise: indented-continuation form with 2-space indent.
+-- |
+-- | The two forms are equivalent under round-trip, but the indented
+-- | form is canonical when the cell text is multi-line — preserves
+-- | structure visually and dedicates one column to source.
+renderCue :: CueStmt -> String
+renderCue c =
+  let header = "cue " <> c.id <> renderCueMeta c
+      bodyLines = Str.split (Str.Pattern "\n") c.body
+  in case Array.length bodyLines of
+    1 -> header <> " = " <> Str.trim c.body
+    _ -> header <> "\n" <> Str.joinWith "\n" (map (\l -> "  " <> l) bodyLines)
+
+renderCueMeta :: CueStmt -> String
+renderCueMeta c =
+  let pairs = Array.catMaybes
+        [ map (\v -> "mvoice=" <> v) c.mvoice
+        , map (\v -> "tvoice=" <> v) c.tvoice
+        , map (\v -> "when=" <> v) c.whenTag
+        ]
+  in case Array.length pairs of
+    0 -> ""
+    _ -> " [" <> Str.joinWith " " pairs <> "]"
+
+-- ───────────────────────────────────────────────────────────────────
+-- Devices
+-- ───────────────────────────────────────────────────────────────────
+
+renderDevice :: Device -> String
+renderDevice = case _ of
+  DevMidi r   -> renderRoot "midi"  r
+  DevEs9 r    -> renderRoot "es9"   r
+  DevFh2 r    -> renderRoot "fh2"   r
+  DevYarns r  -> renderRoot "yarns" r
+  DevOsc r    -> renderOsc r
+  DevEs5 e    -> renderExpander "es5"     e
+  DevEsx8Gt e -> renderExpander "esx-8gt" e
+  DevEsx8Cv e -> renderExpander "esx-8cv" e
+  DevFhx8Gt e -> renderExpander "fhx-8gt" e
+
+renderRoot :: String -> RootDevice -> String
+renderRoot kw r =
+  kw <> " " <> r.alias <> " \"" <> escapePortString r.port <> "\"" <> renderLatency r.latency
+
+renderExpander :: String -> ExpanderDevice -> String
+renderExpander kw e =
+  kw <> " " <> e.alias <> " on " <> e.parent
+
+renderOsc :: OscDevice -> String
+renderOsc o =
+  "osc " <> o.alias <> " host=" <> o.host <> " port=" <> show o.port
+
+-- | The port string is captured by `stringLit`, which accepts `\"` and
+-- | `\\` escapes. Round-trip: any `"` or `\` inside the alias must be
+-- | re-escaped on emit. CoreMIDI port names don't contain these in
+-- | practice but the codec must be honest.
+escapePortString :: String -> String
+escapePortString s =
+  let withBackslash = Str.replaceAll (Str.Pattern "\\") (Str.Replacement "\\\\") s
+  in Str.replaceAll (Str.Pattern "\"") (Str.Replacement "\\\"") withBackslash
+
+-- ───────────────────────────────────────────────────────────────────
+-- Device-internal config
+-- ───────────────────────────────────────────────────────────────────
+
+renderDeviceConfig :: DeviceConfig -> String
+renderDeviceConfig = case _ of
+  Fh2VoiceCfg c -> renderFh2VoiceCfg c
+  Fh2ModeCfg c -> renderFh2ModeCfg c
+  PolySignalCfg c -> prettyPolySignal c
+
+renderFh2VoiceCfg :: Fh2VoiceConfig -> String
+renderFh2VoiceCfg c =
+  "fh2-config " <> c.device <> ":" <> renderFh2VoiceMode c.mode
+    <> " voice=" <> show c.voice
+    <> " out=" <> renderOutRef c.out
+    <> " ch=" <> show c.channel
+
+renderFh2VoiceMode :: Fh2VoiceMode -> String
+renderFh2VoiceMode = case _ of
+  Fh2Envelope -> "envelope"
+  Fh2Gate -> "gate"
+
+renderFh2ModeCfg :: Fh2ModeConfig -> String
+renderFh2ModeCfg c =
+  "fh2-mode " <> c.device <> ":" <> c.modeName
+
+renderOutRef :: OutRef -> String
+renderOutRef = case _ of
+  OutLocal n -> show n
+  OutExpander alias slot -> alias <> ":" <> show slot
+
+-- ───────────────────────────────────────────────────────────────────
+-- Bindings
+-- ───────────────────────────────────────────────────────────────────
+
+renderBinding :: Binding -> String
+renderBinding = case _ of
+  BindMidiNote b   -> renderMidiNote b
+  BindMidiCc b     -> renderMidiCc "midi-cc" b
+  BindMidiCcCont b -> renderMidiCc "midi-cc-cont" b
+  BindGate b       -> renderGate b
+  BindCv b         -> renderCv b
+  BindCvCont b     -> renderCvCont b
+
+renderMidiNote :: MidiNoteBinding -> String
+renderMidiNote b =
+  "midi-note " <> b.name <> " " <> b.device <> " "
+    <> show b.channel <> " "
+    <> show b.note <> " "
+    <> show b.velocity <> " "
+    <> show b.durationMs
+    <> renderLatency b.latency
+
+renderMidiCc :: String -> MidiCcBinding -> String
+renderMidiCc kw b =
+  kw <> " " <> b.name <> " " <> b.device <> " "
+    <> show b.channel <> " "
+    <> show b.cc
+    <> renderLatency b.latency
+
+renderGate :: GateBinding -> String
+renderGate b =
+  "gate " <> b.name <> " " <> b.device <> " "
+    <> show b.channel
+    <> renderLatency b.latency
+
+renderCv :: CvBinding -> String
+renderCv b =
+  "cv " <> b.name <> " " <> b.device <> " "
+    <> show b.busOrSlot <> " "
+    <> renderCvMode b.mode
+    <> renderLatency b.latency
+
+renderCvCont :: CvBinding -> String
+renderCvCont b =
+  "cv-cont " <> b.name <> " " <> b.device <> " "
+    <> show b.busOrSlot
+    <> renderLatency b.latency
+
+renderCvMode :: CvMode -> String
+renderCvMode = case _ of
+  CvVoct -> "voct"
+  CvLiteral -> "literal"
+  CvSampleMap -> "sample-map"
