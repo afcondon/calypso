@@ -188,7 +188,6 @@ cellSection c =
 -- | visualiser; until that lands its render is a placeholder.
 data ColumnKey
   = KeyComposition
-  | KeyCells
   | KeyReplies
   | KeyVocabulary
   | KeyMiniNotation
@@ -203,7 +202,6 @@ derive instance Eq ColumnKey
 allColumnKeys :: Array ColumnKey
 allColumnKeys =
   [ KeyComposition
-  , KeyCells
   , KeyReplies
   , KeyVocabulary
   , KeyMiniNotation
@@ -214,7 +212,6 @@ allColumnKeys =
 
 type ColumnVisibility =
   { showComposition :: Boolean
-  , showCells :: Boolean
   , showReplies :: Boolean
   , showVocabulary :: Boolean
   , showMiniNotation :: Boolean
@@ -226,7 +223,6 @@ type ColumnVisibility =
 allVisible :: ColumnVisibility
 allVisible =
   { showComposition: true
-  , showCells: true
   , showReplies: true
   , showVocabulary: true
   , showMiniNotation: true
@@ -242,7 +238,6 @@ allVisible =
 defaultVisibility :: ColumnVisibility
 defaultVisibility =
   { showComposition: true
-  , showCells: true
   , showReplies: true
   , showVocabulary: false
   , showMiniNotation: false
@@ -254,7 +249,6 @@ defaultVisibility =
 isVisible :: ColumnKey -> ColumnVisibility -> Boolean
 isVisible = case _ of
   KeyComposition -> _.showComposition
-  KeyCells -> _.showCells
   KeyReplies -> _.showReplies
   KeyVocabulary -> _.showVocabulary
   KeyMiniNotation -> _.showMiniNotation
@@ -265,7 +259,6 @@ isVisible = case _ of
 toggleKey :: ColumnKey -> ColumnVisibility -> ColumnVisibility
 toggleKey k v = case k of
   KeyComposition -> v { showComposition = not v.showComposition }
-  KeyCells -> v { showCells = not v.showCells }
   KeyReplies -> v { showReplies = not v.showReplies }
   KeyVocabulary -> v { showVocabulary = not v.showVocabulary }
   KeyMiniNotation -> v { showMiniNotation = not v.showMiniNotation }
@@ -276,7 +269,6 @@ toggleKey k v = case k of
 columnKeyLabel :: ColumnKey -> String
 columnKeyLabel = case _ of
   KeyComposition -> "Composition"
-  KeyCells -> "Cells"
   KeyReplies -> "Replies"
   KeyVocabulary -> "Vocabulary"
   KeyMiniNotation -> "Mini-notation"
@@ -287,7 +279,6 @@ columnKeyLabel = case _ of
 columnKeyToken :: ColumnKey -> String
 columnKeyToken = case _ of
   KeyComposition -> "composition"
-  KeyCells -> "cells"
   KeyReplies -> "replies"
   KeyVocabulary -> "vocabulary"
   KeyMiniNotation -> "mini-notation"
@@ -312,7 +303,6 @@ visibilityFromHide hide =
   in
     -- On-by-default: visible unless an explicit hide-token appears.
     { showComposition: not (has "composition" || has "module")
-    , showCells: not (has "cells")
     , showReplies: not (has "replies")
     -- Off-by-default: hidden unless an explicit show-token appears.
     , showVocabulary: has "vocabulary"
@@ -1933,7 +1923,6 @@ render state =
         , HP.style ("grid-template-columns: " <> gridTemplateForVisibility state.visibility)
         ]
         ( (if state.visibility.showComposition then [ renderCompositionColumn state ] else [])
-            <> (if state.visibility.showCells then [ renderCellsColumn state ] else [])
             <> (if state.visibility.showReplies then [ renderRepliesColumn state ] else [])
             <> (if state.visibility.showVocabulary then [ renderVocabularyColumn state ] else [])
             <> (if state.visibility.showMiniNotation then [ renderMiniNotationColumn state ] else [])
@@ -2356,115 +2345,8 @@ renderCompositionColumn state =
     Editor.RejectHunkO pid idx -> RejectHunk pid idx
     Editor.MoveRequested -> DemoteCursorLineToCell
 
-renderCellsColumn :: forall m. MonadAff m => State -> H.ComponentHTML Action Slots m
-renderCellsColumn state =
-  HH.section [ HP.class_ (H.ClassName "pane pane-cells") ]
-    ( renderSection SecConfig "config"
-        <> renderSection SecVoices "voices"
-        <> renderSection SecPatterns "patterns"
-        <>
-          [ HH.div [ HP.class_ (H.ClassName "cells-toolbar") ]
-              [ HH.button
-                  [ HP.class_ (H.ClassName "add-cell-btn")
-                  , HE.onClick \_ -> AddCell
-                  ]
-                  [ HH.text "+ add cell" ]
-              , HH.button
-                  [ HP.class_ (H.ClassName "wipe-restore-btn")
-                  , HE.onClick \_ -> WipeAndRestore
-                  , HP.title "Clear all cells and re-fire the code pane (snap back to prepared session state)"
-                  ]
-                  [ HH.text "↺ wipe & restore" ]
-              ]
-          ]
-    )
-  where
-    -- Each accordion section renders only the cells whose inferred
-    -- kind matches.  Empty sections still get a header so the user
-    -- sees the structure even with no cells active.  Cells keep their
-    -- absolute index in `state.cells` (the basis for cellColorClass)
-    -- so colour stripes don't shift when sections expand/collapse.
-    indexedCells = mapWithIndex (\i c -> { idx: i, cell: c }) state.cells
-    cellsInSection sec =
-      Array.filter (\e -> cellSection e.cell == sec) indexedCells
-    renderSection sec label =
-      let cs = cellsInSection sec
-          countLabel = case Array.length cs of
-            0 -> ""
-            n -> " (" <> show n <> ")"
-      in
-        [ HH.div
-            [ HP.class_ (H.ClassName ("cells-section-header cells-section-" <> label)) ]
-            [ HH.text (label <> countLabel) ]
-        ]
-        <> map (\e -> renderCellRow state e.idx e.cell) cs
-
 cellColorClass :: Int -> String
 cellColorClass idx = "cell-color-" <> show (idx `mod` 8)
-
-renderCellRow :: forall m. MonadAff m => State -> Int -> CellRec -> H.ComponentHTML Action Slots m
-renderCellRow state idx c =
-  HH.div
-    [ HP.class_
-        ( H.ClassName
-            ( "cell-row "
-                <> cellColorClass idx
-                <> (if c.kind == "let" then " cell-row-let" else " cell-row-expr")
-            )
-        )
-    ]
-    [ HH.div [ HP.class_ (H.ClassName "cell-meta") ]
-        [ HH.span [ HP.class_ (H.ClassName "cell-id") ] [ HH.text c.id ]
-        , case c.author of
-            Just a -> HH.span
-              [ HP.class_ (H.ClassName "cell-author-dot")
-              , HP.title ("From " <> a)
-              ]
-              []
-            Nothing -> HH.text ""
-        , HH.button
-            [ HP.class_ (H.ClassName ("cell-kind-btn cell-kind-" <> c.kind))
-            , HE.onClick \_ -> ToggleCellKind c.id
-            , HP.title
-                ( if c.kind == "let"
-                    then "let-cell (splices verbatim; no reply shown). Click to switch to expr."
-                    else "expr-cell (fired at the daemon; reply shown). Click to switch to let."
-                )
-            ]
-            [ HH.text c.kind ]
-        , HH.button
-            [ HP.class_ (H.ClassName "fire-btn fire-btn-cell")
-            , HE.onClick \_ -> FireCell c.id c.source
-            , HP.title "Fire this cell (Mod-Enter inside the editor)"
-            ]
-            [ HH.text "▶" ]
-        , HH.button
-            [ HP.class_ (H.ClassName "promote-cell-btn")
-            , HE.onClick \_ -> PromoteCellToCode c.id
-            , HP.title "Save cell — append source to composition and remove this cell"
-            ]
-            [ HH.text "↩" ]
-        , HH.button
-            [ HP.class_ (H.ClassName "remove-cell-btn")
-            , HE.onClick \_ -> RemoveCell c.id
-            , HP.title "Remove cell"
-            ]
-            [ HH.text "×" ]
-        ]
-    , HH.slot _cellEditor c.id Editor.component
-        { initialDoc: c.source
-        , tag: "cell"
-        , vocabulary: state.completions
-        }
-        (cellOutput c.id)
-    ]
-  where
-  cellOutput cid = case _ of
-    Editor.Changed src -> CellChanged cid src
-    Editor.Submitted src -> FireCell cid src
-    Editor.AcceptHunkO pid idx -> AcceptHunk pid idx
-    Editor.RejectHunkO pid idx -> RejectHunk pid idx
-    Editor.MoveRequested -> PromoteCellToCode cid
 
 -- | Hylograph pane.  Reserved for the upcoming pattern visualiser
 -- | (Asteroids/Battlezone vector aesthetic).  Placeholder until that
