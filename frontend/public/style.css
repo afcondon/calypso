@@ -19,6 +19,7 @@
   --fg-bright:    #9bffb6;       /* highlight */
   --fg-dim:       #1f6e3a;       /* chrome / muted */
   --fg-rule:      #103019;       /* hairline rules */
+  --fg-unknown:   #6fa67c;       /* TvUnknown card text — dim but readable */
 
   --amber:        #ffb84a;       /* warnings */
   --red:          #ff5a4d;       /* errors */
@@ -1510,20 +1511,28 @@ body::before {
 }
 
 /* TvUnknown — binding not registered yet (or freshly-created card
-   with no body).  Phosphor-on-dark, dashed border to read as
-   "placeholder, fill me in." */
+   with no body).  Phosphor-on-dark, dashed border on the *front* card
+   only to read as "placeholder, fill me in."  Back-stack peeks
+   (`.voice-card-compact`) drop the dashed border because adjacent
+   dashes in a 22px-peek stack cut horizontally through the text below
+   them; a single solid hairline gives clean separation instead. */
 .voice-card-v2.tv-unknown .voice-card-header {
   background: var(--bg-elev);
-  color: var(--fg-dim);
-  border: 1px dashed var(--fg-dim);
+  color: var(--fg-unknown);
+  border: 1px dashed var(--fg-unknown);
+}
+.voice-card-v2.tv-unknown.voice-card-compact .voice-card-header {
+  border: none;
+  border-bottom: 1px solid var(--fg-rule);
 }
 .voice-card-v2.tv-unknown .voice-card-icon,
 .voice-card-v2.tv-unknown .voice-card-name,
+.voice-card-v2.tv-unknown .voice-card-tvtype,
 .voice-card-v2.tv-unknown .voice-edit-mvoice,
 .voice-card-v2.tv-unknown .voice-edit-tvoice,
 .voice-card-v2.tv-unknown .voice-edit-tvoice-select,
 .voice-card-v2.tv-unknown .voice-edit-sep {
-  color: var(--fg-dim);
+  color: var(--fg-unknown);
 }
 
 /* Type-label badge in the card header corner: small caps, low
