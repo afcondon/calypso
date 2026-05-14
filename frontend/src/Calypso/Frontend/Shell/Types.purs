@@ -90,6 +90,55 @@ stripModuleLineComment line =
         Nothing -> dashCut
   in Str.trim hashCut
 
+-- | Daemon-side verbs accepted by purerl-tidal's WS handler. Cells
+-- | whose first word is in this set fire as verbs (the existing
+-- | per-statement dispatch). Cells whose first word is not in this
+-- | set are music cells: they wrap in `cue <body>` + `play-armed
+-- | <tvoice> <module>` per the architectural-bet doc (path-2 / path-4
+-- | dispatch was retired).
+-- |
+-- | Keep in sync with `try_parse_prefixed/1` in
+-- | `purerl-tidal/src/Tidal/WebSocket/Handler.erl`.
+daemonVerbs :: Array String
+daemonVerbs =
+  -- Transport / lifecycle
+  [ "hush", "silence", "state"
+  -- Config
+  , "bpm", "config", "log-level", "look-ahead-ms", "gate-enabled"
+  , "note-duration", "cv-lead-ms", "gate-duration", "channel-offset"
+  , "load", "save"
+  -- Voices / binding
+  , "bind", "unbind", "midi-device"
+  -- Cue / play / control bus
+  , "cue", "play-armed", "set-control", "release-claim"
+  -- Pattern dispatch verbs (carry a pattern body)
+  , "midi-note", "midi-cc", "midi-cc-cont", "gate", "cv", "cv-cont"
+  -- Aggregate-voice verbs
+  , "kit", "chord", "drumkit", "fh2-trigger"
+  -- Hardware / device control
+  , "midi", "fh2", "es9", "es5", "esx-8gt", "esx-8cv", "fhx-8gt"
+  , "osc", "fh2-config", "fh2-gate", "fh2-envelope", "fh2-shape"
+  , "yarns"
+  -- Polysignal families
+  , "polysignal"
+  , "polylfo", "polyclock", "polyenv"
+  , "polyeuclid", "polyeuclid-pairs", "polyrand"
+  ]
+
+-- | True if the cell's first non-comment, non-empty word names a
+-- | daemon verb. Music cells (false) flow through cue/play-armed at
+-- | fire time; verb cells (true) keep the direct dispatch path.
+isVerbCell :: String -> Boolean
+isVerbCell src =
+  let
+    lines = Str.split (Pattern "\n") src
+    firstStmt = Array.find (\l -> not (Str.null (stripLineComment l))) lines
+    firstWord = case firstStmt of
+      Nothing -> ""
+      Just l -> case Str.split (Pattern " ") (stripLineComment l) of
+        ws -> fromMaybe "" (Array.head (Array.filter (not <<< Str.null) ws))
+  in Array.elem firstWord daemonVerbs
+
 -- | Infer which section a cell belongs to, by inspecting its source's
 -- | leading word.
 cellSection :: CellRec -> Section

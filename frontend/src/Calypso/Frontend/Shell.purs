@@ -61,6 +61,7 @@ import Calypso.Frontend.Panes.Vocabulary (renderVocabularyColumn)
 import Calypso.Frontend.Panes.VoiceCells
   ( clkReminderText
   , effectiveMvoice
+  , extractTvoice
   , hasClockDependentPolySignal
   , mvoiceGroupCells
   , orderedMvoiceCells
@@ -122,6 +123,7 @@ import Calypso.Frontend.Shell.Types
   , hideFromVisibility
   , isVisible
   , mapCellInList
+  , isVerbCell
   , stripLineComment
   , stripModuleLineComment
   , toggleKey
@@ -337,20 +339,26 @@ handleAction = case _ of
         handleAction ScheduleCompile
       _ -> pure unit
   FireCell cellId src -> do
-    -- Tidal-style fire: Mod-Enter on a cell sends each statement
-    -- separately via /eval to the daemon (the daemon parses one
-    -- statement per call). Replies are joined with newlines and
-    -- land in cellResults; transport errors land in transportError.
-    -- `cellStatements` runs the polysignal collapser, so multi-line
-    -- polysignal blocks come through as single `polysignal <json>`
-    -- statements rather than fragments.
+    -- Two dispatch paths, chosen by the cell's first word:
+    --
+    -- * **Verb cells** (`bind`, `bpm`, `kit`, `polylfo`, `fh2-trigger`,
+    --   `hush`, …) — fire each statement directly via `/eval`, one
+    --   per call. The daemon's `try_parse_prefixed` handles them.
+    --   `cellStatements` runs the polysignal collapser so multi-line
+    --   polysignal blocks come through as a single `polysignal <json>`
+    --   statement rather than fragments.
+    --
+    -- * **Music cells** (anything else) — wrap in `cue <body>` + on
+    --   success dispatch `play-armed <tvoice> <module>`. The bare-
+    --   binding wire-protocol dispatch (path 4) and the `:expr`
+    --   operator (path 2) were retired per the architectural-bet
+    --   doc; one road from musical intent to running sound.
     --
     -- Polysignal autoformat: cells that parse as exactly one
     -- polysignal block get re-printed canonical (column-aligned
-    -- vectors, `<>` continuation markers) before firing. The fire
-    -- is the natural commit moment for the cleanup — cue is too
-    -- early (user may still be mid-edit). Cells that aren't single-
-    -- polysignal blocks are passed through unchanged.
+    -- vectors, `<>` continuation markers) before firing. Applies on
+    -- both paths (polysignal cells are verb cells but they still need
+    -- the cleanup).
     fired <- case Comp.autoformatPolySignalCell src of
       Just pretty | pretty /= src -> do
         H.modify_ \s -> s
@@ -363,11 +371,14 @@ handleAction = case _ of
         pure pretty
       _ -> pure src
     maybeShowClkReminder fired
-    let stmts = cellStatements fired
-    if Array.null stmts
-      then H.modify_ \s -> s
-        { cellResults = Map.insert cellId "(no statements)" s.cellResults }
-      else fireCellStatements cellId stmts
+    if isVerbCell fired
+      then do
+        let stmts = cellStatements fired
+        if Array.null stmts
+          then H.modify_ \s -> s
+            { cellResults = Map.insert cellId "(no statements)" s.cellResults }
+          else fireCellStatements cellId stmts
+      else fireMusicCell cellId fired
   FireComposition src -> do
     -- Composition is "all or nothing" but the daemon parses one
     -- statement per /eval call, so we split by line, drop blanks and
@@ -960,6 +971,46 @@ fireCellStatements cellId stmts = go [] stmts
           -- sees something — otherwise the cell looks idle.
           go (Array.cons ("transport: " <> err) acc) tail
         Right reply -> go (Array.cons reply acc) tail
+
+-- | Fire a music cell (non-verb): `cue <body>` to compile + hot-load
+-- | the cell as a PureScript module, then `play-armed <tvoice>
+-- | <module>` to install the produced Pattern into the named voice.
+-- |
+-- | Tvoice resolution: prefers the cell's `tvoice` override; falls
+-- | back to `extractTvoice src` (first word of the cell, with poly-
+-- | signal-alias handling baked in). Empty / sentinel tvoices abort
+-- | with a user-visible message rather than firing a bad play-armed.
+-- |
+-- | Replaces the path-4 wire-protocol dispatch (`<binding>
+-- | "<pattern>"`) and the path-2 host-language operator (`<binding>
+-- | :<expr>`), both retired per the architectural-bet doc.
+fireMusicCell
+  :: forall o m
+   . MonadAff m
+  => String
+  -> String
+  -> H.HalogenM State Action Slots o m Unit
+fireMusicCell cellId src = do
+  s0 <- H.get
+  case Array.find (\c -> c.id == cellId) s0.cells of
+    Nothing ->
+      H.modify_ \s -> s
+        { cellResults = Map.insert cellId "ERR: cell not found" s.cellResults }
+    Just c -> do
+      let tvoiceName = fromMaybe (extractTvoice src) c.tvoice
+      if tvoiceName == "" || tvoiceName == "(empty)" || tvoiceName == "?"
+        then H.modify_ \s -> s
+          { cellResults = Map.insert cellId
+              "ERR: no tvoice — set one in the card header"
+              s.cellResults
+          }
+        else do
+          handleAction (CueCell cellId src)
+          s1 <- H.get
+          case Map.lookup cellId s1.armedModule of
+            Nothing -> pure unit  -- cue failed; cellResults already has the err
+            Just modName ->
+              handleAction (PlayArmed cellId tvoiceName modName)
 
 -- | If the about-to-fire source contains a clock-dependent polysignal
 -- | (polyclock / polyeuclid / polyeuclid-pairs / polyrand) AND we
