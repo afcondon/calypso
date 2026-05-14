@@ -28,10 +28,16 @@ module Calypso.Composition
   , GateBinding
   , CvBinding
   , CvMode(..)
+  , ControlStmt
+  , TagStmt
+  , CueStmt
   , compositionCodec
   , statementCodec
   , deviceCodec
   , bindingCodec
+  , controlStmtCodec
+  , tagStmtCodec
+  , cueStmtCodec
   ) where
 
 import Prelude
@@ -69,10 +75,67 @@ data Statement
   = StmtDevice Device
   | StmtDeviceConfig DeviceConfig
   | StmtBinding Binding
+  -- Phase 1 additions for .tiderl model (2026-05-14):
+  | StmtBpm Number                  -- ^ `bpm <n>` — default tempo
+  | StmtLinkSync Boolean            -- ^ `link sync on|off` — follow Link
+  | StmtControl ControlStmt         -- ^ `control <name> = <value>`
+  | StmtTag TagStmt                 -- ^ `tag <name> = <default>`
+  | StmtCue CueStmt                 -- ^ `cue <id> [<meta>] = <body>`
 
 derive instance eqStatement :: Eq Statement
 
-data StatementTag = TagDevice | TagDeviceConfig | TagBinding
+-- | Body of a `control <name> = <value>` declaration (initial value
+-- | for the live-control bus). Numeric only in v1.
+type ControlStmt =
+  { name :: String
+  , value :: Number
+  }
+
+controlStmtCodec :: JsonCodec ControlStmt
+controlStmtCodec = CAR.object "ControlStmt"
+  { name: CA.string
+  , value: CA.number
+  }
+
+-- | Body of a `tag <name> = <default>` declaration. Default value is
+-- | a string ("on" / "off" / "verse" / "chorus" / etc.); booleans
+-- | are spelled as the strings "on"/"off". Type-richer tags
+-- | (ADT-shaped) are a future direction; v1 is strings only.
+type TagStmt =
+  { name :: String
+  , defaultValue :: String
+  }
+
+tagStmtCodec :: JsonCodec TagStmt
+tagStmtCodec = CAR.object "TagStmt"
+  { name: CA.string
+  , defaultValue: CA.string
+  }
+
+-- | Body of a `cue <id> [<meta>] = <body>` declaration. The cue is
+-- | the file-textual form of a Voice Cells card. Body is stored
+-- | verbatim — parsing the body as PureScript happens later in the
+-- | cue compile pipeline, not here.
+type CueStmt =
+  { id :: String
+  , mvoice :: Maybe String
+  , tvoice :: Maybe String
+  , whenTag :: Maybe String     -- ^ `when=<tag>` — card-level gate
+  , body :: String
+  }
+
+cueStmtCodec :: JsonCodec CueStmt
+cueStmtCodec = CAR.object "CueStmt"
+  { id: CA.string
+  , mvoice: CAR.optional CA.string
+  , tvoice: CAR.optional CA.string
+  , whenTag: CAR.optional CA.string
+  , body: CA.string
+  }
+
+data StatementTag
+  = TagDevice | TagDeviceConfig | TagBinding
+  | TagBpm | TagLinkSync | TagControl | TagTag | TagCue
 
 derive instance eqStatementTag :: Eq StatementTag
 
@@ -83,21 +146,41 @@ statementCodec = CAS.taggedSum "Statement" printTag parseTag decodeBy encodeBy
     TagDevice -> "device"
     TagDeviceConfig -> "deviceConfig"
     TagBinding -> "binding"
+    TagBpm -> "bpm"
+    TagLinkSync -> "linkSync"
+    TagControl -> "control"
+    TagTag -> "tag"
+    TagCue -> "cue"
   parseTag = case _ of
     "device" -> Just TagDevice
     "deviceConfig" -> Just TagDeviceConfig
     "binding" -> Just TagBinding
+    "bpm" -> Just TagBpm
+    "linkSync" -> Just TagLinkSync
+    "control" -> Just TagControl
+    "tag" -> Just TagTag
+    "cue" -> Just TagCue
     _ -> Nothing
   decodeBy :: StatementTag -> Either Statement (Json -> Either JsonDecodeError Statement)
   decodeBy = case _ of
     TagDevice       -> Right (map StmtDevice       <<< Codec.decode deviceCodec)
     TagDeviceConfig -> Right (map StmtDeviceConfig <<< Codec.decode deviceConfigCodec)
     TagBinding      -> Right (map StmtBinding      <<< Codec.decode bindingCodec)
+    TagBpm          -> Right (map StmtBpm          <<< Codec.decode CA.number)
+    TagLinkSync     -> Right (map StmtLinkSync     <<< Codec.decode CA.boolean)
+    TagControl      -> Right (map StmtControl      <<< Codec.decode controlStmtCodec)
+    TagTag          -> Right (map StmtTag          <<< Codec.decode tagStmtCodec)
+    TagCue          -> Right (map StmtCue          <<< Codec.decode cueStmtCodec)
   encodeBy :: Statement -> Tuple StatementTag (Maybe Json)
   encodeBy = case _ of
     StmtDevice d       -> Tuple TagDevice       (Just (Codec.encode deviceCodec d))
     StmtDeviceConfig c -> Tuple TagDeviceConfig (Just (Codec.encode deviceConfigCodec c))
     StmtBinding b      -> Tuple TagBinding      (Just (Codec.encode bindingCodec b))
+    StmtBpm n          -> Tuple TagBpm          (Just (Codec.encode CA.number n))
+    StmtLinkSync b     -> Tuple TagLinkSync     (Just (Codec.encode CA.boolean b))
+    StmtControl c      -> Tuple TagControl      (Just (Codec.encode controlStmtCodec c))
+    StmtTag t          -> Tuple TagTag          (Just (Codec.encode tagStmtCodec t))
+    StmtCue c          -> Tuple TagCue          (Just (Codec.encode cueStmtCodec c))
 
 -- ───────────────────────────────────────────────────────────────────
 -- Devices

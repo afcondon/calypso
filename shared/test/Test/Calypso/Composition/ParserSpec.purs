@@ -29,6 +29,145 @@ parserSpec = describe "Calypso.Composition.Parser" do
   accentOffPolyEuclidPairs
   baseShape
   latShortFormSpec
+  tiderlPhase1Spec
+
+-- | Phase 1 of the .tiderl format: bpm / link-sync / control / tag /
+-- | cue declarations on top of the existing devices+bindings grammar.
+-- | Design doc: docs/tiderl-format-design-2026-05-14.md.
+-- |
+-- | Statement doesn't derive Show, so the tests pattern-match rather
+-- | than using shouldEqual directly. shouldEqual on extracted fields
+-- | gives readable diffs when something is off.
+tiderlPhase1Spec :: Spec Unit
+tiderlPhase1Spec = describe "tiderl phase-1 statements" do
+  describe "bpm" do
+    it "parses `bpm 124`" do
+      case parseFirst "bpm 124\n" of
+        Right (StmtBpm n) -> n `shouldEqual` 124.0
+        other -> failWith "StmtBpm 124.0" other
+    it "parses fractional bpm" do
+      case parseFirst "bpm 123.5\n" of
+        Right (StmtBpm n) -> n `shouldEqual` 123.5
+        other -> failWith "StmtBpm 123.5" other
+
+  describe "link sync" do
+    it "parses `link sync on`" do
+      case parseFirst "link sync on\n" of
+        Right (StmtLinkSync b) -> b `shouldEqual` true
+        other -> failWith "StmtLinkSync true" other
+    it "parses `link sync off`" do
+      case parseFirst "link sync off\n" of
+        Right (StmtLinkSync b) -> b `shouldEqual` false
+        other -> failWith "StmtLinkSync false" other
+    it "rejects `link sync maybe`" do
+      case parseFirst "link sync maybe\n" of
+        Left _ -> pure unit
+        Right _ -> fail "expected parse fail"
+
+  describe "control" do
+    it "parses `control bass-amp = 0.85`" do
+      case parseFirst "control bass-amp = 0.85\n" of
+        Right (StmtControl r) -> do
+          r.name `shouldEqual` "bass-amp"
+          r.value `shouldEqual` 0.85
+        other -> failWith "StmtControl" other
+    it "parses integer values" do
+      case parseFirst "control intensity = 3\n" of
+        Right (StmtControl r) -> do
+          r.name `shouldEqual` "intensity"
+          r.value `shouldEqual` 3.0
+        other -> failWith "StmtControl" other
+
+  describe "tag" do
+    it "parses `tag fill = off`" do
+      case parseFirst "tag fill = off\n" of
+        Right (StmtTag r) -> do
+          r.name `shouldEqual` "fill"
+          r.defaultValue `shouldEqual` "off"
+        other -> failWith "StmtTag fill" other
+    it "parses `tag section = verse`" do
+      case parseFirst "tag section = verse\n" of
+        Right (StmtTag r) -> do
+          r.name `shouldEqual` "section"
+          r.defaultValue `shouldEqual` "verse"
+        other -> failWith "StmtTag section" other
+
+  describe "cue" do
+    it "parses a bare cue with no metadata" do
+      case parseFirst "cue d1 = mini \"x ~ x ~\"\n" of
+        Right (StmtCue r) -> do
+          r.id `shouldEqual` "d1"
+          r.mvoice `shouldEqual` Nothing
+          r.tvoice `shouldEqual` Nothing
+          r.whenTag `shouldEqual` Nothing
+          r.body `shouldEqual` "mini \"x ~ x ~\""
+        other -> failWith "StmtCue d1" other
+    it "parses cue with mvoice + tvoice metadata" do
+      case parseFirst "cue d1 [mvoice=drums tvoice=qd1] = mini \"x ~\"\n" of
+        Right (StmtCue r) -> do
+          r.id `shouldEqual` "d1"
+          r.mvoice `shouldEqual` Just "drums"
+          r.tvoice `shouldEqual` Just "qd1"
+          r.whenTag `shouldEqual` Nothing
+          r.body `shouldEqual` "mini \"x ~\""
+        other -> failWith "StmtCue d1 [meta]" other
+    it "parses cue with when= gate" do
+      case parseFirst "cue d-fill [mvoice=drums tvoice=qd2 when=fill] = mini \"x x x x\"\n" of
+        Right (StmtCue r) -> do
+          r.id `shouldEqual` "d-fill"
+          r.whenTag `shouldEqual` Just "fill"
+          r.body `shouldEqual` "mini \"x x x x\""
+        other -> failWith "StmtCue d-fill" other
+    it "preserves complex body text verbatim" do
+      let body = "every 4 rev (mini \"c2 e2 g2 ~ b2 ~ g2 e2\") # gain (live \"amp\")"
+      case parseFirst ("cue b1 [mvoice=bass tvoice=cip-pitch] = " <> body <> "\n") of
+        Right (StmtCue r) -> do
+          r.id `shouldEqual` "b1"
+          r.mvoice `shouldEqual` Just "bass"
+          r.tvoice `shouldEqual` Just "cip-pitch"
+          r.body `shouldEqual` body
+        other -> failWith "StmtCue b1" other
+
+  describe "mixed file" do
+    it "parses a small .tiderl-shaped composition" do
+      let src =
+            "bpm 124\n"
+              <> "link sync on\n"
+              <> "midi fh2 \"FH-2\"\n"
+              <> "midi-note qd1 fh2 14 60 100 50\n"
+              <> "control bass-amp = 0.85\n"
+              <> "tag fill = off\n"
+              <> "cue d1 [mvoice=drums tvoice=qd1] = mini \"x ~ x ~\"\n"
+      case parseComposition src of
+        Left e -> fail $ "parse failed: " <> parseErrorMessage e
+        Right (Composition stmts) ->
+          Array.length stmts `shouldEqual` 7
+  where
+  parseFirst :: String -> Either String Statement
+  parseFirst src = case parseComposition src of
+    Left e -> Left (parseErrorMessage e)
+    Right (Composition stmts) -> case Array.head stmts of
+      Just s -> Right s
+      Nothing -> Left "no statements parsed"
+
+  failWith :: forall a. String -> Either String Statement -> _ Unit
+  failWith expected actual = fail $ "expected " <> expected <> ", got: " <> shortDesc actual
+
+  shortDesc :: Either String Statement -> String
+  shortDesc = case _ of
+    Left e -> "Left " <> e
+    Right s -> "Right " <> describeStmt s
+
+  describeStmt :: Statement -> String
+  describeStmt = case _ of
+    StmtDevice _       -> "StmtDevice"
+    StmtDeviceConfig _ -> "StmtDeviceConfig"
+    StmtBinding _      -> "StmtBinding"
+    StmtBpm n          -> "StmtBpm " <> show n
+    StmtLinkSync b     -> "StmtLinkSync " <> show b
+    StmtControl _      -> "StmtControl"
+    StmtTag _          -> "StmtTag"
+    StmtCue _          -> "StmtCue"
 
 -- | Regression for the `lat` vs `latency` keyword: every setup file
 -- | and the daemon's `midi-device` arm use `lat`, but Calypso's

@@ -24,6 +24,8 @@ import Calypso.Composition
   ( Bank(..)
   , Binding(..)
   , Composition(..)
+  , ControlStmt
+  , CueStmt
   , CvBinding
   , CvMode(..)
   , Device(..)
@@ -44,6 +46,7 @@ import Calypso.Composition
   , PolyValue(..)
   , RootDevice
   , Statement(..)
+  , TagStmt
   )
 import Control.Alt ((<|>))
 import Data.Array (many)
@@ -197,10 +200,140 @@ compositionP = do
 
 statementP :: Parser String Statement
 statementP = choice
-  [ try (StmtBinding <$> bindingP)
+  [ try (StmtCue <$> cueP)
+  , try (StmtBpm <$> bpmP)
+  , try (StmtLinkSync <$> linkSyncP)
+  , try (StmtControl <$> controlP)
+  , try (StmtTag <$> tagDeclP)
+  , try (StmtBinding <$> bindingP)
   , try (StmtDeviceConfig <$> deviceConfigP)
   , StmtDevice <$> deviceP
   ] <* hspace <* optionMaybe commentP
+
+-- ───────────────────────────────────────────────────────────────────
+-- Transport / Controls / Tags / Cues  (Phase 1 of .tiderl)
+-- ───────────────────────────────────────────────────────────────────
+
+-- | `bpm <number>`. Default tempo declaration; the runtime treats
+-- | this as the value to broadcast over Link when no peer-tempo is
+-- | present.
+bpmP :: Parser String Number
+bpmP = do
+  _ <- keyword "bpm"
+  number
+
+-- | `link sync on` / `link sync off`. Boolean — whether to follow
+-- | the Link mesh's tempo (true) or hold the declared bpm fixed
+-- | regardless of peers (false).
+linkSyncP :: Parser String Boolean
+linkSyncP = do
+  _ <- keyword "link"
+  _ <- keyword "sync"
+  word <- identP
+  case word of
+    "on" -> pure true
+    "off" -> pure false
+    other -> fail ("link sync expects on|off, got: " <> other)
+
+-- | `control <name> = <number>`. Initial value for the live-control
+-- | bus slot of the given name.
+controlP :: Parser String ControlStmt
+controlP = do
+  _ <- keyword "control"
+  name <- identP
+  _ <- hspace
+  _ <- char '='
+  _ <- hspace
+  value <- number
+  pure { name, value }
+
+-- | `tag <name> = <string>`. Initial value for the tag bus slot
+-- | (a named string-valued runtime state). Booleans are spelled as
+-- | the strings "on"/"off"; other values are user-defined enums
+-- | (e.g. "verse"/"chorus") consumed by `byTag` combinators.
+tagDeclP :: Parser String TagStmt
+tagDeclP = do
+  _ <- keyword "tag"
+  name <- identP
+  _ <- hspace
+  _ <- char '='
+  _ <- hspace
+  defaultValue <- tagValueP
+  pure { name, defaultValue }
+  where
+  -- Tag values are bare words (identifiers); future versions may
+  -- accept quoted strings if values need spaces or special chars.
+  tagValueP = identP
+
+-- | `cue <id> [<key>=<value> ...] = <body>`. Single-line body
+-- | for v1 — captures everything from `=` to newline as the body
+-- | string. Multi-line bodies (via `<>` continuation or indented
+-- | blocks) deferred to Phase 1.1.
+cueP :: Parser String CueStmt
+cueP = do
+  _ <- keyword "cue"
+  id <- identP
+  meta <- optionMaybe (try (hspace1 *> cueMetaP))
+  _ <- hspace
+  _ <- char '='
+  _ <- hspace
+  body <- takeWhile1 (\cp -> cp /= cpNewline && cp /= cpReturn)
+  let
+    m = fromMaybe emptyMeta meta
+  pure
+    { id
+    , mvoice: m.mvoice
+    , tvoice: m.tvoice
+    , whenTag: m.whenTag
+    , body: Str.trim body
+    }
+  where
+  emptyMeta = { mvoice: Nothing, tvoice: Nothing, whenTag: Nothing }
+
+-- | `[key=value key=value ...]` — bracketed metadata for cue
+-- | declarations. Whitespace-separated key=value pairs.
+cueMetaP :: Parser String { mvoice :: Maybe String, tvoice :: Maybe String, whenTag :: Maybe String }
+cueMetaP = do
+  _ <- char '['
+  _ <- hspace
+  pairs <- cueMetaPairsP
+  _ <- hspace
+  _ <- char ']'
+  pure (foldCueMeta pairs)
+
+cueMetaPairsP :: Parser String (Array (Tuple String String))
+cueMetaPairsP = do
+  first <- optionMaybe cueKvP
+  case first of
+    Nothing -> pure []
+    Just p -> do
+      rest <- many (try (hspace1 *> cueKvP))
+      pure ([p] <> rest)
+
+cueKvP :: Parser String (Tuple String String)
+cueKvP = do
+  key <- identP
+  _ <- char '='
+  value <- identP
+  pure (Tuple key value)
+
+foldCueMeta
+  :: Array (Tuple String String)
+  -> { mvoice :: Maybe String, tvoice :: Maybe String, whenTag :: Maybe String }
+foldCueMeta = Array.foldl step
+  { mvoice: Nothing, tvoice: Nothing, whenTag: Nothing }
+  where
+  step acc (Tuple k v) = case k of
+    "mvoice" -> acc { mvoice = Just v }
+    "tvoice" -> acc { tvoice = Just v }
+    "when"   -> acc { whenTag = Just v }
+    _ -> acc  -- unknown keys silently ignored; future-compat
+
+cpNewline :: CodePoint
+cpNewline = codePointFromChar '\n'
+
+cpReturn :: CodePoint
+cpReturn = codePointFromChar '\r'
 
 -- ───────────────────────────────────────────────────────────────────
 -- Devices
