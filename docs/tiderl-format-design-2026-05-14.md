@@ -48,7 +48,8 @@ independently in the composition pane.
 
 ```
 -- # Transport
-bpm 124
+bpm 124            -- default tempo (yields to Link mesh when peers present)
+link sync on       -- follow Link broadcasts; `link sync off` forces local bpm
 
 -- # Devices
 midi fh2     "FH-2"
@@ -72,6 +73,10 @@ polylfo banks cv1                                                <>
 -- # Controls
 control bass-amp   = 0.85
 control filter-mod = 0.60
+
+-- # Tags
+tag fill    = off
+tag section = verse
 
 -- # Cues
 cue d-qd1-a [mvoice=drums tvoice=qd1]
@@ -153,6 +158,152 @@ Cards reference each other by id. `arrange` / `timeCat` / `*` are
 combinators in the existing branched-pattern work. Not blocking
 this design; the file structure leaves a `Structure` section where
 this lands.
+
+## Tags and conditional composition (forward-looking)
+
+A second composition vector — orthogonal to structural arrangement —
+is **conditional dispatch based on tag state**. Inspired by Elektron's
+"Fill" tagging (and Patterning's per-track tags): patterns can react
+to runtime-mutable named flags, swapping their content based on what's
+on/off right now. The format and runtime need to accommodate this
+from the grammar's first design pass so we're not bolting it on later.
+
+### Tags as runtime state
+
+A *tag* is a named slot in the runtime control state, holding a
+boolean or a short string value. Lives on the same substrate as the
+live-control bus (`reference_purerl_tidal_live_control_substrate`),
+extended with string-typed slots.
+
+File grammar — declarative initial values:
+
+```
+-- # Tags
+tag fill    = off
+tag section = verse
+tag double  = off
+```
+
+Runtime mutation via verbs (firable from cards, just like
+`set-control`):
+
+```
+set-tag fill on
+set-tag section chorus
+set-tag double off
+```
+
+Toggle form for booleans: `toggle-tag fill`.
+
+### Pattern-level conditional combinators
+
+In cell bodies (cue bodies), Pattern combinators consult the tag bus
+at query time:
+
+```purescript
+-- Boolean tag: pick between two patterns at every event
+when (tag "fill") (mini "x x x x x x x x") (mini "x ~ x ~")
+
+-- String tag: dispatch among many cases
+byTag "section"
+  [ "verse"  ~> mini "c2 e2 g2 ~ b2 ~ g2 e2"
+  , "chorus" ~> mini "c3 g2 e3 c3 a2 g2 e2 c2"
+  , "intro"  ~> silence
+  ]
+
+-- Common case: when a tag is on, layer additional events
+withTag (tag "double") (\p -> stack [p, fast 2 p]) (mini "c2 e2 g2")
+```
+
+Backend implementation: extends the existing ETS-backed control bus
+with a string-value variant. `tag` becomes a primitive that produces
+a query-time-resolved `Pattern Boolean` or `Pattern String`. The
+combinators (`when`, `byTag`, `withTag`) are pure Pattern algebra
+over those primitives. **Only available in purerl-tidal-side
+dispatch** — autonomous polysignals running on the FH-2 can't read
+tag state because the FH-2 has no view of the bus.
+
+### Card-level and stack-level tag conditioning
+
+Beyond cue bodies, tags can gate cards and stacks themselves:
+
+```
+cue d-fill-a [mvoice=drums tvoice=qd2 when=fill]
+  mini "x x x x x x x x"
+```
+
+When `fill` is off, this card is **muted** — clicking play does
+nothing, the card is dimmed in the UI. When `fill` is on, it
+fires normally. The runtime checks `when=<tag>` at play time and
+skips the install if the tag's off.
+
+Stack-level:
+
+```
+mvoice drums-fill [when=fill]
+```
+
+When `fill` is off, the entire `drums-fill` mvoice column is hidden
+from the cards view and its contents are muted. When on, it appears.
+
+This is the analogue of Elektron's Fill button at the
+mvoice-stack scale: a whole alternate set of card-stacks that
+materializes when its conditioning tag is on.
+
+### Multi-level summary
+
+| Level    | Mechanism                              | Granularity            |
+|----------|----------------------------------------|------------------------|
+| Pattern  | `when` / `byTag` / `withTag` in cue    | Per-event branching    |
+| Card     | `when=<tag>` metadata on the cue       | Whole-card mute/active |
+| Stack    | `when=<tag>` on the mvoice declaration | Whole-column mute/show |
+
+All three read from the same tag namespace; the differences are
+where the gate sits.
+
+### What this enables
+
+- **Verse/chorus song form** without leaving live-coding: tag a
+  `section` value, write distinct patterns per section, switch with
+  one `set-tag` fire.
+- **Fills** at any scale: per-step inside a pattern, per-card,
+  per-stack.
+- **A/B/C variants** as cards-with-tags rather than separate cells.
+- **Dynamics**: tag `intensity` = low/med/high, branch entire
+  voicings.
+- **Coordinated mute groups**: tag `bass-out` mutes the bass mvoice
+  stack and any patterns that include bass triggers.
+
+### What this does NOT do (out of scope here)
+
+- **FH-2 polysignal conditioning** — polysignals run autonomously
+  on the FH-2; there's no path to feed tag state to them. They
+  remain "always firing, until re-configured." The way to gate a
+  polysignal is to re-fire it with a different config (or with
+  `silenceOnBank` set) — that's a `set-tag` → `re-fire-polysignal`
+  cell chain, not an automatic tag reaction.
+- **String tags with arbitrary keys** — initial scope is `on/off`
+  booleans + a fixed enum of string values declared in the `# Tags`
+  section. Open-ended string tags are a later step if the typed
+  enum proves too rigid.
+
+### File grammar additions for tags
+
+```
+-- # Tags
+tag <name> = <default-value>           -- declaration
+
+-- inside # Cues, metadata kwargs:
+cue <id> [... when=<tag>]              -- card-level gate
+
+-- inside # Stacks (new section, optional):
+mvoice <name> [when=<tag>]             -- mvoice-level gate
+```
+
+`# Tags` section sits between `# Controls` and `# Cues`. `# Stacks`
+is a new section that declares mvoice-level metadata (today there's
+no place for "show all mvoices" config — mvoices exist implicitly as
+the union of all cues' `mvoice` kwargs).
 
 ## Parser / serializer contract
 
@@ -285,19 +436,47 @@ moves, only the lens.
 
 ## Hylograph as the third lens
 
-Composition and cards are projections of the *authored* state — the
-text and what it encodes. Hylograph is a projection of the *runtime*
-state — what's actually playing right now:
+Composition and cards are projections of authored state; hylograph
+sits on top with two distinct jobs:
 
-- Same voice identities (each `bind` / `cue` resolves to a runtime
-  voice).
+**Job 1 — visualisation.** Reads the runtime state and shows what's
+actually happening:
+
+- Same voice identities as composition + cards (each `bind` / `cue`
+  resolves to a runtime voice).
 - Augmented with live event traces (current arc position, recent
-  emits, armed-but-not-firing status, etc.).
+  emits, armed-but-not-firing status, tag-state indicators, etc.).
 - Edits to composition or cards re-flow the static layout; runtime
   events animate over the top.
+- A "have you specified what you thought you specified?" affordance
+  — the visual feedback loop that text doesn't give you.
 
-Hylograph never edits the file. It reads, visualises, and surfaces
-"what's happening." The third lens.
+**Job 2 — graphical editing.** Affordances that text can't give: drag
+to retime, draw a pattern, sketch a fan-out spec, point-and-click
+modulation routing. This was the focus of the tilted-radio prototype
+and is the long-form reason hylograph exists as a peer surface, not
+just a stripchart in the corner.
+
+The flow of edits:
+
+```
+text edit  →  composition AST  →  cards re-derived
+card edit  →  in-memory card state  →  composition serialize on Promote
+hylograph  →  in-memory card state  →  composition serialize on Promote
+```
+
+**Hylograph edits cards, not the file.** Same pattern as cards: edits
+update the live working state; the file changes only when the user
+explicitly promotes. This makes the three-way sync tractable —
+composition is the canonical save layer, cards are the live working
+layer, hylograph is a graphical lens on cards that produces
+card-shaped edits.
+
+When you drag a note in hylograph, the card's `liveSource` updates,
+the card flips dirty, the composition pane's text view shows the
+unchanged file source, the corresponding `cue` line gets a dirty
+marker. Promote when you're happy; revert by re-fetching from
+composition.
 
 ## Migration plan
 
@@ -341,6 +520,10 @@ days. Phase 4 is a week. Phase 5 is its own multi-week project.
    default to `<mvoice>-<tvoice>-<letter>` and rename on demand.
    What's the right default?
 
+   *(Tags add a wrinkle: if a card carries `when=<tag>` the id
+   could fold that in, e.g. `d-qd2-fill-a`. Or keep id orthogonal
+   to gate, so renaming a tag doesn't churn ids.)*
+
 2. **Polysignals in the file: declarative or as cues?** Today a
    polysignal block fires via composition's `▶ fire`. If a user
    wraps the same polysignal in a `cue p-lfo-banks` card, does the
@@ -374,6 +557,30 @@ days. Phase 4 is a week. Phase 5 is its own multi-week project.
    filename. Probably leave them as `.tidal` and only adopt `.tiderl`
    for Calypso-authored files. The grammars are equivalent at the
    subset; the extension just marks intent.
+
+7. **Tag value types.** v1 supports `on/off` (booleans) and a closed
+   enum of string values declared in `# Tags`. Should the format
+   also allow open-ended string values (any `set-tag section
+   "weird-state-i-just-invented"` accepted), numeric tag values
+   (`tag intensity = 3` from 1..7), or arbitrary JSON-shaped tag
+   values? Probably start strict (boolean + declared-enum) and
+   relax only when use cases push.
+
+8. **Tag reactivity vs explicit fire.** When `set-tag` fires, does
+   every voice using that tag immediately re-evaluate (push model),
+   or do voices read the tag at their next pattern query (pull
+   model, current substrate)? Pull is simpler and consistent with
+   how the live-control bus works today; push would feel more
+   "musical" for tag-driven structural changes. Probably pull for
+   v1, push if pull feels laggy in practice.
+
+9. **Polysignal tag-fire chain.** Polysignals can't read tags
+   reactively (FH-2 doesn't see the bus). The substitute is a
+   tag-then-fire chain: `set-tag` updates state, a follow-up cell
+   re-fires the appropriate polysignal config. Should the format
+   support automating this — e.g., `on-tag fill = fire-polysignal
+   polylfo-fast` — or stays manual? Probably manual for now; the
+   automation grammar would be its own design pass.
 
 ## Related docs
 
