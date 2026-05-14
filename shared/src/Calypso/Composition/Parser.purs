@@ -155,9 +155,14 @@ stringLit = char '"' *> bodyP <* char '"'
 charsToStr :: Array Char -> String
 charsToStr = SCU.fromCharArray
 
--- | Optional `latency N` clause.
+-- | Optional `latency N` clause. Also accepts the abbreviated `lat N`
+-- | form used by every setup file in `purerl-tidal/setup/*.tidal` and
+-- | by the daemon's `midi-device` arm — Calypso's typed grammar should
+-- | not be more restrictive than the wire syntax it's meant to mirror.
 latencyClauseP :: Parser String (Maybe Latency)
-latencyClauseP = optionMaybe (try (hspace1 *> keyword "latency" *> number))
+latencyClauseP =
+  optionMaybe
+    ( try (hspace1 *> (try (keyword "latency") <|> keyword "lat") *> number) )
 
 -- | `<key>=<int>` pair.  Whitespace not allowed around `=`.
 kvIntP :: String -> Parser String Int

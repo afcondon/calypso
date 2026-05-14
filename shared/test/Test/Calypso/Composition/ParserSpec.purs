@@ -4,6 +4,8 @@ import Prelude
 
 import Calypso.Composition
   ( Bank(..)
+  , Binding(..)
+  , Composition(..)
   , DeviceConfig(..)
   , PolyFamily(..)
   , PolySignalConfig
@@ -11,7 +13,7 @@ import Calypso.Composition
   , PolyValue(..)
   , Statement(..)
   )
-import Calypso.Composition.Parser (parseStatement, prettyPolySignal)
+import Calypso.Composition.Parser (parseComposition, parseStatement, prettyPolySignal)
 import Data.Array as Array
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..))
@@ -26,6 +28,37 @@ parserSpec = describe "Calypso.Composition.Parser" do
   outputRangeCanonicalisation
   accentOffPolyEuclidPairs
   baseShape
+  latShortFormSpec
+
+-- | Regression for the `lat` vs `latency` keyword: every setup file
+-- | and the daemon's `midi-device` arm use `lat`, but Calypso's
+-- | grammar used to require `latency` (silent parse failure surfaced
+-- | as no card-coloring on cip-gate).
+latShortFormSpec :: Spec Unit
+latShortFormSpec = describe "lat short-form latency keyword" do
+  it "accepts `lat N` after a midi device declaration" do
+    case parseComposition "midi fh2 \"FH-2\" lat 69\n" of
+      Left e -> fail $ "midi+lat failed: " <> parseErrorMessage e
+      Right _ -> pure unit
+  it "accepts `latency N` after a midi device declaration" do
+    case parseComposition "midi fh2 \"FH-2\" latency 69\n" of
+      Left e -> fail $ "midi+latency failed: " <> parseErrorMessage e
+      Right _ -> pure unit
+  it "parses a gate binding embedded in a multi-device composition" do
+    let src =
+          "midi fh2     \"FH-2\"\n"
+            <> "midi fh2-qd  \"FH-2\" lat 69\n"
+            <> "es9  es9     \"ES-9\"\n"
+            <> "gate cip-gate fh2 0\n"
+    case parseComposition src of
+      Left e -> fail $ "parse failed: " <> parseErrorMessage e
+      Right (Composition stmts) -> do
+        let gateName = Array.findMap extractGateName stmts
+        gateName `shouldEqual` Just "cip-gate"
+  where
+  extractGateName = case _ of
+    StmtBinding (BindGate b) -> Just b.name
+    _ -> Nothing
 
 -- ──────────────────────────────────────────────────────────────────────
 -- ±5v canonicalisation (Task 11)
