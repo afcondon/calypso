@@ -274,6 +274,23 @@ where the gate sits.
 - **Coordinated mute groups**: tag `bass-out` mutes the bass mvoice
   stack and any patterns that include bass triggers.
 
+### Tags-as-ADTs (future direction, not v1)
+
+The instinct: tags as a sum type with constructors carrying values
+(`Section Verse | Section Chorus | Fill | Intensity Int`) would let
+the type system catch typos and let tags carry richer state.
+Tempting, but it pulls in a meaningful chunk of grammar work (ADT
+declarations in the file, type-checking at parse time, exhaustive-
+match warnings on `byTag`) that's hard to scope without first
+seeing where stringly-typed pain actually emerges.
+
+V1 stays with strings (with set-membership = boolean view). If we
+find ourselves frequently mistyping tag names, accidentally pattern-
+matching nonexistent values, or wanting tags to carry payloads
+(e.g. `Intensity 7` rather than just an `intensity` tag and a
+separate `intensity-value` slot), revisit. Until then: strings are
+fine.
+
 ### What this does NOT do (out of scope here)
 
 - **FH-2 polysignal conditioning** — polysignals run autonomously
@@ -451,11 +468,14 @@ actually happening:
 - A "have you specified what you thought you specified?" affordance
   — the visual feedback loop that text doesn't give you.
 
-**Job 2 — graphical editing.** Affordances that text can't give: drag
-to retime, draw a pattern, sketch a fan-out spec, point-and-click
-modulation routing. This was the focus of the tilted-radio prototype
-and is the long-form reason hylograph exists as a peer surface, not
-just a stripchart in the corner.
+**Job 2 — graphical editing.** Affordances that text can't give. We
+don't yet know what specifically those affordances will be; the
+tilted-radio prototype suggested some directions (drag-to-retime,
+gestural input, point-and-click routing), but the substantive list
+will emerge during construction rather than being designed up front.
+What we DO commit to is the *flow direction* — hylograph-as-editor
+operates on cards, never on the file. Specific edit primitives are
+deliberately under-specified here.
 
 The flow of edits:
 
@@ -558,29 +578,37 @@ days. Phase 4 is a week. Phase 5 is its own multi-week project.
    for Calypso-authored files. The grammars are equivalent at the
    subset; the extension just marks intent.
 
-7. **Tag value types.** v1 supports `on/off` (booleans) and a closed
-   enum of string values declared in `# Tags`. Should the format
-   also allow open-ended string values (any `set-tag section
-   "weird-state-i-just-invented"` accepted), numeric tag values
-   (`tag intensity = 3` from 1..7), or arbitrary JSON-shaped tag
-   values? Probably start strict (boolean + declared-enum) and
-   relax only when use cases push.
+7. **Tag value types.** *Decided 2026-05-14: strings.* Tags are
+   string-valued slots; "boolean" gates are really set-membership
+   checks (`tagset contains "middle8"` is the boolean view). Strict
+   typing via ADTs (`Section Verse`, `Fill`, etc.) is held as a
+   future direction if stringly-typed pain emerges — see
+   "Tags-as-ADTs" subsection. Not in v1.
 
-8. **Tag reactivity vs explicit fire.** When `set-tag` fires, does
-   every voice using that tag immediately re-evaluate (push model),
-   or do voices read the tag at their next pattern query (pull
-   model, current substrate)? Pull is simpler and consistent with
-   how the live-control bus works today; push would feel more
-   "musical" for tag-driven structural changes. Probably pull for
-   v1, push if pull feels laggy in practice.
+8. **Tag reactivity model.** *Decided 2026-05-14: push.* On
+   `set-tag`, the backend pushes the new state to all subscribers
+   over the WS, voices re-evaluate immediately. Pull-from-bus
+   semantics (the current live-control-bus model) is the
+   implementation, push is the wire-level guarantee — clients see
+   tag changes promptly, no polling.
 
-9. **Polysignal tag-fire chain.** Polysignals can't read tags
-   reactively (FH-2 doesn't see the bus). The substitute is a
-   tag-then-fire chain: `set-tag` updates state, a follow-up cell
-   re-fires the appropriate polysignal config. Should the format
-   support automating this — e.g., `on-tag fill = fire-polysignal
-   polylfo-fast` — or stays manual? Probably manual for now; the
-   automation grammar would be its own design pass.
+   *Forward direction worth flagging:* **tags-as-patterns**. The
+   real composition lever is setting tags *via a pattern*, e.g.
+   `pattern-set-tag section "verse verse chorus chorus"` — the
+   tag flips on cycle boundaries driven by the pattern. That's
+   the same model as `cv-cont` but for tag values: a Pattern that
+   emits tag-set events at scheduled times. Once that lands the
+   structural-composition story gets meaningfully richer; the
+   `# Structure` section can express form via tag-patterns rather
+   than the more rigid `arrange [...]` form. Design pass when we
+   build it.
+
+9. **Polysignal tag-fire chain.** *Deferred 2026-05-14, aspirational.*
+   Polysignals can't read tags reactively (FH-2 has no bus view),
+   so the v1 substitute is a manual `set-tag` + follow-up
+   `re-fire-polysignal` cell chain. Automating this — `on-tag fill
+   = fire-polysignal polylfo-fast` style — is wanted long-term but
+   not blocking; its own design pass when the time comes.
 
 ## Related docs
 
