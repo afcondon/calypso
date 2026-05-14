@@ -24,7 +24,7 @@ import Data.Map (Map)
 import Data.Map as Map
 import Data.Int (toNumber)
 import Data.Int as Int
-import Data.Maybe (Maybe(..), fromMaybe, isJust, isNothing)
+import Data.Maybe (Maybe(..), fromMaybe, isJust)
 import Data.Number as Number
 import Data.String.Pattern (Pattern(..))
 import Data.Traversable (for)
@@ -38,7 +38,6 @@ import Halogen.HTML as HH
 import Halogen.HTML.Events as HE
 import Halogen.HTML.Properties as HP
 import Halogen.Subscription as HS
-import Type.Proxy (Proxy(..))
 import Web.Event.Event as WEvent
 import Web.Event.EventTarget as WEvtTarget
 import Web.HTML (window) as Web
@@ -50,7 +49,7 @@ import Data.Foldable (for_, foldr)
 
 import Calypso.Frontend.CodeMirror (ErrorSpan)
 import Calypso.Frontend.Config (backendUrl, formatNumber, prettyPrintJson, readHideParam, writeHideParam, wsBackendUrl)
-import Calypso.Frontend.Completion (Completion, completionsFromVocabulary)
+import Calypso.Frontend.Completion (completionsFromVocabulary)
 import Calypso.Frontend.Editor as Editor
 import Calypso.Frontend.Favorite as Favorite
 import Calypso.Frontend.FilePicker (pickJsonFile)
@@ -61,11 +60,9 @@ import Calypso.Composition as Comp
 import Calypso.Composition.Parser as Comp
 import Calypso.Favorite (Favorite(..))
 import Calypso.Vocabulary as CV
-import Calypso.Vocabulary (Vocabulary)
 import Calypso.Proposal
-  ( Hunk(..)
-  , Proposal(..)
-  , ProposalId(..)
+  ( Proposal(..)
+  , ProposalId
   , ProposalTarget(..)
   , unProposalId
   )
@@ -73,8 +70,6 @@ import Calypso.Pen
   ( Broadcast(..)
   , ClientMsg(..)
   , PenHeldBody
-  , PenState
-  , SubscriberId
   , broadcastCodec
   , clientMsgCodec
   , penHeldBodyCodec
@@ -93,474 +88,36 @@ import Calypso.Session
   , compileRequestCodec
   , compileResponseCodec
   )
-
--- | Local cell shape. Mirrors the wire `Cell` minus the `form` field
--- | (carried as `false` on the wire for back-compat until the wire shape
--- | is trimmed in the deferred housekeeping pass).
--- |
--- | `author` is preserved from the wire — non-Nothing means the cell was
--- | dropped in by an external API caller (an agent, a tutorial script, a
--- | jam-partner) rather than authored at the helm. The cells pane shows a
--- | small marker for those; on PromoteCellToCode the author becomes a
--- | comment in the composition source.
-type CellRec =
-  { id :: String
-  , kind :: String
-  , source :: String
-  , author :: Maybe String
-  -- mvoice + tvoice live on the cell itself so they ride along with
-  -- every save / hydrate round-trip.  Both Nothing on freshly-
-  -- created cards; the renderer falls back to extractTvoice on the
-  -- source.
-  , mvoice :: Maybe String
-  , tvoice :: Maybe String
-  }
-
-cellRecOf :: Cell -> CellRec
-cellRecOf (Cell c) =
-  { id: c.id, kind: c.kind, source: c.source, author: c.author
-  , mvoice: c.mvoice, tvoice: c.tvoice
-  }
-
-cellOf :: CellRec -> Cell
-cellOf c = Cell
-  { id: c.id, kind: c.kind, source: c.source, form: false, author: c.author
-  , mvoice: c.mvoice, tvoice: c.tvoice
-  }
-
--- | Apply f to the cell whose id matches; leave others untouched.
--- | Used by the per-cell metadata edit handlers (mvoice, tvoice).
-mapCellInList :: String -> (CellRec -> CellRec) -> Array CellRec -> Array CellRec
-mapCellInList cellId f cells =
-  fromMaybe cells do
-    idx <- findIndex (_.id >>> (_ == cellId)) cells
-    modifyAt idx f cells
-
--- | Infer which section a cell belongs to, by inspecting its source's
--- | leading word.  Used to group cells in the accordion: `bind …` cells
--- | go to Voices, `bpm`/`midi-device`/etc. to Config, everything else
--- | (the live patterns) to Patterns.  This is *display-only*
--- | classification — the cell itself stores no section tag.
-cellSection :: CellRec -> Section
-cellSection c =
-  let
-    -- Extract the first whitespace-delimited word of the first
-    -- non-empty, non-`--`-comment line.
-    lines = Str.split (Pattern "\n") c.source
-    firstStmt = Array.find (\l -> not (Str.null (stripLineComment l))) lines
-    firstWord = case firstStmt of
-      Nothing -> ""
-      Just l -> case Str.split (Pattern " ") (stripLineComment l) of
-        ws -> fromMaybe "" (Array.head (Array.filter (not <<< Str.null) ws))
-  in
-    if firstWord == "bind" || firstWord == "unbind"
-      then SecVoices
-      else if Array.elem firstWord configVerbs
-        then SecConfig
-        else SecPatterns
-  where
-    configVerbs =
-      [ "bpm"
-      , "midi-device"
-      , "log-level"
-      , "look-ahead-ms"
-      , "gate-enabled"
-      , "note-duration"
-      , "cv-lead-ms"
-      , "gate-duration"
-      , "channel-offset"
-      , "load"
-      , "save"
-      , "fh2-envelope"
-      , "config"
-      ]
-
--- | The six top-level panes. Each is independently toggleable
--- | via the view-toggle bar or via Cmd-1..Cmd-6 (Ctrl on non-Mac).
--- | Layout is left-to-right in the order declared here. Persisted
--- | in the URL as `?hide=cells,replies,…` (omitted when all show).
--- |
--- | Replies / Vocabulary / Mini-notation were previously sub-tabs of
--- | the Hylograph pane; promoted to top-level so quick lookups
--- | don't displace the editing surface.
--- |
--- | Hylograph stays the rightmost slot for the eventual pattern
--- | visualiser; until that lands its render is a placeholder.
-data ColumnKey
-  = KeyComposition
-  | KeyReplies
-  | KeyVocabulary
-  | KeyMiniNotation
-  | KeyHylograph
-  | KeyConfig
-  | KeyVoiceCells
-
-derive instance Eq ColumnKey
-
--- | Order panes appear left-to-right in the row, and the index
--- | bound to Cmd-N (Cmd-1 = first, Cmd-8 = last).
-allColumnKeys :: Array ColumnKey
-allColumnKeys =
-  [ KeyComposition
-  , KeyReplies
-  , KeyVocabulary
-  , KeyMiniNotation
-  , KeyHylograph
-  , KeyConfig
-  , KeyVoiceCells
-  ]
-
-type ColumnVisibility =
-  { showComposition :: Boolean
-  , showReplies :: Boolean
-  , showVocabulary :: Boolean
-  , showMiniNotation :: Boolean
-  , showHylograph :: Boolean
-  , showConfig :: Boolean
-  , showVoiceCells :: Boolean
-  }
-
-allVisible :: ColumnVisibility
-allVisible =
-  { showComposition: true
-  , showReplies: true
-  , showVocabulary: true
-  , showMiniNotation: true
-  , showHylograph: true
-  , showConfig: true
-  , showVoiceCells: true
-  }
-
--- | Initial visibility on a fresh load: editor + replies on, the
--- | reference panes off (Cmd-4/5/6/7/8 to bring them in).  Even on
--- | big monitors all seven side-by-side is too cramped — better
--- | to summon what you want, when you want.
-defaultVisibility :: ColumnVisibility
-defaultVisibility =
-  { showComposition: true
-  , showReplies: true
-  , showVocabulary: false
-  , showMiniNotation: false
-  , showHylograph: false
-  , showConfig: false
-  , showVoiceCells: false
-  }
-
-isVisible :: ColumnKey -> ColumnVisibility -> Boolean
-isVisible = case _ of
-  KeyComposition -> _.showComposition
-  KeyReplies -> _.showReplies
-  KeyVocabulary -> _.showVocabulary
-  KeyMiniNotation -> _.showMiniNotation
-  KeyHylograph -> _.showHylograph
-  KeyConfig -> _.showConfig
-  KeyVoiceCells -> _.showVoiceCells
-
-toggleKey :: ColumnKey -> ColumnVisibility -> ColumnVisibility
-toggleKey k v = case k of
-  KeyComposition -> v { showComposition = not v.showComposition }
-  KeyReplies -> v { showReplies = not v.showReplies }
-  KeyVocabulary -> v { showVocabulary = not v.showVocabulary }
-  KeyMiniNotation -> v { showMiniNotation = not v.showMiniNotation }
-  KeyHylograph -> v { showHylograph = not v.showHylograph }
-  KeyConfig -> v { showConfig = not v.showConfig }
-  KeyVoiceCells -> v { showVoiceCells = not v.showVoiceCells }
-
-columnKeyLabel :: ColumnKey -> String
-columnKeyLabel = case _ of
-  KeyComposition -> "Composition"
-  KeyReplies -> "Replies"
-  KeyVocabulary -> "Vocabulary"
-  KeyMiniNotation -> "Mini-notation"
-  KeyHylograph -> "Hylograph"
-  KeyConfig -> "Config"
-  KeyVoiceCells -> "Voice Cells"
-
-columnKeyToken :: ColumnKey -> String
-columnKeyToken = case _ of
-  KeyComposition -> "composition"
-  KeyReplies -> "replies"
-  KeyVocabulary -> "vocabulary"
-  KeyMiniNotation -> "mini-notation"
-  KeyHylograph -> "hylograph"
-  KeyConfig -> "config"
-  KeyVoiceCells -> "voice-cells"
-
--- | Decode the `?hide=` query value into a `ColumnVisibility`.
--- |
--- | The URL param name is `hide` for legacy compatibility, but its
--- | semantics are now "panes whose visibility differs from default".
--- | An empty param yields `defaultVisibility` (1/2/3 on, 4/5/6 off).
--- | A token for an on-by-default pane (composition / cells / replies)
--- | hides it; a token for an off-by-default pane (vocabulary / mini-
--- | notation / hylograph) shows it.  Unknown tokens are ignored;
--- | "module"/"values"/"render"/"gutter" are accepted as legacy
--- | aliases from the Atelier era.
-visibilityFromHide :: String -> ColumnVisibility
-visibilityFromHide hide =
-  let tokens = if hide == "" then [] else Str.split (Pattern ",") hide
-      has t = Array.any (_ == t) tokens
-  in
-    -- On-by-default: visible unless an explicit hide-token appears.
-    { showComposition: not (has "composition" || has "module")
-    , showReplies: not (has "replies")
-    -- Off-by-default: hidden unless an explicit show-token appears.
-    , showVocabulary: has "vocabulary"
-    , showMiniNotation: has "mini-notation" || has "mininotation"
-    , showHylograph: has "hylograph" || has "render" || has "values" || has "gutter"
-    , showConfig: has "config"
-    , showVoiceCells: has "voice-cells" || has "voicecells"
-    }
-
-hideFromVisibility :: ColumnVisibility -> String
-hideFromVisibility v =
-  let entries = Array.catMaybes $
-        map (\k -> if isVisible k v == isVisible k defaultVisibility
-                     then Nothing
-                     else Just (columnKeyToken k)) allColumnKeys
-  in Str.joinWith "," entries
-
--- | Grid-template-columns string for the visible panes.  Equal-share
--- | columns: 1fr per visible pane, "1fr" fallback when nothing is on
--- | (the layout block still renders the empty grid container so the
--- | toolbar / view-toggle stay anchored).
-gridTemplateForVisibility :: ColumnVisibility -> String
-gridTemplateForVisibility v =
-  let parts = Array.catMaybes $
-        map (\k -> if isVisible k v then Just "1fr" else Nothing) allColumnKeys
-  in case Array.length parts of
-       0 -> "1fr"
-       1 -> "1fr"
-       _ -> Str.joinWith " " parts
-
-type State =
-  { moduleSource :: String
-  , cells :: Array CellRec
-  , nextCellId :: Int
-  , runtime :: String             -- carried for wire-shape compat; "purerl-tidal-ws"
-  , favorites :: Array Favorite
-  , favoriteKey :: Maybe String   -- last-loaded favorite, if any
-  , favoriteMenuOpen :: Boolean
-  -- Vocabulary parsed from purerl-tidal/setup/*.tidal — drives
-  -- autocomplete and (later) the reference panel.  Held both as the
-  -- raw vocabulary record (for the panel) and as a flattened
-  -- completion list (for the editor's autocompletion source).
-  , vocabulary :: Vocabulary
-  , completions :: Array Completion
-  , settingsOpen :: Boolean
-  , compiling :: Boolean
-  , errors :: Array CompileError
-  , warnings :: Array CompileError
-  , cellRanges :: Array CellRange
-  , transportError :: Maybe String
-  , runtimeError :: Maybe String
-  -- Clk-source reminder. The clock-dependent polysignal families
-  -- (polyclock, polyeuclid, polyeuclid-pairs, polyrand) silently load
-  -- their config but produce no output when the FH-2's front-panel
-  -- `Clk:` setting is USB/DIN/X-in with no source running. Surfacing
-  -- this once per session catches the "I fired it but nothing's
-  -- playing" failure mode that's painful to diagnose. `clkReminder` is
-  -- the current toast text (Nothing = hidden). `clkReminderShown`
-  -- latches true after the first fire and never re-fires the reminder
-  -- (per design — first-fire-per-session, not every-fire).
-  , clkReminder :: Maybe String
-  , clkReminderShown :: Boolean
-  -- Per-cell most-recent reply text from the daemon (e.g. "OK: hush" or
-  -- "ERR: ...").  In a future pass this gains structure (parsed
-  -- mini-notation AST + ok/err split) so the hylograph pane can render
-  -- patterns; for now we just show the line.
-  , cellResults :: Map String String
-  -- Latest reply from firing the composition pane (Mod-Enter on the
-  -- LHS).  Surfaced in the header so the human gets feedback that
-  -- the daemon received the body without the reply line cluttering
-  -- the composition itself.  Cleared on next fire.
-  , compositionStatus :: Maybe String
-  -- Per-statement results from the most recent composition fire.
-  -- Empty between fires.  Surfaced in the Replies pane so "no sound
-  -- came out" becomes diagnosable line-by-line — every statement's
-  -- daemon reply is captured, including ones past the first error.
-  , compositionFireLines :: Array { lineNum :: Int, source :: String, reply :: Either String String }
-  -- Most recent purerl-tidal state snapshot, fetched via the `state`
-  -- WS verb (read from the StateBus ETS table).  Refreshed on demand
-  -- from the Config pane.  Pretty-printed before render.
-  , configSnapshot :: Maybe String
-  -- Tvoice category lookup, derived from the snapshot's `voices`
-  -- array on each refresh.  Keyed by binding name; drives the type-
-  -- color and glyph on Voice Cells cards.  Empty until first refresh
-  -- — cards then render as TvUnknown until the first snapshot lands.
-  , tvoiceTypes :: Map String TvoiceType
-  -- Last known BPM, displayed in the topbar widget.  Updated when
-  -- the Config pane refreshes or when BpmCommit fires.  Initial
-  -- value is the Main.purs default (120) until the first refresh
-  -- proves otherwise.
-  , bpmDisplay :: Number
-  , cellTypes :: Map String String
-  , pendingCompile :: Maybe H.ForkId
-  -- Pen + WebSocket transport.  The Pen is the descendant of
-  -- Atelier's Conch — same plumbing, retargeted from "exclusive
-  -- writer" to "approver of incoming proposals" once that
-  -- machinery exists.  Today the holder is still the only one who
-  -- can mutate /session/* state.
-  , myId :: Maybe SubscriberId
-  , pen :: PenState
-  , requestingPen :: Boolean
-  , nextPenRetryAt :: Maybe Number
-  , penBackoffMs :: Int
-  , ws :: Maybe WsClient.WebSocket
-  , wsSub :: Maybe H.SubscriptionId
-  , penBanner :: Maybe String
-  -- Pending edit proposals.  Populated by the Welcome WS frame and
-  -- updated incrementally by ProposalAdded / ProposalUpdated /
-  -- ProposalRetired.  Filtered per-target before being pushed down
-  -- to each editor instance.
-  , proposals :: Array Proposal
-  , lastSyncedModule :: String
-  , lastSyncedCells :: Map String { source :: String, kind :: String, mvoice :: Maybe String, tvoice :: Maybe String }
-  , lastSyncedRuntime :: String
-  , visibility :: ColumnVisibility
-  -- Voice Cells pane: user-defined "musical voice" stacks.  Each
-  -- music cell can be assigned a stack via a 9-swatch colour
-  -- picker (1 "no stack" + 8 colours).  Stack identity is the
-  -- colour, full stop; same-coloured cards overlap visually with
-  -- the front card fully visible; clicking a back card's header
-  -- brings it to the front; clicking the front card's header fans
-  -- the stack out for editing; clicking any header in a fanned
-  -- stack restacks.  Stack assignment + per-stack ordering are
-  -- in-session only — not persisted, not in the .tidal.  See
-  -- docs/voice-cells-design.md.
-  , mvoiceOrder :: Map String (Array String)
-                                      -- mvoice label → cellIds in
-                                      -- stack order, front first.
-                                      -- Absent → cells in this group
-                                      -- render in original creation
-                                      -- order.  Populated only when
-                                      -- the user reorders via
-                                      -- HeaderClick (bring-to-front).
-  , fannedMvoice :: Maybe String      -- mvoice of the currently-
-                                      -- fanned music stack, if any.
-  , configStackFanned :: Boolean      -- config cells form their own
-                                      -- pseudo-stack (always present);
-                                      -- this tracks whether it's
-                                      -- fanned out
-  , editingCard :: Maybe String       -- cellId currently popped open
-                                      -- in the modal editor, if any.
-                                      -- One-at-a-time; backdrop /
-                                      -- Esc / Cmd-Enter close it.
-                                      -- See docs/voice-cells-design.md
-                                      -- "in-card editing" section.
-  , armedModule :: Map String String  -- cellId → loaded module name
-                                      -- ("M<hash>") set by a successful
-                                      -- Cue.  Play is enabled iff a cell
-                                      -- has an entry here.  PR2-phase:
-                                      -- the module exports `result :: Int`;
-                                      -- PR3 flips it to `pattern :: Pattern
-                                      -- String` and wires voice install.
-  , cuePending :: Set String          -- cellIds whose Cue is in flight.
-                                      -- Cold compile is ~7s today (PR4's
-                                      -- daemon path drops it to <300ms);
-                                      -- the modal shows "compiling…" while
-                                      -- a cellId is in this set so a long
-                                      -- wait doesn't read as a hang.
-  -- mvoice/tvoice now ride on each CellRec (see Calypso.Session.Cell)
-  -- so they persist through hydrate/save round-trips.  No separate
-  -- state maps needed.
-  , cellHistory :: Map String (Array { body :: String, modul :: String })
-                                      -- Per-cell version log: every
-                                      -- successful Cue prepends a
-                                      -- {body, module} entry; module
-                                      -- name encodes the source hash.
-                                      -- Modules stay loaded so re-
-                                      -- arming a previous entry is a
-                                      -- cache hit (sub-ms).  Dedupe
-                                      -- by modul — re-cuing identical
-                                      -- source moves entry to top
-                                      -- rather than piling up.
-                                      -- Endless; in-session only.
-  }
-
-type Slots =
-  ( moduleEditor :: H.Slot Editor.Query Editor.Output Unit
-  , cellEditor :: H.Slot Editor.Query Editor.Output String
-  , editorModal :: H.Slot Editor.Query Editor.Output Unit
+import Calypso.Frontend.Shell.Types
+  ( Action(..)
+  , CellRec
+  , ColumnKey
+  , Section(..)
+  , Slots
+  , State
+  , TvoiceType(..)
+  , _cellEditor
+  , _editorModal
+  , _moduleEditor
+  , allColumnKeys
+  , cellColorClass
+  , cellOf
+  , cellRecOf
+  , cellSection
+  , columnKeyLabel
+  , defaultVisibility
+  , gridTemplateForVisibility
+  , hideFromVisibility
+  , isVisible
+  , mapCellInList
+  , stripLineComment
+  , stripModuleLineComment
+  , toggleKey
+  , tvoiceTypeClass
+  , tvoiceTypeLabel
+  , visibilityFromHide
   )
 
-_moduleEditor :: Proxy "moduleEditor"
-_moduleEditor = Proxy
-
-_cellEditor :: Proxy "cellEditor"
-_cellEditor = Proxy
-
-_editorModal :: Proxy "editorModal"
-_editorModal = Proxy
-
-data Action
-  = Compile
-  | ScheduleCompile
-  | ModuleChanged String
-  | CellChanged String String
-  | AddCell
-  | RemoveCell String
-  | ToggleCellKind String
-  | PromoteCellToCode String         -- append cell source to composition, then remove cell
-  | DemoteCursorLineToCell           -- copy cursor line in moduleEditor into a new cell
-  | FireCell String String        -- cell id, current source
-  | FireComposition String        -- current composition source
-  | WipeAndRestore                -- clear all cells, re-fire code pane
-  | LoadWorkspace                 -- open file picker → POST /session/compile
-  | AcceptHunk ProposalId Int     -- POST /proposals/:id/hunks/:idx/accept
-  | RejectHunk ProposalId Int     -- POST .../reject
-  | ToggleFavoriteMenu
-  | LoadFavorite String
-  | FavoritesLoaded (Array Favorite)
-  | VocabularyLoaded Vocabulary
-  | KeyboardShortcut Int     -- Cmd-N pressed at the window level; toggles a column
-  | RefreshConfigState       -- Config pane: ask purerl-tidal for its state snapshot
-  | BpmCommit Number         -- topbar BPM widget: commit a new tempo via Link
-  | BpmInputChanged String   -- intermediate: text typed in the BPM input
-  | ToggleSettings
-  | WsOpened
-  | WsIncoming String
-  | WsClosed Int String
-  | WsErrored
-  | RequestPenAction
-  | YieldPenAction
-  | ForcePenAction
-  | DismissPenBanner
-  | DismissClkReminder
-  | ToggleColumn ColumnKey
-  -- Voice Cells pane: fan-out / restack / bring-to-front via
-  -- HeaderClick.  Stack assignment is by mvoice label (set via the
-  -- modal header's mvoice input) — no separate color picker.
-  | HeaderClick String                      -- cellId; resolves to
-                                            -- bring-to-front /
-                                            -- fan / restack based
-                                            -- on current stack
-                                            -- context
-  | OpenEditor String                       -- click on small card body
-  | CloseEditor                             -- backdrop / Esc / cancel
-  | CommitEdit String String                -- Cmd-Enter from modal: fire + close
-  -- PR2 cue/play-armed flow.  Cue compiles + hot-loads on the
-  -- backend; Play invokes the loaded module's `result/0`.  When PR3
-  -- lands these become the canonical fire path (replacing FireCell)
-  -- and Play wires into the voice install.  Backend integrated test
-  -- on per-cell-compile branch (purerl-tidal).
-  | CueCell String String                   -- cellId, source
-  | PlayArmed String String String          -- cellId, tvoiceName, moduleName
-  | UpdateCellTvoice String String          -- cellId, new tvoice name (binding to dispatch into)
-  | UpdateCellMvoice String String          -- cellId, new mvoice column label
-  | NewVoiceCard                            -- creates a fresh empty Voice
-                                            -- Cells card and pops it open
-                                            -- in the modal editor.  Default
-                                            -- mvoice/tvoice are blank — the
-                                            -- pickers in the modal header
-                                            -- prompt the user.
-  | LoadHistoryEntry String String String   -- cellId, body, moduleName.
-                                            -- Re-selects a previous cued
-                                            -- version: replaces editor doc,
-                                            -- writes through to cell source,
-                                            -- re-arms.  Cache hit on the
-                                            -- module since it's still loaded.
-  | Startup
 
 initialState :: forall i. i -> State
 initialState _ =
@@ -1297,49 +854,6 @@ encodeJsonObject pairs =
   where
   encodeEntry (Tuple k v) = Tuple k (AJ.fromString v)
 
--- | Split the composition body into fire-able statements.  Drops
--- | blank lines and `--`-prefixed comments (including the
--- | typographic-layer @-directives, which are for the renderer not
--- | the daemon).  Each entry carries its 1-based source-line number
--- | so error messages can point at the right line.
--- | Drop everything from the first `--` onwards and trim trailing
--- | whitespace.  Whole-line `--` comments collapse to "".  Mini-notation
--- | uses single-`-` tokens (binding names like `live-tick`) but never
--- | `--`, so this is unambiguous.
-stripLineComment :: String -> String
-stripLineComment line = case Str.indexOf (Pattern "--") line of
-  Just i -> Str.trim (Str.take i line)
-  Nothing -> Str.trim line
-
--- | Strip both `--` and `#` line comments.  Used on module.source
--- | (the routing-grammar portion of the session), where `#` is a
--- | comment marker per `docs/composition-grammar.md`.  Distinct from
--- | `stripLineComment`, which is used on cell text where `#` is the
--- | Tidal-style parameter-attach operator and must be preserved.
-stripModuleLineComment :: String -> String
-stripModuleLineComment line =
-  let dashCut = case Str.indexOf (Pattern "--") line of
-        Just i -> Str.take i line
-        Nothing -> line
-      hashCut = case Str.indexOf (Pattern "#") dashCut of
-        Just i -> Str.take i dashCut
-        Nothing -> dashCut
-  in Str.trim hashCut
-
--- | Cell taxonomy used by `cellSection` to drive rendering decisions.
--- | The `# config`/`# voices`/`# patterns` section markers were a
--- | feature of the legacy composition pane and are now inert; the
--- | ADT remains because cellSection still classifies cells by first
--- | word for card-styling decisions.  Phase 2b candidate for full
--- | replacement with a tvoice-driven classifier.
-data Section
-  = SecConfig
-  | SecVoices
-  | SecPatterns
-  | SecDefault
-
-derive instance eqSection :: Eq Section
-
 -- | Parse the composition source into a flat array of statements.
 -- | Strips `--` and `#` line comments (the new routing grammar treats
 -- | both as comments), drops blank lines, and emits one entry per
@@ -2021,65 +1535,6 @@ extractBpmFromSnapshot raw = case jsonParser raw of
     bpmJ <- Object.lookup "bpm" cfgObj
     AJ.toNumber bpmJ
 
--- | Tvoice category — the four-color taxonomy applied to bindings
--- | based on their first sink's destination/element.  Drives the
--- | type-color and glyph on Voice Cells cards so visual identity
--- | tracks "what kind of signal does this card emit" rather than
--- | "which mvoice column."  Envelope is reserved for a future
--- | user-assignable role tag (no SinkType for it today; ADSRs go
--- | out as continuous CV like LFOs do).
-data TvoiceType
-  = TvMidi
-  | TvCV
-  | TvGate
-  | TvSample
-  -- | Polysignal cells are autonomous: no incoming pattern, the FH-2
-  -- | generates its own modulation/clocks/gates. The family carries
-  -- | the short label rendered in the card-tvtype slot (lfo/clk/env/
-  -- | euc/eucp/rnd). All families share a single header colour and a
-  -- | double-border treatment to read as "this is not pattern-fed."
-  | TvPolySignal Comp.PolyFamily
-  | TvUnknown
-
-derive instance eqTvoiceType :: Eq TvoiceType
-
--- | CSS class for a tvoice type — used in addition to the legacy
--- | stack-color-N class on `voice-card-v2`.  CSS rules under these
--- | selectors override the stack header background.
-tvoiceTypeClass :: TvoiceType -> String
-tvoiceTypeClass = case _ of
-  TvMidi -> "tv-midi"
-  TvCV -> "tv-cv"
-  TvGate -> "tv-gate"
-  TvSample -> "tv-sample"
-  TvPolySignal _ -> "tv-polysignal"
-  TvUnknown -> "tv-unknown"
-
--- | Compact label rendered in the corner of a card to disambiguate
--- | sub-types within a category (note vs. cc, pitch vs. mod, etc.).
--- | Empty for TvUnknown so unmapped tvoices don't get a misleading
--- | label.
-tvoiceTypeLabel :: TvoiceType -> String
-tvoiceTypeLabel = case _ of
-  TvMidi -> "midi"
-  TvCV -> "cv"
-  TvGate -> "gate"
-  TvSample -> "smp"
-  TvPolySignal f -> polyFamilyShortLabel f
-  TvUnknown -> ""
-
--- | 3-4 char family label for the card-tvtype corner badge. Picks the
--- | usual modular-synth-rack abbreviations so readers scanning the
--- | grid spot "lfo", "env", "clk" instantly without parsing the body.
-polyFamilyShortLabel :: Comp.PolyFamily -> String
-polyFamilyShortLabel = case _ of
-  Comp.PFPolyLfo         -> "lfo"
-  Comp.PFPolyClock       -> "clk"
-  Comp.PFPolyEnv         -> "env"
-  Comp.PFPolyEuclid      -> "euc"
-  Comp.PFPolyEuclidPairs -> "eucp"
-  Comp.PFPolyRand        -> "rnd"
-
 -- | Pull `voices: [{name, signature, sinks}, ...]` out of a StateBus
 -- | snapshot and classify each tvoice by the first sink's destKind +
 -- | element.  Returns an empty map if the snapshot is unparseable or
@@ -2344,9 +1799,6 @@ renderCompositionColumn state =
     Editor.AcceptHunkO pid idx -> AcceptHunk pid idx
     Editor.RejectHunkO pid idx -> RejectHunk pid idx
     Editor.MoveRequested -> DemoteCursorLineToCell
-
-cellColorClass :: Int -> String
-cellColorClass idx = "cell-color-" <> show (idx `mod` 8)
 
 -- | Hylograph pane.  Reserved for the upcoming pattern visualiser
 -- | (Asteroids/Battlezone vector aesthetic).  Placeholder until that
