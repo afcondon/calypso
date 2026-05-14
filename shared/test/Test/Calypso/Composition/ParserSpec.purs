@@ -168,6 +168,27 @@ tiderlPhase1Spec = describe "tiderl phase-1 statements" do
             _, _ -> fail $ "expected [StmtCue, StmtBpm], got "
                             <> show (Array.length stmts) <> " stmts"
 
+  describe "cue declarations don't reach the wire" do
+    -- Regression for the user-reported error: typing `cue test1 [...]`
+    -- in the composition pane and firing it caused the daemon's `cue`
+    -- verb (path-2 cue/play-armed dispatch) to try to parse
+    -- `test1 [...]` as a pattern body, with a confusing trypurescript
+    -- error. The fix filters cue declarations at the wire boundary —
+    -- they are file-level declarations that surface as cards via the
+    -- read-only projection, NEVER as daemon dispatches.
+    -- The frontend's `stripCueBlocksFromLines` is the implementation;
+    -- this test pins the contract at the parser level so future
+    -- refactors of either side stay consistent.
+    it "single-line cue parses as StmtCue, not a verb dispatch" do
+      case parseFirst "cue d1 = mini \"x ~\"\n" of
+        Right (StmtCue _) -> pure unit
+        other -> failWith "StmtCue (not a verb)" other
+    it "indented continuation form parses as one StmtCue, not three" do
+      let src = "cue d1\n  mini \"x ~\"\n"
+      case parseComposition src of
+        Left e -> fail $ "parse failed: " <> parseErrorMessage e
+        Right (Composition stmts) -> Array.length stmts `shouldEqual` 1
+
   describe "mixed file" do
     it "parses a small .tiderl-shaped composition" do
       let src =

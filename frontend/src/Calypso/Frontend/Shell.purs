@@ -16,6 +16,7 @@ import Data.Array as Array
 import Data.Set as Set
 import Data.String as Str
 import Data.String.CodeUnits (takeRight) as Str.CU
+import Data.String.CodeUnits as SCU
 import Data.Codec.Argonaut as CA
 import Data.Either (Either(..))
 import Data.HTTP.Method (Method(..))
@@ -884,16 +885,79 @@ encodeJsonObject pairs =
 -- | both as comments), drops blank lines, and emits one entry per
 -- | non-empty source line with its 1-based line number for error
 -- | reporting.
+-- |
+-- | `cue <id> [meta] [= body]` declarations (and any indented
+-- | continuation lines) are filtered out before wire collapse: they
+-- | are file-level card declarations, not daemon dispatches. The cards
+-- | themselves still fire via the cue/play-armed path on the Voice
+-- | Cells side; the file-level declaration only exists so the cards
+-- | survive a session reload.
 compositionStatements
   :: String
   -> Array { lineNum :: Int, source :: String }
 compositionStatements src =
   let lines = Str.split (Pattern "\n") src
+      filtered = stripCueBlocksFromLines lines
       indexed = mapWithIndex
-        (\i s -> { lineNum: i + 1, source: stripModuleLineComment s }) lines
+        (\i s -> { lineNum: i + 1, source: stripModuleLineComment s }) filtered
       nonEmpty = Array.filter (\e -> not (Str.null (Str.trim e.source))) indexed
   in Comp.collapsePolySignalEntries
        (Comp.collapseMacroEntries nonEmpty)
+
+-- | Replace every `cue <id>` block (header line + any indented
+-- | continuation lines) with a blank line per replaced line, so the
+-- | rest of the pipeline still sees the original 1-based line numbers
+-- | for error reporting on non-cue statements. Operates on raw lines
+-- | (before any comment stripping) because indent is a meaningful
+-- | signal here.
+stripCueBlocksFromLines :: Array String -> Array String
+stripCueBlocksFromLines = go []
+  where
+  go acc remaining = case Array.uncons remaining of
+    Nothing -> Array.reverse acc
+    Just { head, tail }
+      | isCueHeaderLine head ->
+          let { continuations, rest } = splitContinuations tail
+              dropped = continuations
+              -- One blank substitution per dropped line preserves line
+              -- numbering for downstream error messages.
+              padding = Array.replicate (1 + Array.length dropped) ""
+          in go (Array.reverse padding <> acc) rest
+      | otherwise -> go (Array.cons head acc) tail
+
+  splitContinuations xs =
+    let { init, rest: r } = takeWhilePartition isIndentedNonBlank xs
+    in { continuations: init, rest: r }
+
+  -- | A `cue <id>` header line: column-0 (no leading whitespace),
+  -- | first token is exactly `cue`, second token is an identifier.
+  isCueHeaderLine raw =
+    case SCU.uncons raw of
+      Just { head: c, tail: _ }
+        | c == ' ' || c == '\t' -> false
+      _ ->
+        case Array.head (Str.split (Pattern " ") (Str.trim raw)) of
+          Just "cue" ->
+            -- Disambiguate: bare `cue <body...>` as a verb-cell text
+            -- (the path-2-style cue verb) doesn't exist at file level,
+            -- so anything that starts with `cue ` at column 0 in the
+            -- composition source is a file declaration.
+            let restAfterCue = Str.drop 4 (Str.trim raw)
+            in not (Str.null (Str.trim restAfterCue))
+          _ -> false
+
+  isIndentedNonBlank raw =
+    case SCU.uncons raw of
+      Just { head: c, tail: _ } -> (c == ' ' || c == '\t') && not (Str.null (Str.trim raw))
+      Nothing -> false
+
+-- | Partition by predicate from the start: prefix that satisfies p, then rest.
+takeWhilePartition :: forall a. (a -> Boolean) -> Array a -> { init :: Array a, rest :: Array a }
+takeWhilePartition p xs =
+  let n = case Array.findIndex (not <<< p) xs of
+        Just i -> i
+        Nothing -> Array.length xs
+  in { init: Array.take n xs, rest: Array.drop n xs }
 
 -- | Cell-text counterpart to `compositionStatements`. Strips only
 -- | `--` line comments — `#` is the Tidal parameter-attach operator
