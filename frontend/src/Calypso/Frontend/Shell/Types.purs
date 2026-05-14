@@ -4,9 +4,10 @@ import Prelude
 
 import Data.Array (findIndex, modifyAt)
 import Data.Array as Array
-import Data.Either (Either)
+import Data.Either (Either(..))
 import Data.Map (Map)
 import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Set as Set
 import Data.Set (Set)
 import Data.String as Str
 import Data.String.Pattern (Pattern(..))
@@ -14,6 +15,7 @@ import Halogen as H
 import Type.Proxy (Proxy(..))
 
 import Calypso.Composition as Comp
+import Calypso.Composition.Parser as CompP
 import Calypso.Favorite (Favorite)
 import Calypso.Frontend.Completion (Completion)
 import Calypso.Frontend.Editor as Editor
@@ -59,6 +61,44 @@ mapCellInList cellId f cells =
   fromMaybe cells do
     idx <- findIndex (_.id >>> (_ == cellId)) cells
     modifyAt idx f cells
+
+-- | Phase 2a (read-only projection): parse the module source as a
+-- | composition, find every `cue <id> [meta] = body` declaration, and
+-- | lift it into a `CellRec` suitable for display in the Voice Cells
+-- | pane. Cue id becomes the cell id; cue body becomes the cell source;
+-- | metadata maps directly to the corresponding cell fields.
+-- |
+-- | Returns `[]` on parse failure — the caller falls back to whatever
+-- | cells came over the wire. We don't surface a parse error here: the
+-- | existing composition-pane error display already shows it on the
+-- | shell's authoritative parse path.
+extractCuesAsCellRecs :: String -> Array CellRec
+extractCuesAsCellRecs src = case CompP.parseComposition src of
+  Left _ -> []
+  Right (Comp.Composition stmts) -> Array.mapMaybe cueToCell stmts
+  where
+  cueToCell = case _ of
+    Comp.StmtCue c -> Just
+      { id: c.id
+      , kind: "expr"
+      , source: c.body
+      , author: Nothing
+      , mvoice: c.mvoice
+      , tvoice: c.tvoice
+      }
+    _ -> Nothing
+
+-- | Merge composition-derived cells (the new lens) into the existing
+-- | cells array (the wire/JSON lens). Phase 2a chooses
+-- | "wire-loaded wins on id collision" — that way pre-existing JSON
+-- | sessions render unchanged while any new `cue` statements in the
+-- | source still surface as additional cards. Phase 2b will invert
+-- | this priority so the composition becomes authoritative.
+mergeCueCells :: Array CellRec -> Array CellRec -> Array CellRec
+mergeCueCells existing derived =
+  let existingIds = Set.fromFoldable (map _.id existing)
+      novel = Array.filter (\c -> not (Set.member c.id existingIds)) derived
+  in existing <> novel
 
 -- | Cell taxonomy used by `cellSection` to drive rendering decisions.
 data Section

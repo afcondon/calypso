@@ -119,10 +119,12 @@ import Calypso.Frontend.Shell.Types
   , cellSection
   , columnKeyLabel
   , defaultVisibility
+  , extractCuesAsCellRecs
   , gridTemplateForVisibility
   , hideFromVisibility
   , isVisible
   , mapCellInList
+  , mergeCueCells
   , isVerbCell
   , stripLineComment
   , stripModuleLineComment
@@ -441,9 +443,11 @@ handleAction = case _ of
                 -- not the editor's prior content.
                 let UserModule rm = req."module"
                     loadedCells = map cellRecOf req.cells
+                    cuesAsCells = extractCuesAsCellRecs rm.source
+                    mergedCells = mergeCueCells loadedCells cuesAsCells
                 H.modify_ \s -> s
                   { moduleSource = rm.source
-                  , cells = loadedCells
+                  , cells = mergedCells
                   , transportError = Nothing
                   , compositionStatus = Just "(workspace loaded — click ▶ fire to register on daemon)"
                   }
@@ -1384,20 +1388,28 @@ applyRemote r = do
       maxRemoteN = foldr max 0
         ( Array.mapMaybe (\(Cell c) -> parseCellNumber c.id) r.cells )
   H.modify_ \s ->
-    let s' = s
-          { moduleSource = rm.source
-          , cells = cellRecs
-          , nextCellId = max s.nextCellId (maxRemoteN + 1)
-          , runtime = r.runtime
-          , cellTypes = typesMap
-          , cellResults = Map.union resultsMap s.cellResults
-          , cellRanges = r.cellLines
-          , errors = r.errors
-          , warnings = r.warnings
-          , lastSyncedModule = rm.source
-          , lastSyncedCells = syncedCells
-          , lastSyncedRuntime = r.runtime
-          }
+    let
+      -- Phase 2a (read-only Model B projection): lift any `cue <id>`
+      -- declarations from the composition source into cells alongside
+      -- the wire-loaded array. Wire-loaded wins on id collision so
+      -- legacy JSON sessions keep their exact rendering; cues that
+      -- aren't yet represented as cells appear as additional cards.
+      cuesAsCells = extractCuesAsCellRecs rm.source
+      mergedCells = mergeCueCells cellRecs cuesAsCells
+      s' = s
+        { moduleSource = rm.source
+        , cells = mergedCells
+        , nextCellId = max s.nextCellId (maxRemoteN + 1)
+        , runtime = r.runtime
+        , cellTypes = typesMap
+        , cellResults = Map.union resultsMap s.cellResults
+        , cellRanges = r.cellLines
+        , errors = r.errors
+        , warnings = r.warnings
+        , lastSyncedModule = rm.source
+        , lastSyncedCells = syncedCells
+        , lastSyncedRuntime = r.runtime
+        }
     in s' { tvoiceTypes = recomputeTvoiceTypes s' }
   decorateErrors r.errors r.cellLines
 
