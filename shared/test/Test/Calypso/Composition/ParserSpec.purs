@@ -189,6 +189,39 @@ tiderlPhase1Spec = describe "tiderl phase-1 statements" do
         Left e -> fail $ "parse failed: " <> parseErrorMessage e
         Right (Composition stmts) -> Array.length stmts `shouldEqual` 1
 
+  describe "realistic hybrid-rig source" do
+    -- The actual running session source as a regression test: verifies
+    -- that a full setup file with devices, bindings, polysignals AND
+    -- a cue declaration parses end-to-end without failing on any one
+    -- statement. Phase 2a's projection returns [] on parse failure,
+    -- so if this regresses the user sees no cards.
+    it "parses the full hybrid-rig composition with one cue at the end" do
+      let src = "-- Devices\n"
+              <> "midi fh2     \"FH-2\"\n"
+              <> "midi fh2-qd  \"FH-2\" lat 69\n"
+              <> "midi live    \"IAC Driver Tidal\" lat 30\n"
+              <> "midi laplace \"AUDIO4c USB2\"\n"
+              <> "es9  es9     \"ES-9\"\n"
+              <> "\n"
+              <> "midi-note qd1 fh2-qd 14 60 100 50\n"
+              <> "cv      cip-pitch  es9 0 voct\n"
+              <> "cv-cont cip-damp   es9 1\n"
+              <> "gate cip-gate fh2 0\n"
+              <> "\n"
+              <> "polylfo banks cv1                                                <>\n"
+              <> "  ratios [1,     2,     3,     5,     1.3,   2.6,   5.2,   10.4] <>\n"
+              <> "  shapes [tri,   tri,   sin,   sin,   saw,   saw,   sqr,   sqr ] <>\n"
+              <> "  ranges [±5v,   ±5v,   ±5v,   ±5v,   +5v,   +5v,   +5v,   +5v ]\n"
+              <> "\n"
+              <> "cue test1 [mvoice=drums tvoice=qd1] = mini \"x ~ x ~\"\n"
+      case parseComposition src of
+        Left e -> fail $ "parse failed at end-to-end test: " <> parseErrorMessage e
+        Right (Composition stmts) -> do
+          let isCue = case _ of
+                StmtCue _ -> true
+                _ -> false
+          Array.length (Array.filter isCue stmts) `shouldEqual` 1
+
   describe "mixed file" do
     it "parses a small .tiderl-shaped composition" do
       let src =
