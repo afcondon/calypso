@@ -257,8 +257,16 @@ handleAction = case _ of
     _ <- evalSource ("bpm " <> show n)
     pure unit
   ModuleChanged src -> do
+    -- Phase 2a (live projection): re-derive cue cards from the
+    -- composition source as the user types. mergeCueCells keeps
+    -- existing cells unchanged on id collision so previously-loaded
+    -- cards stay put; novel `cue` declarations surface as new cards
+    -- without needing a snapshot round-trip. Removing a cue line
+    -- does NOT remove its card yet — that's a Phase 2b concern.
     H.modify_ \s ->
-      let s' = s { moduleSource = src }
+      let cuesAsCells = extractCuesAsCellRecs src
+          mergedCells = mergeCueCells s.cells cuesAsCells
+          s' = s { moduleSource = src, cells = mergedCells }
       in s' { tvoiceTypes = recomputeTvoiceTypes s' }
     handleAction ScheduleCompile
   CellChanged id src -> do
