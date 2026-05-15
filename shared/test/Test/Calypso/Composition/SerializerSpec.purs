@@ -252,6 +252,20 @@ serializerSpec = describe "Calypso.Composition.Serializer" do
         `shouldEqual`
           "section Drums\ncue cell-005 [tvoice=qd1] = mini \"x ~ x ~\""
 
+    it "emits `<-` shorthand for set-control cues whose id matches the control name" do
+      let ast = Composition [StmtCue
+            { id: "bass-amp", mvoice: Just "Ctrl", tvoice: Just "bass-amp"
+            , whenTag: Nothing, body: "set-control bass-amp 0.85"
+            }]
+      serializeComposition ast
+        `shouldEqual` "section Ctrl\nbass-amp <- 0.85"
+
+    it "round-trips a set-control shorthand through parse → serialize" do
+      roundTrip (Composition [StmtCue
+        { id: "bass-amp", mvoice: Just "Ctrl", tvoice: Just "bass-amp"
+        , whenTag: Nothing, body: "set-control bass-amp 0.85"
+        }])
+
     it "round-trips a named-form composition" do
       roundTrip (Composition
         [ StmtCue { id: "qd1", mvoice: Just "Drums", tvoice: Just "qd1"

@@ -44,6 +44,7 @@ import Calypso.Composition
 import Calypso.Composition.Parser (prettyPolySignal)
 import Data.Array as Array
 import Data.Maybe (Maybe(..))
+import Data.Number as Number
 import Data.String (Pattern(..), Replacement(..), joinWith, replaceAll, split, stripPrefix, trim) as Str
 import Data.Tuple (Tuple(..))
 
@@ -141,9 +142,29 @@ renderLatency = case _ of
 -- | emitted metadata; the section header is doing that work.
 renderCue :: { underSection :: Maybe String } -> CueStmt -> String
 renderCue ctx c =
-  case namedFormHeader c of
-    Just header -> renderBodyAfter header c.body
-    Nothing -> renderLegacy ctx c
+  -- Set-control shorthand wins over named form when the body matches:
+  -- `<name> <- <value>` reads as the intent (a one-shot control set)
+  -- rather than the implementation (a `set-control` verb dispatch).
+  case detectSetControl c of
+    Just { name, value } -> name <> " <- " <> renderNumber value
+    Nothing -> case namedFormHeader c of
+      Just header -> renderBodyAfter header c.body
+      Nothing -> renderLegacy ctx c
+
+-- | If the cue is a single-statement `set-control <name> <number>` body
+-- | AND the cue's id matches the control name, surface as the `<-`
+-- | shorthand. The id-match guard prevents collapsing arbitrary
+-- | set-control cells (with cell-NNN ids) into `<-` form — they'd lose
+-- | their id identity. Only post-rename or hand-written cues qualify.
+detectSetControl :: CueStmt -> Maybe { name :: String, value :: Number }
+detectSetControl c =
+  case Str.split (Str.Pattern " ") (Str.trim c.body) of
+    ["set-control", name, valueStr]
+      | c.id == name -> map (\v -> { name, value: v }) (parseNumber valueStr)
+    _ -> Nothing
+  where
+  parseNumber :: String -> Maybe Number
+  parseNumber = Number.fromString
 
 -- | If the cue's id is `tvoice` or `tvoice:suffix`, return the
 -- | corresponding header text. Used to detect when the level-2 named

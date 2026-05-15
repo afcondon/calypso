@@ -9,6 +9,7 @@ import Data.Map (Map)
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Set as Set
 import Data.Set (Set)
+import Data.Number as Number
 import Data.String as Str
 import Data.String.CodeUnits as SCU
 import Data.String.Pattern (Pattern(..))
@@ -159,8 +160,16 @@ cellRecAsCueLine c = CompS.serializeStatement
 migrateCellIdsToTvoice
   :: Array CellRec
   -> { cells :: Array CellRec, didRename :: Boolean }
-migrateCellIdsToTvoice cells =
+migrateCellIdsToTvoice cells0 =
   let
+    -- Preprocess: cells whose body is `set-control <name> <value>` get
+    -- their tvoice set to the control name. Lets the level-2 rename
+    -- + serializer collapse them into the `name <- value` shorthand.
+    cells = map setControlTvoice cells0
+    setControlTvoice c = case c.tvoice, parseSetControlBody c.source of
+      Nothing, Just { name } -> c { tvoice = Just name }
+      _, _ -> c
+
     -- First pass: count occurrences per (mvoice, tvoice) among the
     -- migration-eligible cells. Lets us decide whether a `:a/:b/:c`
     -- suffix is needed (skipped when only one cell uses this tvoice).
@@ -205,9 +214,27 @@ migrateCellIdsToTvoice cells =
       Just i -> fromMaybe used (Array.modifyAt i (\(Tuple k _) -> Tuple k (n + 1)) used)
       Nothing -> Array.snoc used (Tuple key (n + 1))
 
-    didRename = Array.length renamed == Array.length cells
+    -- Also consider the set-control tvoice preprocessing a rename
+    -- worth syncing to the server (the wire copy of the cell didn't
+    -- have tvoice set, so this is genuinely new info to persist).
+    tvoiceChanged = Array.any identity
+      (Array.zipWith (\a b -> a.tvoice /= b.tvoice) cells0 renamed)
+    idChanged = Array.length renamed == Array.length cells
       && Array.any identity (Array.zipWith (\a b -> a.id /= b.id) cells renamed)
+    didRename = idChanged || tvoiceChanged
   in { cells: renamed, didRename }
+
+-- | If `body` is exactly `set-control <name> <number>` (whitespace-
+-- | tokenised, trimmed), extract the control name and parsed value.
+-- | Used by the level-2 migration to auto-derive a tvoice for legacy
+-- | set-control cells, and by tests pinning the rename contract.
+parseSetControlBody :: String -> Maybe { name :: String, value :: Number }
+parseSetControlBody body =
+  case Str.split (Pattern " ") (Str.trim body) of
+    ["set-control", name, valueStr] -> case Number.fromString valueStr of
+      Just value -> Just { name, value }
+      Nothing -> Nothing
+    _ -> Nothing
 
 -- | `cell-005`, `cell-027` — yes. `cell-`, `cell-abc`, `qd1` — no.
 isCellNumberedId :: String -> Boolean

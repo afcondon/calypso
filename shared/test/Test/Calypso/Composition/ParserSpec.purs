@@ -123,6 +123,14 @@ level2GrammarSpec = describe "level 2 grammar (section + named cue)" do
               c2.mvoice `shouldEqual` Just "Bass"
             _, _ -> fail "expected two StmtCue after section switches"
 
+    it "parses `bass-amp <- 0.85` set-control shorthand" do
+      case parseFirst "bass-amp <- 0.85\n" of
+        Right (StmtCue r) -> do
+          r.id `shouldEqual` "bass-amp"
+          r.tvoice `shouldEqual` Just "bass-amp"
+          r.body `shouldEqual` "set-control bass-amp 0.85"
+        other -> failWith "StmtCue bass-amp <- 0.85" other
+
     it "old `cue <id> [mvoice=...]` form keeps its explicit mvoice even inside a section" do
       -- A safety check: when an old-form cue is parsed inside a
       -- section, its explicit mvoice metadata wins; we don't clobber it.

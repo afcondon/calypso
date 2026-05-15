@@ -245,11 +245,16 @@ sectionHeaderP = do
 -- | `<tvoice>[:<suffix>]\n  <body>`. Mvoice is taken from the most
 -- | recent preceding `section` header by `resolveSections` after the
 -- | flat parse — `namedCueP` itself returns `mvoice: Nothing`.
+-- |
+-- | Also recognises the `<name> <- <value>` set-control shorthand,
+-- | which sugars to a cue whose body is `set-control <name> <value>`.
+-- | Reads as "set this control's value" and sits nicely alongside
+-- | pattern cues in the same `section ctrl` block.
 namedCueP :: Parser String CueStmt
 namedCueP = do
   tvoice <- identP
   suffix <- optionMaybe (try (char ':' *> identP))
-  body <- (try inlineCueBodyP) <|> indentedCueBodyP
+  body <- (try (setControlSugarP tvoice)) <|> (try inlineCueBodyP) <|> indentedCueBodyP
   let
     id = case suffix of
       Just s -> tvoice <> ":" <> s
@@ -261,6 +266,18 @@ namedCueP = do
     , whenTag: Nothing
     , body
     }
+
+-- | `<- <number>` after the identifier sugars to
+-- | `set-control <ident> <value>`. The captured ident IS the control
+-- | name. Body is canonical PureScript-ish form so re-parse + redispatch
+-- | through the regular `set-control` verb stays simple.
+setControlSugarP :: String -> Parser String String
+setControlSugarP controlName = do
+  _ <- hspace
+  _ <- string "<-"
+  _ <- hspace
+  value <- number
+  pure ("set-control " <> controlName <> " " <> show value)
 
 -- ───────────────────────────────────────────────────────────────────
 -- Transport / Controls / Tags / Cues  (Phase 1 of .tiderl)
