@@ -11,6 +11,7 @@ import Data.Set as Set
 import Data.Set (Set)
 import Data.String as Str
 import Data.String.Pattern (Pattern(..))
+import Data.Tuple (Tuple(..), snd)
 import Halogen as H
 import Type.Proxy (Proxy(..))
 
@@ -89,16 +90,37 @@ extractCuesAsCellRecs src = case CompP.parseComposition src of
     _ -> Nothing
 
 -- | Merge composition-derived cells (the new lens) into the existing
--- | cells array (the wire/JSON lens). Phase 2a chooses
--- | "wire-loaded wins on id collision" — that way pre-existing JSON
--- | sessions render unchanged while any new `cue` statements in the
--- | source still surface as additional cards. Phase 2b will invert
--- | this priority so the composition becomes authoritative.
+-- | cells array (the wire/JSON lens). Used at session-hydrate time;
+-- | "wire-loaded wins on id collision" so pre-existing JSON sessions
+-- | render unchanged while novel `cue` statements appear as new cards.
 mergeCueCells :: Array CellRec -> Array CellRec -> Array CellRec
 mergeCueCells existing derived =
   let existingIds = Set.fromFoldable (map _.id existing)
       novel = Array.filter (\c -> not (Set.member c.id existingIds)) derived
   in existing <> novel
+
+-- | Live-edit variant: composition-derived cells WIN on id collision.
+-- | Used by `ModuleChanged` so editing a cue body in the composition
+-- | pane immediately updates the corresponding card. Without this the
+-- | first version of each cue gets stuck in `state.cells` and later
+-- | edits are silently dropped.
+-- |
+-- | Phase 2a accepts this for cue ids only; any wire-loaded cell whose
+-- | id collides with a cue is overwritten (correct intent for Phase 2,
+-- | where composition is the source of truth). Phase 2b will collapse
+-- | this distinction by retiring the wire cells path entirely.
+mergeCueCellsCompositionWins :: Array CellRec -> Array CellRec -> Array CellRec
+mergeCueCellsCompositionWins existing derived =
+  let derivedById = mkById derived
+      updated = map (\c -> fromMaybe c (lookupById c.id derivedById)) existing
+      existingIds = Set.fromFoldable (map _.id existing)
+      novel = Array.filter (\c -> not (Set.member c.id existingIds)) derived
+  in updated <> novel
+  where
+  mkById :: Array CellRec -> Array (Tuple String CellRec)
+  mkById = map (\c -> Tuple c.id c)
+  lookupById :: String -> Array (Tuple String CellRec) -> Maybe CellRec
+  lookupById k = map snd <<< Array.find (\(Tuple k' _) -> k' == k)
 
 -- | Cell taxonomy used by `cellSection` to drive rendering decisions.
 data Section

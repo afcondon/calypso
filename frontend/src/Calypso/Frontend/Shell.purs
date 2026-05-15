@@ -126,6 +126,7 @@ import Calypso.Frontend.Shell.Types
   , isVisible
   , mapCellInList
   , mergeCueCells
+  , mergeCueCellsCompositionWins
   , isVerbCell
   , stripLineComment
   , stripModuleLineComment
@@ -258,14 +259,14 @@ handleAction = case _ of
     pure unit
   ModuleChanged src -> do
     -- Phase 2a (live projection): re-derive cue cards from the
-    -- composition source as the user types. mergeCueCells keeps
-    -- existing cells unchanged on id collision so previously-loaded
-    -- cards stay put; novel `cue` declarations surface as new cards
-    -- without needing a snapshot round-trip. Removing a cue line
-    -- does NOT remove its card yet — that's a Phase 2b concern.
+    -- composition source as the user types. Uses the composition-wins
+    -- merge variant so editing a cue's body in the composition pane
+    -- updates the corresponding card's source; novel `cue` ids appear
+    -- as new cards. Removing a cue line does NOT yet remove its card
+    -- (Phase 2b concern — needs dirty-tracking).
     H.modify_ \s ->
       let cuesAsCells = extractCuesAsCellRecs src
-          mergedCells = mergeCueCells s.cells cuesAsCells
+          mergedCells = mergeCueCellsCompositionWins s.cells cuesAsCells
           s' = s { moduleSource = src, cells = mergedCells }
       in s' { tvoiceTypes = recomputeTvoiceTypes s' }
     handleAction ScheduleCompile
