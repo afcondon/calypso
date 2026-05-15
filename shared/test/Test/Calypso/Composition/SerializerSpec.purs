@@ -202,6 +202,66 @@ serializerSpec = describe "Calypso.Composition.Serializer" do
         })
         `shouldEqual` "cue p1\n  line one\n  line two"
 
+  describe "level 2 emission" do
+    -- These exercise serializeComposition (the section-aware path),
+    -- not serializeStatement (which has no section context).
+
+    it "uses named form `<tv> = body` when id == tvoice" do
+      let ast = Composition [StmtCue
+            { id: "qd1", mvoice: Just "Drums", tvoice: Just "qd1"
+            , whenTag: Nothing, body: "mini \"x ~ x ~\""
+            }]
+      serializeComposition ast
+        `shouldEqual` "section Drums\nqd1 = mini \"x ~ x ~\""
+
+    it "uses named form with :suffix when id == tvoice:suffix" do
+      let ast = Composition [StmtCue
+            { id: "qd1:a", mvoice: Just "Drums", tvoice: Just "qd1"
+            , whenTag: Nothing, body: "mini \"x ~ x ~\""
+            }]
+      serializeComposition ast
+        `shouldEqual` "section Drums\nqd1:a = mini \"x ~ x ~\""
+
+    it "groups consecutive cues with the same mvoice under one section header" do
+      let ast = Composition
+            [ StmtCue { id: "qd1", mvoice: Just "Drums", tvoice: Just "qd1"
+                      , whenTag: Nothing, body: "mini \"x ~\"" }
+            , StmtCue { id: "qd2", mvoice: Just "Drums", tvoice: Just "qd2"
+                      , whenTag: Nothing, body: "mini \"x x\"" }
+            ]
+      serializeComposition ast
+        `shouldEqual` "section Drums\nqd1 = mini \"x ~\"\nqd2 = mini \"x x\""
+
+    it "emits a new section header when mvoice changes" do
+      let ast = Composition
+            [ StmtCue { id: "qd1", mvoice: Just "Drums", tvoice: Just "qd1"
+                      , whenTag: Nothing, body: "mini \"x ~\"" }
+            , StmtCue { id: "cip-pitch", mvoice: Just "Bass", tvoice: Just "cip-pitch"
+                      , whenTag: Nothing, body: "mini \"c2 e2\"" }
+            ]
+      serializeComposition ast
+        `shouldEqual`
+          "section Drums\nqd1 = mini \"x ~\"\nsection Bass\ncip-pitch = mini \"c2 e2\""
+
+    it "falls back to legacy form when id doesn't match tvoice" do
+      let ast = Composition [StmtCue
+            { id: "cell-005", mvoice: Just "Drums", tvoice: Just "qd1"
+            , whenTag: Nothing, body: "mini \"x ~ x ~\""
+            }]
+      serializeComposition ast
+        `shouldEqual`
+          "section Drums\ncue cell-005 [tvoice=qd1] = mini \"x ~ x ~\""
+
+    it "round-trips a named-form composition" do
+      roundTrip (Composition
+        [ StmtCue { id: "qd1", mvoice: Just "Drums", tvoice: Just "qd1"
+                  , whenTag: Nothing, body: "mini \"x ~ x ~\"" }
+        , StmtCue { id: "qd2:a", mvoice: Just "Drums", tvoice: Just "qd2"
+                  , whenTag: Nothing, body: "mini \"x x\"" }
+        , StmtCue { id: "cip-pitch", mvoice: Just "Bass", tvoice: Just "cip-pitch"
+                  , whenTag: Nothing, body: "mini \"c2 e2\"" }
+        ])
+
 -- | Serialize, re-parse, assert AST equality.
 -- |
 -- | `Composition` doesn't derive `Show`, so we can't use `shouldEqual`

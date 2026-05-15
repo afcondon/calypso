@@ -44,7 +44,7 @@ import Calypso.Composition
 import Calypso.Composition.Parser (prettyPolySignal)
 import Data.Array as Array
 import Data.Maybe (Maybe(..))
-import Data.String (Pattern(..), Replacement(..), joinWith, replaceAll, split, trim) as Str
+import Data.String (Pattern(..), Replacement(..), joinWith, replaceAll, split, stripPrefix, trim) as Str
 import Data.Tuple (Tuple(..))
 
 -- ───────────────────────────────────────────────────────────────────
@@ -53,9 +53,29 @@ import Data.Tuple (Tuple(..))
 
 -- | Render a whole composition as a `\n`-separated string. No trailing
 -- | newline — callers append one if their downstream surface expects it.
+-- |
+-- | Walks the statement list and inserts `section <mvoice>` headers
+-- | whenever a StmtCue's mvoice differs from the running section.
+-- | Cues themselves get either the level-2 named form (`<tv> = body`)
+-- | or the legacy `cue <id> [meta] = body` form depending on whether
+-- | the cue's id matches its tvoice; see `renderCue` for the rule.
 serializeComposition :: Composition -> String
 serializeComposition (Composition stmts) =
-  Str.joinWith "\n" (map serializeStatement stmts)
+  Str.joinWith "\n" (Array.reverse (_.lines (Array.foldl step initState stmts)))
+  where
+  initState = { section: Nothing, lines: [] }
+  step state stmt = case stmt of
+    StmtCue c ->
+      let
+        stateAfterHeader = case c.mvoice of
+          Just mv | Just mv /= state.section ->
+            { section: Just mv
+            , lines: Array.cons ("section " <> mv) state.lines
+            }
+          _ -> state
+        cueText = renderCue { underSection: stateAfterHeader.section } c
+      in stateAfterHeader { lines = Array.cons cueText stateAfterHeader.lines }
+    _ -> state { lines = Array.cons (serializeStatement stmt) state.lines }
 
 -- | Render one statement to its canonical text form. Multi-line forms
 -- | (polysignal blocks, multi-line cue bodies) emit embedded newlines.
@@ -65,7 +85,12 @@ serializeStatement = case _ of
   StmtLinkSync b -> "link sync " <> if b then "on" else "off"
   StmtControl c -> "control " <> c.name <> " = " <> renderNumber c.value
   StmtTag t -> "tag " <> t.name <> " = " <> t.defaultValue
-  StmtCue c -> renderCue c
+  -- Standalone-statement rendering: no enclosing section, so we
+  -- keep mvoice in the metadata. Used by serializeStatement callers
+  -- that don't have section context. `serializeComposition` calls
+  -- renderCue directly with the running section, dropping redundant
+  -- mvoice metadata when the section header already provides it.
+  StmtCue c -> renderCue { underSection: Nothing } c
   StmtSection name -> "section " <> name
   StmtDevice d -> renderDevice d
   StmtDeviceConfig dc -> renderDeviceConfig dc
@@ -94,29 +119,65 @@ renderLatency = case _ of
 -- Cue
 -- ───────────────────────────────────────────────────────────────────
 
--- | Cue rendering picks one of two forms based on the body:
+-- | Cue rendering picks one of three forms by cascading preferences:
 -- |
--- |   * No newlines, body fits on one line: inline `=` form.
--- |   * Otherwise: indented-continuation form with 2-space indent.
+-- |   1. Level-2 named form `<tvoice>[:suffix] = body` when the cue's id
+-- |      matches its tvoice (either exactly, or as `tvoice:suffix`). The
+-- |      mvoice is supplied by the enclosing `section` header.
+-- |   2. Legacy `cue <id> [meta] = body` when (1) doesn't apply.
 -- |
--- | The two forms are equivalent under round-trip, but the indented
--- | form is canonical when the cell text is multi-line — preserves
--- | structure visually and dedicates one column to source.
-renderCue :: CueStmt -> String
-renderCue c =
-  let header = "cue " <> c.id <> renderCueMeta c
-      bodyLines = Str.split (Str.Pattern "\n") c.body
+-- | Plus body wrapping: single-line bodies inline after `=`, multi-line
+-- | bodies on indented continuation lines.
+-- |
+-- | `ctx.underSection` is the mvoice of the most recently emitted
+-- | `section` header (Nothing for top-level / no section yet). When the
+-- | cue's mvoice matches it, we drop the redundant `mvoice=` from any
+-- | emitted metadata; the section header is doing that work.
+renderCue :: { underSection :: Maybe String } -> CueStmt -> String
+renderCue ctx c =
+  case namedFormHeader c of
+    Just header -> renderBodyAfter header c.body
+    Nothing -> renderLegacy ctx c
+
+-- | If the cue's id is `tvoice` or `tvoice:suffix`, return the
+-- | corresponding header text. Used to detect when the level-2 named
+-- | form is applicable.
+namedFormHeader :: CueStmt -> Maybe String
+namedFormHeader c = case c.tvoice of
+  Nothing -> Nothing
+  Just tv
+    | c.id == tv -> Just tv
+    | otherwise -> case Str.stripPrefix (Str.Pattern (tv <> ":")) c.id of
+        Just _ -> Just c.id   -- id IS "tvoice:suffix"
+        Nothing -> Nothing
+
+renderLegacy :: { underSection :: Maybe String } -> CueStmt -> String
+renderLegacy ctx c =
+  let header = "cue " <> c.id <> renderCueMeta ctx c
+  in renderBodyAfter header c.body
+
+renderBodyAfter :: String -> String -> String
+renderBodyAfter header body =
+  let bodyLines = Str.split (Str.Pattern "\n") body
   in case Array.length bodyLines of
-    1 -> header <> " = " <> Str.trim c.body
+    1 -> header <> " = " <> Str.trim body
     _ -> header <> "\n" <> Str.joinWith "\n" (map (\l -> "  " <> l) bodyLines)
 
-renderCueMeta :: CueStmt -> String
-renderCueMeta c =
-  let pairs = Array.catMaybes
-        [ map (\v -> "mvoice=" <> v) c.mvoice
-        , map (\v -> "tvoice=" <> v) c.tvoice
-        , map (\v -> "when=" <> v) c.whenTag
-        ]
+-- | Bracket metadata for the legacy `cue <id> [meta] = body` form.
+-- | Drops `mvoice=...` when it equals the enclosing section so the
+-- | section header does the work. Tvoice and when-tag are preserved
+-- | verbatim; they're cue-specific.
+renderCueMeta :: { underSection :: Maybe String } -> CueStmt -> String
+renderCueMeta ctx c =
+  let
+    mvoicePart = case c.mvoice of
+      Just mv | Just mv /= ctx.underSection -> Just ("mvoice=" <> mv)
+      _ -> Nothing
+    pairs = Array.catMaybes
+      [ mvoicePart
+      , map (\v -> "tvoice=" <> v) c.tvoice
+      , map (\v -> "when=" <> v) c.whenTag
+      ]
   in case Array.length pairs of
     0 -> ""
     _ -> " [" <> Str.joinWith " " pairs <> "]"
