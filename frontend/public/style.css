@@ -895,13 +895,25 @@ body::before {
    CodeMirror.js, buildCueDecos) applies one of these classes to the
    `cue` token of each cue line based on the binding's TvoiceType.
    `cm-tiderl-meta` dims the `[mvoice=… tvoice=…]` bracket so the
-   musical body reads as the prominent content. */
-.cm-tiderl-cue-midi       { color: #7aa9ff !important; font-weight: 600; }
-.cm-tiderl-cue-cv         { color: #7eff8a !important; font-weight: 600; }
-.cm-tiderl-cue-gate       { color: #ff5ec3 !important; font-weight: 600; }
-.cm-tiderl-cue-sample     { color: #ffaa3a !important; font-weight: 600; }
-.cm-tiderl-cue-polysignal { color: #c69ff8 !important; font-weight: 600; }
-.cm-tiderl-cue-unknown    { color: var(--fg-unknown) !important; font-style: italic; }
+   musical body reads as the prominent content.
+
+   Selector covers the wrapper AND any inner CM6 syntax-highlight
+   span (.tok-variableName etc.) — `color` doesn't cascade past a
+   descendant with its own colour rule, so the descendant selector
+   is needed to defeat CM's own token colouring. `opacity` cascades
+   on its own, so the meta rule needs no descendant variant. */
+.cm-tiderl-cue-midi, .cm-tiderl-cue-midi *
+  { color: #7aa9ff !important; font-weight: 600; }
+.cm-tiderl-cue-cv, .cm-tiderl-cue-cv *
+  { color: #7eff8a !important; font-weight: 600; }
+.cm-tiderl-cue-gate, .cm-tiderl-cue-gate *
+  { color: #ff5ec3 !important; font-weight: 600; }
+.cm-tiderl-cue-sample, .cm-tiderl-cue-sample *
+  { color: #ffaa3a !important; font-weight: 600; }
+.cm-tiderl-cue-polysignal, .cm-tiderl-cue-polysignal *
+  { color: #c69ff8 !important; font-weight: 600; }
+.cm-tiderl-cue-unknown, .cm-tiderl-cue-unknown *
+  { color: var(--fg-unknown) !important; font-style: italic; }
 .cm-tiderl-meta           { opacity: 0.45; }
 
 /* Pending proposals — ghost-line block widgets ---------------------- */
