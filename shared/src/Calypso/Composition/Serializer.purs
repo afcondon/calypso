@@ -69,9 +69,15 @@ serializeComposition (Composition stmts) =
       let
         stateAfterHeader = case c.mvoice of
           Just mv | Just mv /= state.section ->
-            { section: Just mv
-            , lines: Array.cons ("section " <> mv) state.lines
-            }
+            -- Insert a blank line before the section header so each
+            -- voice block sits visually separated. Skip the blank if
+            -- this is the very first line of the file.
+            let withBlank = if Array.null state.lines
+                              then state.lines
+                              else Array.cons "" state.lines
+            in { section: Just mv
+               , lines: Array.cons ("section " <> mv) withBlank
+               }
           _ -> state
         cueText = renderCue { underSection: stateAfterHeader.section } c
       in stateAfterHeader { lines = Array.cons cueText stateAfterHeader.lines }

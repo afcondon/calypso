@@ -232,7 +232,7 @@ serializerSpec = describe "Calypso.Composition.Serializer" do
       serializeComposition ast
         `shouldEqual` "section Drums\nqd1 = mini \"x ~\"\nqd2 = mini \"x x\""
 
-    it "emits a new section header when mvoice changes" do
+    it "emits a new section header when mvoice changes (with blank-line separator)" do
       let ast = Composition
             [ StmtCue { id: "qd1", mvoice: Just "Drums", tvoice: Just "qd1"
                       , whenTag: Nothing, body: "mini \"x ~\"" }
@@ -241,7 +241,7 @@ serializerSpec = describe "Calypso.Composition.Serializer" do
             ]
       serializeComposition ast
         `shouldEqual`
-          "section Drums\nqd1 = mini \"x ~\"\nsection Bass\ncip-pitch = mini \"c2 e2\""
+          "section Drums\nqd1 = mini \"x ~\"\n\nsection Bass\ncip-pitch = mini \"c2 e2\""
 
     it "falls back to legacy form when id doesn't match tvoice" do
       let ast = Composition [StmtCue
