@@ -1467,18 +1467,26 @@ applyRemote r = do
   -- Phase 2b step 1: lift any wire-loaded cell that lacks a corresponding
   -- `cue` declaration in the composition source by appending one. Achieves
   -- 1:1 commensurability between cards and the composition pane on
-  -- legacy sessions. Idempotent and safe-on-parse-failure (returns
-  -- `Nothing` if the source doesn't parse — we don't touch broken sources).
+  -- legacy sessions. Idempotent and safe-on-parse-failure.
   let appended = fromMaybe rm.source
         (appendUnrepresentedCellsAsCues rm.source cellRecs)
-      -- Level 2 canonicalization: parse the appended source and
-      -- re-serialize through the level-2-aware serializer. This pulls
-      -- existing cues into section-headed form and emits the named
-      -- form `<tvoice> = body` wherever a cue's id happens to match
-      -- its tvoice. On parse failure, we keep `appended` unchanged
-      -- (defensive — never rewrite a non-parseable source).
+      -- Level 2 follow-up: rename cell-NNN auto-ids → tvoice-based
+      -- names so the named-form serializer kicks in for legacy cells.
+      idMig = migrateCellIdsToTvoice cellRecs
+      finalCells = idMig.cells
+      -- Map old id → new id so we can rename cues in the parsed AST
+      -- to match the renamed cells before serializing.
+      idMap = Map.fromFoldable
+        (Array.zipWith (\old new -> Tuple old.id new.id) cellRecs finalCells)
+      -- Level 2 canonicalization: parse the appended source, apply the
+      -- id rename to its cues, and re-serialize through the level-2-
+      -- aware serializer. Result: every cue with a tvoice renders in
+      -- `<tvoice>[:suffix] = body` form under a `section <mvoice>`
+      -- header. Falls through on parse failure.
       migratedSource = case Comp.parseComposition appended of
-        Right comp -> CompS.serializeComposition comp <> "\n"
+        Right comp ->
+          let renamed = if idMig.didRename then applyIdMap idMap comp else comp
+          in CompS.serializeComposition renamed <> "\n"
         Left _ -> appended
   H.modify_ \s ->
     let
@@ -1487,8 +1495,10 @@ applyRemote r = do
       -- the wire-loaded array. Wire-loaded wins on id collision so
       -- legacy JSON sessions keep their exact rendering; cues that
       -- aren't yet represented as cells appear as additional cards.
+      -- We use the post-rename finalCells here so id-collision detection
+      -- against the cue-derived array works correctly.
       cuesAsCells = extractCuesAsCellRecs migratedSource
-      mergedCells = mergeCueCells cellRecs cuesAsCells
+      mergedCells = mergeCueCells finalCells cuesAsCells
       s' = s
         { moduleSource = migratedSource
         , cells = mergedCells
@@ -1791,6 +1801,19 @@ extractTvoiceTypesFromComposition src = case Comp.parseComposition src of
 -- | (from `module.source` text) override snapshot entries when both
 -- | name the same binding.  The snapshot path remains as a fallback
 -- | for bindings registered on the rig but not in the user's text.
+-- | Apply an id-rename map to every StmtCue in a Composition. Used by
+-- | the level-2 hydrate path to align cue ids in source with the
+-- | tvoice-renamed cells in state.cells. Cues whose id isn't in the
+-- | map are left untouched (so user-supplied ids like `test1` survive).
+applyIdMap :: Map String String -> Comp.Composition -> Comp.Composition
+applyIdMap m (Comp.Composition stmts) = Comp.Composition (map renameOne stmts)
+  where
+  renameOne = case _ of
+    Comp.StmtCue c -> case Map.lookup c.id m of
+      Just newId -> Comp.StmtCue (c { id = newId })
+      Nothing -> Comp.StmtCue c
+    other -> other
+
 recomputeTvoiceTypes :: State -> Map String TvoiceType
 recomputeTvoiceTypes s =
   let fromText = extractTvoiceTypesFromComposition s.moduleSource
