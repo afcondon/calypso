@@ -17,6 +17,7 @@ import Type.Proxy (Proxy(..))
 
 import Calypso.Composition as Comp
 import Calypso.Composition.Parser as CompP
+import Calypso.Composition.Serializer as CompS
 import Calypso.Favorite (Favorite)
 import Calypso.Frontend.Completion (Completion)
 import Calypso.Frontend.Editor as Editor
@@ -121,6 +122,55 @@ mergeCueCellsCompositionWins existing derived =
   mkById = map (\c -> Tuple c.id c)
   lookupById :: String -> Array (Tuple String CellRec) -> Maybe CellRec
   lookupById k = map snd <<< Array.find (\(Tuple k' _) -> k' == k)
+
+-- | Render one cell as a `cue` statement string suitable for
+-- | appending to the composition source. Wraps the cell's body in
+-- | the canonical cue syntax via the shared serializer so the
+-- | re-parse round-trip stays clean.
+cellRecAsCueLine :: CellRec -> String
+cellRecAsCueLine c = CompS.serializeStatement
+  (Comp.StmtCue
+    { id: c.id
+    , mvoice: c.mvoice
+    , tvoice: c.tvoice
+    , whenTag: Nothing
+    , body: c.source
+    })
+
+-- | Phase 2b step 1 (1:1 view commensurability): for each cell in
+-- | `state.cells` that isn't already represented as a `cue` declaration
+-- | in the composition source, append a `cue` line for it. Idempotent:
+-- | running twice on the same input produces no further changes.
+-- |
+-- | Returns `Just newSource` if any cells needed appending; `Nothing` if
+-- | every cell was already a cue in the source (or if the source fails
+-- | to parse — in which case we don't dare touch it).
+appendUnrepresentedCellsAsCues :: String -> Array CellRec -> Maybe String
+appendUnrepresentedCellsAsCues source cells = case CompP.parseComposition source of
+  Left _ -> Nothing  -- don't touch a non-parsing source; risks data loss
+  Right (Comp.Composition stmts) ->
+    let
+      existingCueIds = Set.fromFoldable (Array.mapMaybe cueId stmts)
+      unrepresented = Array.filter
+        (\c -> not (Set.member c.id existingCueIds))
+        cells
+    in
+      if Array.null unrepresented
+        then Nothing
+        else
+          let
+            appendix = Str.joinWith "\n" (map cellRecAsCueLine unrepresented)
+            -- Ensure a separating blank line. If source already ends in
+            -- one newline, add one more so the appended cues sit under
+            -- an empty separator line; otherwise add two.
+            sep = case Str.stripSuffix (Pattern "\n") source of
+              Just _ -> "\n"
+              Nothing -> "\n\n"
+          in Just (source <> sep <> appendix <> "\n")
+  where
+  cueId = case _ of
+    Comp.StmtCue c -> Just c.id
+    _ -> Nothing
 
 -- | Cell taxonomy used by `cellSection` to drive rendering decisions.
 data Section

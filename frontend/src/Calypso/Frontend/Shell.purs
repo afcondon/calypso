@@ -115,6 +115,7 @@ import Calypso.Frontend.Shell.Types
   , _editorModal
   , _moduleEditor
   , allColumnKeys
+  , appendUnrepresentedCellsAsCues
   , cellOf
   , cellRecOf
   , cellSection
@@ -1460,6 +1461,13 @@ applyRemote r = do
       -- max with the existing local counter keeps it monotonic).
       maxRemoteN = foldr max 0
         ( Array.mapMaybe (\(Cell c) -> parseCellNumber c.id) r.cells )
+  -- Phase 2b step 1: lift any wire-loaded cell that lacks a corresponding
+  -- `cue` declaration in the composition source by appending one. Achieves
+  -- 1:1 commensurability between cards and the composition pane on
+  -- legacy sessions. Idempotent and safe-on-parse-failure (returns
+  -- `Nothing` if the source doesn't parse — we don't touch broken sources).
+  let migratedSource = fromMaybe rm.source
+        (appendUnrepresentedCellsAsCues rm.source cellRecs)
   H.modify_ \s ->
     let
       -- Phase 2a (read-only Model B projection): lift any `cue <id>`
@@ -1467,10 +1475,10 @@ applyRemote r = do
       -- the wire-loaded array. Wire-loaded wins on id collision so
       -- legacy JSON sessions keep their exact rendering; cues that
       -- aren't yet represented as cells appear as additional cards.
-      cuesAsCells = extractCuesAsCellRecs rm.source
+      cuesAsCells = extractCuesAsCellRecs migratedSource
       mergedCells = mergeCueCells cellRecs cuesAsCells
       s' = s
-        { moduleSource = rm.source
+        { moduleSource = migratedSource
         , cells = mergedCells
         , nextCellId = max s.nextCellId (maxRemoteN + 1)
         , runtime = r.runtime
@@ -1479,11 +1487,16 @@ applyRemote r = do
         , cellRanges = r.cellLines
         , errors = r.errors
         , warnings = r.warnings
-        , lastSyncedModule = rm.source
+        , lastSyncedModule = rm.source  -- keep PRE-migration source as
+                                        -- lastSynced so the next compile
+                                        -- pushes the migration up to the
+                                        -- server too.
         , lastSyncedCells = syncedCells
         , lastSyncedRuntime = r.runtime
         }
     in s' { tvoiceTypes = recomputeTvoiceTypes s' }
+  -- If we migrated, schedule a compile so the server gets the new source.
+  when (migratedSource /= rm.source) $ handleAction ScheduleCompile
   decorateErrors r.errors r.cellLines
 
 parseCellNumber :: String -> Maybe Int
