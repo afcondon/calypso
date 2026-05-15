@@ -26,29 +26,17 @@ renderCompositionColumn state =
   HH.section [ HP.class_ (H.ClassName "pane pane-composition") ]
     [ HH.div [ HP.class_ (H.ClassName "pane-toolbar") ]
         [ HH.button
-            [ HP.class_ (H.ClassName "fire-btn")
-            , HE.onClick \_ -> FireComposition state.moduleSource
-            , HP.title "Fire the whole composition (Mod-Enter inside the editor)"
-            ]
-            [ HH.text "▶ fire" ]
-        , HH.button
             [ HP.class_ (H.ClassName "fire-btn fire-btn-typeful")
             , HE.onClick \_ -> FireTypefulComposition state.moduleSource
-            , HP.title "Fire as a typeful PureScript session — POST /session-source"
+            , HP.title "Compile and hot-load the composition as a typeful PureScript session (Mod-Enter)"
             ]
-            [ HH.text "▶ fire typeful" ]
+            [ HH.text "▶ run" ]
         , HH.button
             [ HP.class_ (H.ClassName "fire-btn")
             , HE.onClick \_ -> LoadWorkspace
             , HP.title "Load a calypso-session.json from disk"
             ]
             [ HH.text "↥ load…" ]
-        , HH.button
-            [ HP.class_ (H.ClassName "fire-btn")
-            , HE.onClick \_ -> DemoteCursorLineToCell
-            , HP.title "Make the line under the cursor into a new cell (line stays in composition)"
-            ]
-            [ HH.text "↧ make cell" ]
         , case state.compositionStatus of
             Just msg ->
               HH.span [ HP.class_ (H.ClassName "fire-status") ]
@@ -71,7 +59,7 @@ renderCompositionColumn state =
 
   compositionOutput = case _ of
     Editor.Changed src -> ModuleChanged src
-    Editor.Submitted src -> FireComposition src
+    Editor.Submitted src -> FireTypefulComposition src
     Editor.AcceptHunkO pid idx -> AcceptHunk pid idx
     Editor.RejectHunkO pid idx -> RejectHunk pid idx
     Editor.MoveRequested -> DemoteCursorLineToCell

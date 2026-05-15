@@ -343,20 +343,29 @@ renderVoiceCard state kind c =
                           ]
                           [ HH.text "▶" ]
                       ]
-                    else
-                      [ HH.button
-                          [ HP.class_ (H.ClassName "voice-card-btn voice-card-cue")
-                          , HE.onClick \_ -> FireCell c.id c.source
-                          , HP.title "cue (compile-armed in future; fires immediately today)"
-                          ]
-                          [ HH.text "cue" ]
-                      , HH.button
-                          [ HP.class_ (H.ClassName "voice-card-btn voice-card-play")
-                          , HE.onClick \_ -> FireCell c.id c.source
-                          , HP.title "play (fire immediately)"
-                          ]
-                          [ HH.text "▶" ]
-                      ]
+                    else if isTypefulSource state.moduleSource
+                      then
+                        [ HH.button
+                            [ HP.class_ (H.ClassName "voice-card-btn voice-card-arm")
+                            , HE.onClick \_ -> ArmTypefulCue c.id tvoiceName c.id
+                            , HP.title "arm — compile + hot-load this cue"
+                            ]
+                            [ HH.text "arm" ]
+                        ]
+                      else
+                        [ HH.button
+                            [ HP.class_ (H.ClassName "voice-card-btn voice-card-cue")
+                            , HE.onClick \_ -> FireCell c.id c.source
+                            , HP.title "cue (compile-armed in future; fires immediately today)"
+                            ]
+                            [ HH.text "cue" ]
+                        , HH.button
+                            [ HP.class_ (H.ClassName "voice-card-btn voice-card-play")
+                            , HE.onClick \_ -> FireCell c.id c.source
+                            , HP.title "play (fire immediately)"
+                            ]
+                            [ HH.text "▶" ]
+                        ]
                 )
             ])
       )
@@ -390,7 +399,9 @@ renderEditingModal state = case state.editingCard of
       in
         HH.div [ HP.class_ (H.ClassName "voice-edit-overlay") ]
           [ HH.div
-              [ HP.class_ (H.ClassName "voice-edit-backdrop") ]
+              [ HP.class_ (H.ClassName "voice-edit-backdrop")
+              , HE.onClick \_ -> CloseEditor
+              ]
               []
           , HH.div
               [ HP.class_
@@ -505,77 +516,74 @@ renderEditingModal state = case state.editingCard of
                             ]
                             [ HH.text "▶" ]
                         ]
-                      else
-                        let armed = Map.lookup c.id state.armedModule
-                            playEnabled = isJust armed
-                            cueInFlight = Set.member c.id state.cuePending
-                        in
-                        [ HH.button
-                            ( [ HP.class_
-                                  ( H.ClassName
-                                      ( "voice-card-btn voice-card-cue"
-                                          <> if cueInFlight then " is-disabled" else ""
-                                      )
-                                  )
-                              , HP.title
-                                  ( if cueInFlight
-                                      then "compile in progress"
-                                      else "cue — compile + hot-load this cell on the backend"
-                                  )
-                              , HP.disabled cueInFlight
-                              ]
-                              <> if cueInFlight then [] else
-                                   [ HE.onClick \_ -> CueCell c.id c.source ]
-                            )
-                            [ HH.text (if cueInFlight then "…" else "cue") ]
-                        , let typefulMode = isTypefulSource state.moduleSource
-                              -- For typeful sources the card id is the cue
-                              -- name (set by extractTypefulCuesAsCellRecs);
-                              -- for Level 2 the source IS the body text and
-                              -- we expect the user to have typed a cue name
-                              -- in there manually.
-                              cueName = if typefulMode then c.id else Str.trim c.source
-                          in HH.button
-                            ( [ HP.class_
-                                  ( H.ClassName
-                                      ( "voice-card-btn voice-card-arm"
-                                          <> if cueInFlight then " is-disabled" else ""
-                                      )
-                                  )
-                              , HP.title
-                                  ( if cueInFlight
-                                      then "arm in progress"
-                                      else "arm (typeful) — POST /arm "
-                                        <> (if typefulMode then "cue " <> cueName else "cue " <> cueName <> " (Level 2 fallback)")
-                                  )
-                              , HP.disabled cueInFlight
-                              ]
-                              <> if cueInFlight then [] else
-                                   [ HE.onClick \_ ->
-                                       ArmTypefulCue c.id tvoiceName cueName
-                                   ]
-                            )
-                            [ HH.text "arm" ]
-                        , HH.button
-                            ( [ HP.class_
-                                  ( H.ClassName
-                                      ( "voice-card-btn voice-card-play"
-                                          <> if playEnabled then "" else " is-disabled"
-                                      )
-                                  )
-                              , HP.title
-                                  ( case armed of
-                                      Just m  -> "play armed module " <> m
-                                      Nothing -> "play — disabled until a successful cue"
-                                  )
-                              , HP.disabled (not playEnabled)
-                              ]
-                              <> case armed of
-                                   Just m  -> [ HE.onClick \_ -> PlayArmed c.id tvoiceName m ]
-                                   Nothing -> []
-                            )
-                            [ HH.text "▶" ]
-                        ]
+                      else if isTypefulSource state.moduleSource
+                        then
+                          let cueInFlight = Set.member c.id state.cuePending
+                          in
+                          [ HH.button
+                              ( [ HP.class_
+                                    ( H.ClassName
+                                        ( "voice-card-btn voice-card-arm"
+                                            <> if cueInFlight then " is-disabled" else ""
+                                        )
+                                    )
+                                , HP.title
+                                    ( if cueInFlight
+                                        then "arm in progress"
+                                        else "arm — compile + hot-load this cue (Cmd-Enter)"
+                                    )
+                                , HP.disabled cueInFlight
+                                ]
+                                <> if cueInFlight then [] else
+                                     [ HE.onClick \_ ->
+                                         ArmTypefulCue c.id tvoiceName c.id
+                                     ]
+                              )
+                              [ HH.text (if cueInFlight then "…" else "arm") ]
+                          ]
+                        else
+                          let armed = Map.lookup c.id state.armedModule
+                              playEnabled = isJust armed
+                              cueInFlight = Set.member c.id state.cuePending
+                          in
+                          [ HH.button
+                              ( [ HP.class_
+                                    ( H.ClassName
+                                        ( "voice-card-btn voice-card-cue"
+                                            <> if cueInFlight then " is-disabled" else ""
+                                        )
+                                    )
+                                , HP.title
+                                    ( if cueInFlight
+                                        then "compile in progress"
+                                        else "cue — compile + hot-load this cell on the backend"
+                                    )
+                                , HP.disabled cueInFlight
+                                ]
+                                <> if cueInFlight then [] else
+                                     [ HE.onClick \_ -> CueCell c.id c.source ]
+                              )
+                              [ HH.text (if cueInFlight then "…" else "cue") ]
+                          , HH.button
+                              ( [ HP.class_
+                                    ( H.ClassName
+                                        ( "voice-card-btn voice-card-play"
+                                            <> if playEnabled then "" else " is-disabled"
+                                        )
+                                    )
+                                , HP.title
+                                    ( case armed of
+                                        Just m  -> "play armed module " <> m
+                                        Nothing -> "play — disabled until a successful cue"
+                                    )
+                                , HP.disabled (not playEnabled)
+                                ]
+                                <> case armed of
+                                     Just m  -> [ HE.onClick \_ -> PlayArmed c.id tvoiceName m ]
+                                     Nothing -> []
+                              )
+                              [ HH.text "▶" ]
+                          ]
                   )
               ]
           ]

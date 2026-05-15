@@ -1592,16 +1592,14 @@ body::before {
   pointer-events: none;
 }
 
-/* Backdrop is purely decorative — it dims the columns visually but
-   does NOT capture pointer events, so wheel scroll and clicks still
-   reach the vocabulary / mini-notation / config panes underneath
-   (consult-while-editing).  Close via × button, Esc, or commit
-   (cue / play / Cmd-Enter). */
+/* Backdrop dims the columns and dismisses the modal on click.  Close
+   also via × button, Esc, or commit (arm / Cmd-Enter). */
 .voice-edit-backdrop {
   position: absolute;
   inset: 0;
   background: rgba(0, 0, 0, 0.55);
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 /* Modal card: 3× the small card's 14rem width, proportional to small
