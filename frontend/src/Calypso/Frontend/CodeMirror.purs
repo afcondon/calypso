@@ -1,6 +1,7 @@
 module Calypso.Frontend.CodeMirror
   ( EditorView
   , ErrorSpan
+  , TvoiceColorEntry
   , createEditor
   , getContent
   , setContent
@@ -8,6 +9,7 @@ module Calypso.Frontend.CodeMirror
   , setErrors
   , setEditable
   , setProposals
+  , setTvoiceColors
   , setVocabulary
   , getCursorLine
   , getLineText
@@ -73,6 +75,18 @@ foreign import _setEditable :: EditorView -> Boolean -> Effect Unit
 foreign import _setProposals :: EditorView -> Array HunkView -> Effect Unit
 
 foreign import _setVocabulary :: EditorView -> Array Completion -> Effect Unit
+
+-- | One entry in the tvoice→colour-class map. JS reads the `klass`
+-- | field and prepends `cm-tiderl-cue-` to it.
+type TvoiceColorEntry =
+  { tvoice :: String   -- the binding name as it appears in `tvoice=<name>`
+  , klass :: String    -- the short type token: "midi" | "cv" | "gate" | "sample" | "polysignal" | "unknown"
+  }
+
+foreign import _setTvoiceColors :: EditorView -> Array TvoiceColorEntry -> Effect Unit
+
+setTvoiceColors :: EditorView -> Array TvoiceColorEntry -> Effect Unit
+setTvoiceColors = _setTvoiceColors
 
 foreign import _getCursorLine :: EditorView -> Effect Int
 

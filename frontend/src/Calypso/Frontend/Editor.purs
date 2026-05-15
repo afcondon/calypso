@@ -51,6 +51,7 @@ data Query a
   | SetErrors (Array CM.ErrorSpan) a
   | SetEditable Boolean a
   | SetProposals (Array Proposal) a
+  | SetTvoiceColors (Array CM.TvoiceColorEntry) a
   | SetVocabulary (Array Completion) a
   | GetCursorLineText (Maybe { lineNum :: Int, text :: String } -> a)
 
@@ -203,6 +204,13 @@ handleQuery = case _ of
     case state.view of
       Just view -> do
         liftEffect (CM.setProposals view proposals)
+        pure (Just next)
+      Nothing -> pure (Just next)
+  SetTvoiceColors entries next -> do
+    state <- H.get
+    case state.view of
+      Just view -> do
+        liftEffect (CM.setTvoiceColors view entries)
         pure (Just next)
       Nothing -> pure (Just next)
   SetVocabulary completions next -> do

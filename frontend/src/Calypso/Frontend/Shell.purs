@@ -129,6 +129,7 @@ import Calypso.Frontend.Shell.Types
   , mergeCueCells
   , mergeCueCellsCompositionWins
   , isVerbCell
+  , tvoiceTypeShortClass
   , stripLineComment
   , stripModuleLineComment
   , toggleKey
@@ -243,12 +244,14 @@ handleAction = case _ of
     result <- evalSource "state"
     case result of
       Left err -> H.modify_ _ { configSnapshot = Just ("ERR: " <> err) }
-      Right snap -> H.modify_ \s ->
-        let s' = s
-              { configSnapshot = Just snap
-              , bpmDisplay = fromMaybe s.bpmDisplay (extractBpmFromSnapshot snap)
-              }
-        in s' { tvoiceTypes = recomputeTvoiceTypes s' }
+      Right snap -> do
+        H.modify_ \s ->
+          let s' = s
+                { configSnapshot = Just snap
+                , bpmDisplay = fromMaybe s.bpmDisplay (extractBpmFromSnapshot snap)
+                }
+          in s' { tvoiceTypes = recomputeTvoiceTypes s' }
+        syncTvoiceColorsToEditor
   BpmInputChanged _ -> pure unit  -- live-input updates are observed via the input element's value
   BpmCommit n -> do
     -- Send `bpm <n>` to purerl-tidal, which forwards `/link/set-tempo`
@@ -270,6 +273,7 @@ handleAction = case _ of
           mergedCells = mergeCueCellsCompositionWins s.cells cuesAsCells
           s' = s { moduleSource = src, cells = mergedCells }
       in s' { tvoiceTypes = recomputeTvoiceTypes s' }
+    syncTvoiceColorsToEditor
     handleAction ScheduleCompile
   CellChanged id src -> do
     H.modify_ \s -> s { cells = updateCell id src s.cells }
@@ -1495,6 +1499,7 @@ applyRemote r = do
         , lastSyncedRuntime = r.runtime
         }
     in s' { tvoiceTypes = recomputeTvoiceTypes s' }
+  syncTvoiceColorsToEditor
   -- If we migrated, schedule a compile so the server gets the new source.
   when (migratedSource /= rm.source) $ handleAction ScheduleCompile
   decorateErrors r.errors r.cellLines
@@ -1786,6 +1791,21 @@ recomputeTvoiceTypes s =
         Nothing -> Map.empty
         Just raw -> extractTvoiceTypes raw
   in Map.union fromText fromSnapshot
+
+-- | Push the current `state.tvoiceTypes` into the composition pane's
+-- | CodeMirror as a tvoice→class map. Drives the per-cue keyword
+-- | colouring (so each `cue` token visually matches the card's
+-- | TvoiceType header colour). Called after every site that mutates
+-- | `tvoiceTypes` — Startup, ModuleChanged, applyRemote.
+syncTvoiceColorsToEditor
+  :: forall o m. MonadAff m
+  => H.HalogenM State Action Slots o m Unit
+syncTvoiceColorsToEditor = do
+  s <- H.get
+  let entries :: Array { tvoice :: String, klass :: String }
+      entries = map (\(Tuple k v) -> { tvoice: k, klass: tvoiceTypeShortClass v })
+                    (Map.toUnfoldable s.tvoiceTypes :: Array (Tuple String TvoiceType))
+  void $ H.tell _moduleEditor unit (Editor.SetTvoiceColors entries)
 
 -- | Topbar BPM widget — number input that fires `bpm <n>` over WS
 -- | on commit (Enter or blur).  The value reflects the most-recent

@@ -446,6 +446,19 @@ tvoiceTypeLabel = case _ of
   TvPolySignal f -> polyFamilyShortLabel f
   TvUnknown -> ""
 
+-- | Short CSS-class token for the tvoice type, used by the CodeMirror
+-- | tiderl decorator. JS prepends `cm-tiderl-cue-` to produce the
+-- | final class name. Keep in sync with the CSS rules in
+-- | `frontend/public/style.css` under "Tiderl cue keyword colours".
+tvoiceTypeShortClass :: TvoiceType -> String
+tvoiceTypeShortClass = case _ of
+  TvMidi -> "midi"
+  TvCV -> "cv"
+  TvGate -> "gate"
+  TvSample -> "sample"
+  TvPolySignal _ -> "polysignal"
+  TvUnknown -> "unknown"
+
 -- | 3-4 char family label for the card-tvtype corner badge.
 polyFamilyShortLabel :: Comp.PolyFamily -> String
 polyFamilyShortLabel = case _ of

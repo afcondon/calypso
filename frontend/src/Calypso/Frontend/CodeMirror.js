@@ -326,6 +326,84 @@ export const _setVocabulary = (view) => (completions) => () => {
   });
 };
 
+// --- Tiderl cue-line decorations ---------------------------------
+// One decoration per cue line: color the `cue` keyword based on the
+// binding's TvoiceType (so the keyword matches the card-header colour),
+// and dim the `[mvoice=... tvoice=...]` metadata bracket so the body
+// reads as the prominent content. Driven by a tvoice→class map pushed
+// from PureScript via _setTvoiceColors whenever the bindings change.
+
+const setTvoiceColorsEffect = StateEffect.define();
+
+// Build decorations from the current doc + tvoice→class map. We
+// regex-scan each line; a cue line is `cue <id> [<meta>]? ...`. We
+// extract `tvoice=<name>` from the metadata to pick the colour class.
+function buildCueDecos(doc, tvoiceMap) {
+  const decos = [];
+  const cueRe = /^(\s*)cue\s+(\S+)\s*(\[[^\]]*\])?/;
+  const totalLines = doc.lines;
+  for (let i = 1; i <= totalLines; i++) {
+    const line = doc.line(i);
+    const m = cueRe.exec(line.text);
+    if (!m) continue;
+    const leadLen = m[1].length;
+    // Mark the `cue` keyword (3 chars after any leading whitespace).
+    const kwStart = line.from + leadLen;
+    const kwEnd = kwStart + 3;
+    let klass = 'cm-tiderl-cue-unknown';
+    if (m[3] !== undefined) {
+      // Strip [] and look for tvoice=<name> inside.
+      const bracketBody = m[3].slice(1, -1);
+      const tvMatch = /tvoice=(\S+)/.exec(bracketBody);
+      if (tvMatch) {
+        const lookup = tvoiceMap.get(tvMatch[1]);
+        if (lookup) klass = 'cm-tiderl-cue-' + lookup;
+      }
+    }
+    decos.push(Decoration.mark({ class: klass }).range(kwStart, kwEnd));
+    if (m[3] !== undefined) {
+      // Dim the [mvoice=... tvoice=...] bracket. Find its position
+      // by indexOf in the raw line text — robust to spacing variance.
+      const bracketStart = line.from + line.text.indexOf('[');
+      const bracketEnd = bracketStart + m[3].length;
+      decos.push(
+        Decoration.mark({ class: 'cm-tiderl-meta' })
+          .range(bracketStart, bracketEnd),
+      );
+    }
+  }
+  return Decoration.set(decos, true);
+}
+
+const tvoiceColorsField = StateField.define({
+  create: () => ({ map: new Map(), decos: Decoration.none }),
+  update: (state, tr) => {
+    let map = state.map;
+    let mapChanged = false;
+    for (const e of tr.effects) {
+      if (e.is(setTvoiceColorsEffect)) {
+        map = e.value;
+        mapChanged = true;
+      }
+    }
+    if (mapChanged || tr.docChanged) {
+      return { map, decos: buildCueDecos(tr.state.doc, map) };
+    }
+    return state;
+  },
+  provide: (f) => EditorView.decorations.from(f, (s) => s.decos),
+});
+
+// FFI: PureScript hands us Array<{ tvoice :: String, klass :: String }>
+// — we convert to a Map for lookup-by-name and dispatch the effect.
+export const _setTvoiceColors = (view) => (entries) => () => {
+  const map = new Map();
+  for (const e of entries) {
+    map.set(e.tvoice, e.klass);
+  }
+  view.dispatch({ effects: setTvoiceColorsEffect.of(map) });
+};
+
 // Creates a CodeMirror 6 view mounted into `parent`.
 //   onChange   fires on every edit with the full doc content
 //   onSubmit   fires on Mod-Enter with the full doc content
@@ -398,6 +476,7 @@ export const _createEditor =
         errorsField,
         proposalsField,
         vocabularyField,
+        tvoiceColorsField,
         autocompletion({
           override: [vocabularyCompletionSource],
           activateOnTyping: true,

@@ -890,6 +890,20 @@ body::before {
   text-decoration-thickness: 1px;
 }
 
+/* Tiderl cue keyword colours — match the card-header colours so the
+   two views read as the same artefact. The JS decorator (in
+   CodeMirror.js, buildCueDecos) applies one of these classes to the
+   `cue` token of each cue line based on the binding's TvoiceType.
+   `cm-tiderl-meta` dims the `[mvoice=… tvoice=…]` bracket so the
+   musical body reads as the prominent content. */
+.cm-tiderl-cue-midi       { color: #7aa9ff !important; font-weight: 600; }
+.cm-tiderl-cue-cv         { color: #7eff8a !important; font-weight: 600; }
+.cm-tiderl-cue-gate       { color: #ff5ec3 !important; font-weight: 600; }
+.cm-tiderl-cue-sample     { color: #ffaa3a !important; font-weight: 600; }
+.cm-tiderl-cue-polysignal { color: #c69ff8 !important; font-weight: 600; }
+.cm-tiderl-cue-unknown    { color: var(--fg-unknown) !important; font-style: italic; }
+.cm-tiderl-meta           { opacity: 0.45; }
+
 /* Pending proposals — ghost-line block widgets ---------------------- */
 .cm-ghost-hunk {
   display: flex;
