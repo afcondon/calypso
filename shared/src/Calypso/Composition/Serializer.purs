@@ -45,6 +45,7 @@ import Calypso.Composition.Parser (prettyPolySignal)
 import Data.Array as Array
 import Data.Maybe (Maybe(..))
 import Data.String (Pattern(..), Replacement(..), joinWith, replaceAll, split, trim) as Str
+import Data.Tuple (Tuple(..))
 
 -- ───────────────────────────────────────────────────────────────────
 -- Public API
@@ -65,6 +66,7 @@ serializeStatement = case _ of
   StmtControl c -> "control " <> c.name <> " = " <> renderNumber c.value
   StmtTag t -> "tag " <> t.name <> " = " <> t.defaultValue
   StmtCue c -> renderCue c
+  StmtSection name -> "section " <> name
   StmtDevice d -> renderDevice d
   StmtDeviceConfig dc -> renderDeviceConfig dc
   StmtBinding b -> renderBinding b

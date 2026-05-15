@@ -72,7 +72,25 @@ import Parsing.String.Basic (intDecimal, number, takeWhile1)
 -- ───────────────────────────────────────────────────────────────────
 
 parseComposition :: String -> Either ParseError Composition
-parseComposition input = runParser input compositionP
+parseComposition input = case runParser input compositionP of
+  Left e -> Left e
+  Right (Composition stmts) -> Right (Composition (resolveSections stmts))
+
+-- | Post-parse pass: walk the flat statement list, track the running
+-- | section's mvoice context, and fill it into any StmtCue whose
+-- | own mvoice field is Nothing. StmtSection markers are dropped from
+-- | the result — they're consumed by this pass. Cues with explicit
+-- | mvoice metadata (from the old `cue <id> [mvoice=...]` form) are
+-- | left untouched.
+resolveSections :: Array Statement -> Array Statement
+resolveSections = Array.reverse <<< _.acc <<< foldl step { acc: [], current: Nothing }
+  where
+  step state stmt = case stmt of
+    StmtSection name -> state { current = Just name }
+    StmtCue c -> case c.mvoice of
+      Nothing -> state { acc = Array.cons (StmtCue (c { mvoice = state.current })) state.acc }
+      Just _  -> state { acc = Array.cons stmt state.acc }
+    _ -> state { acc = Array.cons stmt state.acc }
 
 parseStatement :: String -> Either ParseError Statement
 parseStatement input = runParser input (skipFiller *> statementP <* skipFiller <* eof)
@@ -200,15 +218,49 @@ compositionP = do
 
 statementP :: Parser String Statement
 statementP = choice
-  [ try (StmtCue <$> cueP)
+  [ try (StmtSection <$> sectionHeaderP)
+  , try (StmtCue <$> cueP)
   , try (StmtBpm <$> bpmP)
   , try (StmtLinkSync <$> linkSyncP)
   , try (StmtControl <$> controlP)
   , try (StmtTag <$> tagDeclP)
   , try (StmtBinding <$> bindingP)
   , try (StmtDeviceConfig <$> deviceConfigP)
-  , StmtDevice <$> deviceP
+  , try (StmtDevice <$> deviceP)
+  -- Level 2 named-cue form: <tvoice>[:<suffix>] = <body> or indented.
+  -- Must be the LAST alternative so existing keyword-led statements
+  -- (binding/device/etc.) try their keyword prefixes first.
+  , StmtCue <$> namedCueP
   ] <* hspace <* optionMaybe commentP
+
+-- | `section <Name>` header. Sets the mvoice context for subsequent
+-- | `<tvoice> = <body>` named-cue declarations.
+sectionHeaderP :: Parser String String
+sectionHeaderP = do
+  _ <- keyword "section"
+  name <- identP
+  pure name
+
+-- | Level 2 named-cue form: `<tvoice>[:<suffix>] = <body>` or
+-- | `<tvoice>[:<suffix>]\n  <body>`. Mvoice is taken from the most
+-- | recent preceding `section` header by `resolveSections` after the
+-- | flat parse — `namedCueP` itself returns `mvoice: Nothing`.
+namedCueP :: Parser String CueStmt
+namedCueP = do
+  tvoice <- identP
+  suffix <- optionMaybe (try (char ':' *> identP))
+  body <- (try inlineCueBodyP) <|> indentedCueBodyP
+  let
+    id = case suffix of
+      Just s -> tvoice <> ":" <> s
+      Nothing -> tvoice
+  pure
+    { id
+    , mvoice: Nothing  -- resolved by resolveSections after the flat parse
+    , tvoice: Just tvoice
+    , whenTag: Nothing
+    , body
+    }
 
 -- ───────────────────────────────────────────────────────────────────
 -- Transport / Controls / Tags / Cues  (Phase 1 of .tiderl)

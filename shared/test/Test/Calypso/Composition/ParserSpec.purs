@@ -14,11 +14,13 @@ import Calypso.Composition
   , Statement(..)
   )
 import Calypso.Composition.Parser (parseComposition, parseStatement, prettyPolySignal)
+import Control.Monad.Error.Class as Control.Monad.Error.Class
 import Data.Array as Array
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..))
 import Data.String (Pattern(..), contains) as Str
 import Data.Tuple (Tuple(..), snd)
+import Effect.Aff as Effect.Aff
 import Parsing (parseErrorMessage)
 import Test.Spec (Spec, describe, it)
 import Test.Spec.Assertions (fail, shouldEqual)
@@ -30,6 +32,107 @@ parserSpec = describe "Calypso.Composition.Parser" do
   baseShape
   latShortFormSpec
   tiderlPhase1Spec
+  level2GrammarSpec
+
+-- ──────────────────────────────────────────────────────────────────────
+-- Shared test helpers
+-- ──────────────────────────────────────────────────────────────────────
+
+parseFirst :: String -> Either String Statement
+parseFirst src = case parseComposition src of
+  Left e -> Left (parseErrorMessage e)
+  Right (Composition stmts) -> case Array.head stmts of
+    Just s -> Right s
+    Nothing -> Left "no statements parsed"
+
+failWith
+  :: forall m. Control.Monad.Error.Class.MonadThrow Effect.Aff.Error m
+  => String -> Either String Statement -> m Unit
+failWith expected actual = fail $ "expected " <> expected <> ", got: " <> shortDesc actual
+
+shortDesc :: Either String Statement -> String
+shortDesc = case _ of
+  Left e -> "Left " <> e
+  Right s -> "Right " <> describeStmt s
+
+describeStmt :: Statement -> String
+describeStmt = case _ of
+  StmtDevice _       -> "StmtDevice"
+  StmtDeviceConfig _ -> "StmtDeviceConfig"
+  StmtBinding _      -> "StmtBinding"
+  StmtBpm n          -> "StmtBpm " <> show n
+  StmtLinkSync b     -> "StmtLinkSync " <> show b
+  StmtControl _      -> "StmtControl"
+  StmtTag _          -> "StmtTag"
+  StmtCue _          -> "StmtCue"
+  StmtSection name   -> "StmtSection " <> show name
+
+-- | Level 2 grammar: section headers (`section <Name>`) + named cues
+-- | (`<tvoice>[:suffix] = body`). Mvoice for a named cue is resolved
+-- | from the most recent preceding section header.
+level2GrammarSpec :: Spec Unit
+level2GrammarSpec = describe "level 2 grammar (section + named cue)" do
+  describe "named cue (no section)" do
+    it "parses `qd1 = mini ...`" do
+      case parseFirst "qd1 = mini \"x ~ x ~\"\n" of
+        Right (StmtCue r) -> do
+          r.id `shouldEqual` "qd1"
+          r.tvoice `shouldEqual` Just "qd1"
+          r.mvoice `shouldEqual` Nothing  -- no section yet
+          r.body `shouldEqual` "mini \"x ~ x ~\""
+        other -> failWith "StmtCue qd1" other
+    it "parses `qd1:a = mini ...` with explicit suffix" do
+      case parseFirst "qd1:a = mini \"x ~ x ~\"\n" of
+        Right (StmtCue r) -> do
+          r.id `shouldEqual` "qd1:a"
+          r.tvoice `shouldEqual` Just "qd1"
+        other -> failWith "StmtCue qd1:a" other
+    it "parses multi-line indented body" do
+      case parseFirst "cip-pitch\n  mini \"c2 e2 g2\"\n" of
+        Right (StmtCue r) -> do
+          r.id `shouldEqual` "cip-pitch"
+          r.tvoice `shouldEqual` Just "cip-pitch"
+          r.body `shouldEqual` "mini \"c2 e2 g2\""
+        other -> failWith "StmtCue cip-pitch" other
+
+  describe "section header resolution" do
+    it "fills mvoice from the most recent `section` header" do
+      let src = "section Drums\nqd1 = mini \"x\"\nqd2 = mini \"y\"\n"
+      case parseComposition src of
+        Left e -> fail $ "parse failed: " <> parseErrorMessage e
+        Right (Composition stmts) -> do
+          -- Section header consumed by resolveSections, only 2 cues remain
+          Array.length stmts `shouldEqual` 2
+          case Array.index stmts 0, Array.index stmts 1 of
+            Just (StmtCue c1), Just (StmtCue c2) -> do
+              c1.mvoice `shouldEqual` Just "Drums"
+              c1.tvoice `shouldEqual` Just "qd1"
+              c2.mvoice `shouldEqual` Just "Drums"
+              c2.tvoice `shouldEqual` Just "qd2"
+            _, _ -> fail "expected two StmtCue after section"
+
+    it "section switches mid-file" do
+      let src = "section Drums\nqd1 = mini \"x\"\nsection Bass\ncip-pitch = mini \"c2\"\n"
+      case parseComposition src of
+        Left e -> fail $ "parse failed: " <> parseErrorMessage e
+        Right (Composition stmts) -> do
+          Array.length stmts `shouldEqual` 2
+          case Array.index stmts 0, Array.index stmts 1 of
+            Just (StmtCue c1), Just (StmtCue c2) -> do
+              c1.mvoice `shouldEqual` Just "Drums"
+              c2.mvoice `shouldEqual` Just "Bass"
+            _, _ -> fail "expected two StmtCue after section switches"
+
+    it "old `cue <id> [mvoice=...]` form keeps its explicit mvoice even inside a section" do
+      -- A safety check: when an old-form cue is parsed inside a
+      -- section, its explicit mvoice metadata wins; we don't clobber it.
+      let src = "section Drums\ncue legacy [mvoice=bass tvoice=cip-pitch] = mini \"c2\"\n"
+      case parseComposition src of
+        Left e -> fail $ "parse failed: " <> parseErrorMessage e
+        Right (Composition stmts) -> case Array.head stmts of
+          Just (StmtCue c) -> c.mvoice `shouldEqual` Just "bass"
+          Just other -> failWith "StmtCue legacy" (Right other)
+          Nothing -> fail "no statements parsed"
 
 -- | Phase 1 of the .tiderl format: bpm / link-sync / control / tag /
 -- | cue declarations on top of the existing devices+bindings grammar.
@@ -236,32 +339,6 @@ tiderlPhase1Spec = describe "tiderl phase-1 statements" do
         Left e -> fail $ "parse failed: " <> parseErrorMessage e
         Right (Composition stmts) ->
           Array.length stmts `shouldEqual` 7
-  where
-  parseFirst :: String -> Either String Statement
-  parseFirst src = case parseComposition src of
-    Left e -> Left (parseErrorMessage e)
-    Right (Composition stmts) -> case Array.head stmts of
-      Just s -> Right s
-      Nothing -> Left "no statements parsed"
-
-  failWith :: forall a. String -> Either String Statement -> _ Unit
-  failWith expected actual = fail $ "expected " <> expected <> ", got: " <> shortDesc actual
-
-  shortDesc :: Either String Statement -> String
-  shortDesc = case _ of
-    Left e -> "Left " <> e
-    Right s -> "Right " <> describeStmt s
-
-  describeStmt :: Statement -> String
-  describeStmt = case _ of
-    StmtDevice _       -> "StmtDevice"
-    StmtDeviceConfig _ -> "StmtDeviceConfig"
-    StmtBinding _      -> "StmtBinding"
-    StmtBpm n          -> "StmtBpm " <> show n
-    StmtLinkSync b     -> "StmtLinkSync " <> show b
-    StmtControl _      -> "StmtControl"
-    StmtTag _          -> "StmtTag"
-    StmtCue _          -> "StmtCue"
 
 -- | Regression for the `lat` vs `latency` keyword: every setup file
 -- | and the daemon's `midi-device` arm use `lat`, but Calypso's

@@ -81,6 +81,10 @@ data Statement
   | StmtControl ControlStmt         -- ^ `control <name> = <value>`
   | StmtTag TagStmt                 -- ^ `tag <name> = <default>`
   | StmtCue CueStmt                 -- ^ `cue <id> [<meta>] = <body>`
+  -- Level 2 grammar additions (2026-05-15):
+  | StmtSection String              -- ^ `# <Name>` section header; sets
+                                    --   the mvoice context for subsequent
+                                    --   `<tvoice> = <body>` declarations
 
 derive instance eqStatement :: Eq Statement
 
@@ -135,7 +139,7 @@ cueStmtCodec = CAR.object "CueStmt"
 
 data StatementTag
   = TagDevice | TagDeviceConfig | TagBinding
-  | TagBpm | TagLinkSync | TagControl | TagTag | TagCue
+  | TagBpm | TagLinkSync | TagControl | TagTag | TagCue | TagSection
 
 derive instance eqStatementTag :: Eq StatementTag
 
@@ -151,6 +155,7 @@ statementCodec = CAS.taggedSum "Statement" printTag parseTag decodeBy encodeBy
     TagControl -> "control"
     TagTag -> "tag"
     TagCue -> "cue"
+    TagSection -> "section"
   parseTag = case _ of
     "device" -> Just TagDevice
     "deviceConfig" -> Just TagDeviceConfig
@@ -160,6 +165,7 @@ statementCodec = CAS.taggedSum "Statement" printTag parseTag decodeBy encodeBy
     "control" -> Just TagControl
     "tag" -> Just TagTag
     "cue" -> Just TagCue
+    "section" -> Just TagSection
     _ -> Nothing
   decodeBy :: StatementTag -> Either Statement (Json -> Either JsonDecodeError Statement)
   decodeBy = case _ of
@@ -171,6 +177,7 @@ statementCodec = CAS.taggedSum "Statement" printTag parseTag decodeBy encodeBy
     TagControl      -> Right (map StmtControl      <<< Codec.decode controlStmtCodec)
     TagTag          -> Right (map StmtTag          <<< Codec.decode tagStmtCodec)
     TagCue          -> Right (map StmtCue          <<< Codec.decode cueStmtCodec)
+    TagSection      -> Right (map StmtSection      <<< Codec.decode CA.string)
   encodeBy :: Statement -> Tuple StatementTag (Maybe Json)
   encodeBy = case _ of
     StmtDevice d       -> Tuple TagDevice       (Just (Codec.encode deviceCodec d))
@@ -181,6 +188,7 @@ statementCodec = CAS.taggedSum "Statement" printTag parseTag decodeBy encodeBy
     StmtControl c      -> Tuple TagControl      (Just (Codec.encode controlStmtCodec c))
     StmtTag t          -> Tuple TagTag          (Just (Codec.encode tagStmtCodec t))
     StmtCue c          -> Tuple TagCue          (Just (Codec.encode cueStmtCodec c))
+    StmtSection name   -> Tuple TagSection      (Just (Codec.encode CA.string name))
 
 -- ───────────────────────────────────────────────────────────────────
 -- Devices
