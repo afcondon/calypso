@@ -60,6 +60,8 @@ import Calypso.Server.Proposals as Proposals
 import Calypso.Server.Vocabulary as Vocabulary
 import Calypso.Server.Session (EvalRequest, EvalResponse, ModulePatch(..), SessionStore, evalResponseCodec)
 import Calypso.Server.Session as Session
+import Calypso.Server.Arm (armCue, armRequestCodec, armResultCodec)
+import Calypso.Server.SessionSource (buildSession, sessionSourceRequestCodec, sessionSourceResultCodec)
 import Calypso.Server.Subscribers (Subscribers)
 import Calypso.Server.Subscribers as Subscribers
 import Data.String as String
@@ -119,6 +121,15 @@ data Route
   -- `~/.calypso/fire-log.jsonl`.  Used by the (eventual) Log pane to
   -- recover patterns wiped from the cells pane.
   | FireLogRoute
+  -- POST {tvoice, cueName} — arm a typeful cue. Synthesises a bridge
+  -- module, builds it via purs + backend-erl --filter, erlc's,
+  -- ships play-armed to purerl-tidal. Phase 3 of typeful cues.
+  | Arm
+  -- POST {source} — write the composition pane to
+  -- Calypso.Generated.Session.purs and rebuild. After this, /arm
+  -- targets cues from the freshly-built session. Phase 4 of
+  -- typeful cues.
+  | SessionSource
 
 derive instance Generic Route _
 
@@ -139,6 +150,8 @@ route = root $ sum
   , "ProposalHunkAccept": "proposals" / segment / "hunks" / segment / "accept"
   , "ProposalHunkReject": "proposals" / segment / "hunks" / segment / "reject"
   , "FireLogRoute": "log" / noArgs
+  , "Arm": "arm" / noArgs
+  , "SessionSource": "session-source" / noArgs
   }
 
 -- ============================================================
@@ -824,6 +837,39 @@ mkRouter ctx req@{ route: r, method, body } =
               ok' jsonCors (evalResponseJson resp)
         _ -> response' Status.methodNotAllowed jsonCors
           (errorJson "MethodNotAllowed" "/eval accepts POST")
+
+      Arm -> case method of
+        Post -> do
+          authResult <- requirePen ctx req
+          case authResult of
+            Left r' -> pure r'
+            Right sid -> do
+              bodyStr <- toString body
+              case parseBody armRequestCodec bodyStr of
+                Left msg -> badRequest' jsonCors (errorJson "BadRequest" msg)
+                Right req' -> do
+                  result <- liftAff (armCue req')
+                  liftEffect $ Pen.heartbeat ctx.penStore sid
+                  ok' jsonCors (stringify (CA.encode armResultCodec result))
+        _ -> response' Status.methodNotAllowed jsonCors
+          (errorJson "MethodNotAllowed" "/arm accepts POST")
+
+      SessionSource -> case method of
+        Post -> do
+          authResult <- requirePen ctx req
+          case authResult of
+            Left r' -> pure r'
+            Right sid -> do
+              bodyStr <- toString body
+              case parseBody sessionSourceRequestCodec bodyStr of
+                Left msg -> badRequest' jsonCors (errorJson "BadRequest" msg)
+                Right req' -> do
+                  result <- liftAff (buildSession req')
+                  liftEffect $ Pen.heartbeat ctx.penStore sid
+                  ok' jsonCors
+                    (stringify (CA.encode sessionSourceResultCodec result))
+        _ -> response' Status.methodNotAllowed jsonCors
+          (errorJson "MethodNotAllowed" "/session-source accepts POST")
 
       ProposalsRoute -> case method of
         Get -> do

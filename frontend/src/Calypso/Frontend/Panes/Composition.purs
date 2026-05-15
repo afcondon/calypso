@@ -32,6 +32,12 @@ renderCompositionColumn state =
             ]
             [ HH.text "▶ fire" ]
         , HH.button
+            [ HP.class_ (H.ClassName "fire-btn fire-btn-typeful")
+            , HE.onClick \_ -> FireTypefulComposition state.moduleSource
+            , HP.title "Fire as a typeful PureScript session — POST /session-source"
+            ]
+            [ HH.text "▶ fire typeful" ]
+        , HH.button
             [ HP.class_ (H.ClassName "fire-btn")
             , HE.onClick \_ -> LoadWorkspace
             , HP.title "Load a calypso-session.json from disk"

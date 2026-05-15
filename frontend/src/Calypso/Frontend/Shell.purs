@@ -407,6 +407,27 @@ handleAction = case _ of
     if Array.null stmts
       then H.modify_ _ { compositionStatus = Just "(no statements to fire)" }
       else fireStatements stmts
+  FireTypefulComposition src -> do
+    -- POST the composition source to /session-source.  Server writes
+    -- it to Calypso.Generated.Session.purs, builds, and asks
+    -- purerl-tidal to reload-baseline.  Re-arm any voices afterward
+    -- to pick up new cue bodies on currently-playing patterns.
+    H.modify_ _
+      { compositionStatus = Just "fire typeful: building…"
+      , transportError = Nothing
+      }
+    result <- buildSessionRequest src
+    case result of
+      Left err ->
+        H.modify_ _
+          { compositionStatus = Just ("fire typeful: " <> err)
+          , transportError = Just err
+          }
+      Right { reply, totalMs } ->
+        H.modify_ _
+          { compositionStatus = Just
+              ("fire typeful: " <> reply <> " (" <> show totalMs <> "ms)")
+          }
   WipeAndRestore -> do
     -- The Bret-Victor safety net: clear all cells (so the cells pane
     -- shows no overrides), then re-fire the prepared code-pane
@@ -599,6 +620,34 @@ handleAction = case _ of
       Left err -> H.modify_ _ { transportError = Just err }
       Right reply ->
         H.modify_ \s -> s { cellResults = Map.insert cellId reply s.cellResults }
+  ArmTypefulCue cellId tvoiceName cueName -> do
+    -- Phase 3 typeful-cues: POST /arm `{tvoice, cueName}`.  Backend
+    -- writes a per-tvoice bridge module, runs purs + backend-erl
+    -- --filter, erlc's, and sends play-armed over its WS connection
+    -- to purerl-tidal — all in one HTTP round-trip.  ~3s on first
+    -- call, sub-second once the toolchain is warm.
+    H.modify_ \s -> s { cuePending = Set.insert cellId s.cuePending }
+    result <- armCueRequest tvoiceName cueName
+    H.modify_ \s -> s { cuePending = Set.delete cellId s.cuePending }
+    case result of
+      Left err -> H.modify_ _ { transportError = Just err }
+      Right { ok, reply } -> do
+        H.modify_ \s -> s
+          { cellResults = Map.insert cellId reply s.cellResults }
+        when ok $
+          -- Wire-side bridge module is `M<tvoice-lowercase-alnum>`;
+          -- mirror that here so the play button's title and the
+          -- history dedupe key match what the backend used.
+          let modName = "M" <> tvoiceTail tvoiceName
+              entry = { body: cueName, modul: modName }
+          in H.modify_ \s ->
+            let existing = fromMaybe [] (Map.lookup cellId s.cellHistory)
+                filtered = Array.filter (\e -> e.modul /= modName) existing
+                updated  = Array.cons entry filtered
+            in s
+              { armedModule = Map.insert cellId modName s.armedModule
+              , cellHistory = Map.insert cellId updated s.cellHistory
+              }
   UpdateCellTvoice cellId name -> do
     -- The tvoice name binds the cell's pattern to a purerl-tidal
     -- voice (set up via `bind`).  Empty string clears (defaults
@@ -1155,6 +1204,119 @@ evalSource src = do
                  Nothing, Just e -> Left ("ERR: " <> e)
                  Nothing, Nothing -> Left "eval: empty response"
       | otherwise -> Left ("HTTP " <> show r.status)
+
+-- | POST /arm `{tvoice, cueName}`.  Backend response shape is
+-- | `{ok, reply, error, timings}` — we only consume ok + reply.  Pen-
+-- | required; 409 surfaces as a transport error like other mutating
+-- | endpoints.
+armCueRequest
+  :: forall o m
+   . MonadAff m
+  => String
+  -> String
+  -> H.HalogenM State Action Slots o m
+       (Either String { ok :: Boolean, reply :: String })
+armCueRequest tvoice cueName = do
+  s <- H.get
+  let
+    authHeaders = case s.myId of
+      Nothing -> []
+      Just sid -> [ AX.RequestHeader "X-Atelier-Subscriber-Id" (unSubscriberId sid) ]
+    body = stringify
+      ( AJ.fromObject
+          ( Object.fromFoldable
+              [ Tuple "tvoice" (AJ.fromString tvoice)
+              , Tuple "cueName" (AJ.fromString cueName)
+              ]
+          )
+      )
+  result <- H.liftAff $ AX.request $ AX.defaultRequest
+    { method = Left POST
+    , url = backendUrl <> "/arm"
+    , responseFormat = RF.json
+    , content = Just (RB.string body)
+    , headers = authHeaders
+    }
+  pure case result of
+    Left err -> Left (AX.printError err)
+    Right r
+      | r.status == AX.StatusCode 200 ->
+          case AJ.toObject r.body of
+            Nothing -> Left "arm: response not an object"
+            Just o ->
+              let ok = fromMaybe false (Object.lookup "ok" o >>= AJ.toBoolean)
+                  reply = fromMaybe ""
+                    (Object.lookup "reply" o >>= AJ.toString)
+                  err = fromMaybe ""
+                    (Object.lookup "error" o >>= AJ.toString)
+              in if ok
+                 then Right { ok, reply }
+                 else Left (if Str.null err then reply else err)
+      | r.status == AX.StatusCode 409 ->
+          Left "arm: pen-held — take the pen first"
+      | otherwise -> Left ("arm: HTTP " <> show r.status)
+
+-- | POST /session-source `{source}`.  Server writes the source to
+-- | Calypso.Generated.Session.purs, builds via purs +
+-- | backend-erl --filter + erlc, then sends reload-baseline.
+-- | Returns `{reply, totalMs}` on success; a user-readable error
+-- | string on failure (parse error, build failure, transport).
+buildSessionRequest
+  :: forall o m
+   . MonadAff m
+  => String
+  -> H.HalogenM State Action Slots o m
+       (Either String { reply :: String, totalMs :: Int })
+buildSessionRequest src = do
+  s <- H.get
+  let
+    authHeaders = case s.myId of
+      Nothing -> []
+      Just sid -> [ AX.RequestHeader "X-Atelier-Subscriber-Id" (unSubscriberId sid) ]
+    body = stringify
+      ( AJ.fromObject (Object.singleton "source" (AJ.fromString src)) )
+  result <- H.liftAff $ AX.request $ AX.defaultRequest
+    { method = Left POST
+    , url = backendUrl <> "/session-source"
+    , responseFormat = RF.json
+    , content = Just (RB.string body)
+    , headers = authHeaders
+    }
+  pure case result of
+    Left err -> Left (AX.printError err)
+    Right r
+      | r.status == AX.StatusCode 200 ->
+          case AJ.toObject r.body of
+            Nothing -> Left "session-source: response not an object"
+            Just o ->
+              let ok = fromMaybe false (Object.lookup "ok" o >>= AJ.toBoolean)
+                  reply = fromMaybe ""
+                    (Object.lookup "reply" o >>= AJ.toString)
+                  err = fromMaybe ""
+                    (Object.lookup "error" o >>= AJ.toString)
+                  total = fromMaybe 0 do
+                    t <- Object.lookup "timings" o
+                    tObj <- AJ.toObject t
+                    n <- Object.lookup "total" tObj >>= AJ.toNumber
+                    Int.fromNumber n
+              in if ok
+                 then Right { reply, totalMs: total }
+                 else Left (if Str.null err then reply else err)
+      | r.status == AX.StatusCode 409 ->
+          Left "session-source: pen-held — take the pen first"
+      | otherwise -> Left ("session-source: HTTP " <> show r.status)
+
+-- | Lowercase + strip non-alphanumerics to mirror the bridge-module
+-- | naming used by `Calypso.Server.Arm`.  Keep in sync with the
+-- | `tvoiceTail` in `server/src/Calypso/Server/Arm.js`.
+tvoiceTail :: String -> String
+tvoiceTail =
+  Str.toLower
+    >>> SCU.toCharArray
+    >>> Array.filter isAlnum
+    >>> SCU.fromCharArray
+  where
+  isAlnum ch = (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z')
 
 -- | POST /proposals/:id/hunks/:idx/{accept,reject}.  On 2xx we let
 -- | the server's broadcast tell the UI what changed (Snapshot for

@@ -28,6 +28,8 @@ import Calypso.Frontend.Shell.Types
   , TvoiceType(..)
   , _editorModal
   , cellSection
+  , extractTypefulCuesAsCellRecs
+  , isTypefulSource
   , stripLineComment
   , tvoiceTypeClass
   , tvoiceTypeLabel
@@ -90,14 +92,23 @@ renderCanvas state =
                    let
                      groupCells = mvoiceGroupCells state mvoice
                      stackCells = orderedMvoiceCells state mvoice groupCells
-                     rendered =
-                       if Array.length stackCells <= 1
-                         then renderVoiceCard state CardLone c
-                         else if state.fannedMvoice == Just mvoice
-                           then renderFannedMusicStack state mvoice stackCells
-                           else renderCollapsedMusicStack state mvoice stackCells
-                   in
-                     rendered Array.: walk rest (Set.insert mvoice renderedMvoices) renderedConfig
+                   in case Array.head stackCells of
+                     -- Group filtered to empty (typeful mode dropped this
+                     -- mvoice's wire cells).  Skip rendering entirely;
+                     -- don't fall back to `c` — `c` is the unfiltered head
+                     -- and might be the very wire cell we just hid.
+                     Nothing ->
+                       walk rest (Set.insert mvoice renderedMvoices) renderedConfig
+                     Just lead ->
+                       let
+                         rendered =
+                           if Array.length stackCells == 1
+                             then renderVoiceCard state CardLone lead
+                             else if state.fannedMvoice == Just mvoice
+                               then renderFannedMusicStack state mvoice stackCells
+                               else renderCollapsedMusicStack state mvoice stackCells
+                       in
+                         rendered Array.: walk rest (Set.insert mvoice renderedMvoices) renderedConfig
   in
     walk state.cells Set.empty false
 
@@ -110,14 +121,28 @@ effectiveMvoice _ c =
   in fromMaybe tvoiceName c.mvoice
 
 -- | All non-config cells whose effective mvoice equals the given label.
+-- |
+-- | In typeful mode (composition source is PureScript), we also drop any
+-- | music cell whose id isn't in the freshly-extracted set of typed cue
+-- | declarations — wire-loaded Level-2 cells survive across composition
+-- | swaps and their arm buttons would fail (their ids aren't valid PS
+-- | identifiers).  Config cells stay visible either way: rig setup is
+-- | still Level-2 wire commands.
 mvoiceGroupCells :: State -> String -> Array CellRec
 mvoiceGroupCells state mvoice =
-  Array.filter
-    (\c ->
-      let sec = cellSection c
-          isConfig = sec == SecConfig || sec == SecVoices
-      in not isConfig && effectiveMvoice state c == mvoice)
-    state.cells
+  let typefulMode = isTypefulSource state.moduleSource
+      typefulIds = if typefulMode
+        then Set.fromFoldable
+          (map _.id (extractTypefulCuesAsCellRecs state.moduleSource))
+        else Set.empty
+      isVisible c =
+        let sec = cellSection c
+            isConfig = sec == SecConfig || sec == SecVoices
+            matchesMvoice = effectiveMvoice state c == mvoice
+            visibleByMode =
+              if typefulMode then Set.member c.id typefulIds else true
+        in not isConfig && matchesMvoice && visibleByMode
+  in Array.filter isVisible state.cells
 
 -- | Apply user-specified ordering (mvoiceOrder) to a group of cells.
 orderedMvoiceCells :: State -> String -> Array CellRec -> Array CellRec
@@ -503,6 +528,34 @@ renderEditingModal state = case state.editingCard of
                                    [ HE.onClick \_ -> CueCell c.id c.source ]
                             )
                             [ HH.text (if cueInFlight then "…" else "cue") ]
+                        , let typefulMode = isTypefulSource state.moduleSource
+                              -- For typeful sources the card id is the cue
+                              -- name (set by extractTypefulCuesAsCellRecs);
+                              -- for Level 2 the source IS the body text and
+                              -- we expect the user to have typed a cue name
+                              -- in there manually.
+                              cueName = if typefulMode then c.id else Str.trim c.source
+                          in HH.button
+                            ( [ HP.class_
+                                  ( H.ClassName
+                                      ( "voice-card-btn voice-card-arm"
+                                          <> if cueInFlight then " is-disabled" else ""
+                                      )
+                                  )
+                              , HP.title
+                                  ( if cueInFlight
+                                      then "arm in progress"
+                                      else "arm (typeful) — POST /arm "
+                                        <> (if typefulMode then "cue " <> cueName else "cue " <> cueName <> " (Level 2 fallback)")
+                                  )
+                              , HP.disabled cueInFlight
+                              ]
+                              <> if cueInFlight then [] else
+                                   [ HE.onClick \_ ->
+                                       ArmTypefulCue c.id tvoiceName cueName
+                                   ]
+                            )
+                            [ HH.text "arm" ]
                         , HH.button
                             ( [ HP.class_
                                   ( H.ClassName

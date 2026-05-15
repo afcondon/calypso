@@ -78,9 +78,12 @@ mapCellInList cellId f cells =
 -- | existing composition-pane error display already shows it on the
 -- | shell's authoritative parse path.
 extractCuesAsCellRecs :: String -> Array CellRec
-extractCuesAsCellRecs src = case CompP.parseComposition src of
-  Left _ -> []
-  Right (Comp.Composition stmts) -> Array.mapMaybe cueToCell stmts
+extractCuesAsCellRecs src =
+  if isTypefulSource src
+    then extractTypefulCuesAsCellRecs src
+    else case CompP.parseComposition src of
+      Left _ -> []
+      Right (Comp.Composition stmts) -> Array.mapMaybe cueToCell stmts
   where
   cueToCell = case _ of
     Comp.StmtCue c -> Just
@@ -92,6 +95,123 @@ extractCuesAsCellRecs src = case CompP.parseComposition src of
       , tvoice: c.tvoice
       }
     _ -> Nothing
+
+-- | Heuristic: does this composition source look like a PureScript
+-- | module?  Used by `extractCuesAsCellRecs` to dispatch between the
+-- | Level-2 composition parser and the Phase-4 typeful-cues extractor.
+-- | A real PS module starts (after blanks/comments) with `module … where`;
+-- | we approximate with `"module "` anywhere in the source.  False
+-- | positives in pathological Level-2 text are vanishingly unlikely.
+isTypefulSource :: String -> Boolean
+isTypefulSource src = Str.contains (Pattern "module ") src
+
+-- | Phase 4 (typeful-cues projection): walk PureScript source line-by-line
+-- | looking for cue declarations of the form
+-- |
+-- |     bass1A :: Cue "bass"
+-- |     bass1A = on bass1 (mini "c2 e2 g2 ~ b2 ~ ~ g2 e2")
+-- |
+-- | For each matched pair, produce a `CellRec` with id = cue name,
+-- | mvoice = type-level Symbol, tvoice extracted from `on <binding>` in
+-- | the RHS, source = body display text (the RHS after `=`).
+-- |
+-- | Definition lines can span multiple physical lines (next-line
+-- | continuations indented under the `=`); v1 takes only the rest of the
+-- | declaration line.  Refine if multi-line bodies start appearing.
+-- |
+-- | The arm button reads `c.id` as the cue name for the typeful path,
+-- | so id-as-cue-name is the source-of-truth (and stays stable across
+-- | body edits).  Bodies that don't include `on <binding>` produce
+-- | `tvoice = Nothing`; the card will need a manual override.
+extractTypefulCuesAsCellRecs :: String -> Array CellRec
+extractTypefulCuesAsCellRecs src =
+  collectPairs (Str.split (Pattern "\n") src) []
+  where
+  collectPairs lines acc = case Array.uncons lines of
+    Nothing -> Array.reverse acc
+    Just { head, tail } -> case parseTypeSig head of
+      Just sig ->
+        case Array.uncons tail of
+          Nothing -> Array.reverse acc
+          Just { head: defLine, tail: rest } ->
+            case parseDef sig.name defLine of
+              Just body ->
+                let cell =
+                      { id: sig.name
+                      , kind: "expr"
+                      , source: body
+                      , author: Nothing
+                      , mvoice: Just sig.mvoice
+                      , tvoice: extractTvoiceFromBody body
+                      }
+                in collectPairs rest (Array.cons cell acc)
+              Nothing -> collectPairs rest acc
+      Nothing -> collectPairs tail acc
+
+  -- Match `<name> :: Cue "<mvoice>"` with whitespace tolerance.
+  parseTypeSig :: String -> Maybe { name :: String, mvoice :: String }
+  parseTypeSig line =
+    let trimmed = Str.trim line
+    in case Str.split (Pattern "::") trimmed of
+      [ left, right ] -> do
+        let lName = Str.trim left
+            rTrim = Str.trim right
+        guardJust (isPsIdent lName)
+        mv <- extractCueMvoice rTrim
+        Just { name: lName, mvoice: mv }
+      _ -> Nothing
+
+  -- Match `<name> = <body>` where <name> equals the previous sig's name.
+  parseDef :: String -> String -> Maybe String
+  parseDef expectedName line =
+    let trimmed = Str.trim line
+    in case Str.indexOf (Pattern "=") trimmed of
+      Nothing -> Nothing
+      Just ix -> do
+        let lhs = Str.trim (Str.take ix trimmed)
+            rhs = Str.trim (Str.drop (ix + 1) trimmed)
+        guardJust (lhs == expectedName)
+        Just rhs
+
+  -- `Cue "mvoice"` → Just "mvoice"; tolerates extra whitespace.
+  extractCueMvoice :: String -> Maybe String
+  extractCueMvoice s =
+    case Str.indexOf (Pattern "Cue ") s of
+      Nothing -> Nothing
+      Just _ ->
+        case Str.indexOf (Pattern "\"") s of
+          Nothing -> Nothing
+          Just q1 ->
+            let rest = Str.drop (q1 + 1) s
+            in case Str.indexOf (Pattern "\"") rest of
+              Nothing -> Nothing
+              Just q2 -> Just (Str.take q2 rest)
+
+  -- `on bass1 (mini "...")` → Just "bass1"; first occurrence wins.
+  extractTvoiceFromBody :: String -> Maybe String
+  extractTvoiceFromBody body =
+    case Str.indexOf (Pattern "on ") body of
+      Nothing -> Nothing
+      Just ix ->
+        let after = Str.drop (ix + 3) body
+            firstWord =
+              SCU.fromCharArray
+                (Array.takeWhile isIdentChar (SCU.toCharArray after))
+        in if Str.null firstWord then Nothing else Just firstWord
+
+  isIdentChar c =
+    (c >= 'a' && c <= 'z')
+      || (c >= 'A' && c <= 'Z')
+      || (c >= '0' && c <= '9')
+      || c == '_'
+      || c == '\''
+
+  isPsIdent s = case SCU.toCharArray s of
+    [] -> false
+    _ -> Str.length (SCU.fromCharArray (Array.takeWhile isIdentChar (SCU.toCharArray s))) == Str.length s
+
+  guardJust :: Boolean -> Maybe Unit
+  guardJust b = if b then Just unit else Nothing
 
 -- | Merge composition-derived cells (the new lens) into the existing
 -- | cells array (the wire/JSON lens). Used at session-hydrate time;
@@ -663,6 +783,13 @@ data Action
   | DemoteCursorLineToCell
   | FireCell String String
   | FireComposition String
+  -- Phase 4 typeful-cues fire — POST /session-source with the
+  -- composition source as a PureScript module.  Server writes it to
+  -- Calypso.Generated.Session.purs, builds via purs + backend-erl
+  -- --filter + erlc, then asks purerl-tidal to reload-baseline.
+  -- Voices currently playing keep their captured patterns until
+  -- re-armed; arm afterward to pick up new cue bodies cleanly.
+  | FireTypefulComposition String
   | WipeAndRestore
   | LoadWorkspace
   | AcceptHunk ProposalId Int
@@ -692,6 +819,12 @@ data Action
   | CommitEdit String String
   | CueCell String String
   | PlayArmed String String String
+  -- Phase 3 typeful-cues arm — `(cellId, tvoice, cueName)`.  Hits the
+  -- backend's POST /arm which writes the bridge module, builds via
+  -- purs + backend-erl --filter, erlc's, and ships play-armed in one
+  -- round-trip.  Supersedes CueCell + PlayArmed for cells whose
+  -- source is a typed cue identifier (Level 3 sessions).
+  | ArmTypefulCue String String String
   | UpdateCellTvoice String String
   | UpdateCellMvoice String String
   | NewVoiceCard
