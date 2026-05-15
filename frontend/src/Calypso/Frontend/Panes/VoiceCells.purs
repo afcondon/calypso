@@ -421,6 +421,11 @@ renderEditingModal state = case state.editingCard of
                       { initialDoc: c.source
                       , tag: "voice-edit"
                       , vocabulary: state.completions
+                      -- Cell-edit modal sees only one cell's body, no
+                      -- composition-level `cue` lines, so the tiderl
+                      -- decorator has nothing to colour here. Empty
+                      -- array is correct.
+                      , tvoiceColors: []
                       }
                       (modalEditorOutput c.id)
                   ]

@@ -26,6 +26,12 @@ type Input =
   { initialDoc :: String
   , tag :: String
   , vocabulary :: Array Completion
+  -- | Per-binding tvoice→class map, applied to `cue` keyword decorations.
+  -- | Driven from `state.tvoiceTypes`; reapplied on every input
+  -- | receive so initial page load also gets the colours (the Query
+  -- | path runs too early — the CM view hasn't initialized yet during
+  -- | Startup/applyRemote-on-mount).
+  , tvoiceColors :: Array CM.TvoiceColorEntry
   }
 
 -- | Editor outputs.  `Changed` fires on every document edit (parent
@@ -130,6 +136,7 @@ handleAction = case _ of
             (\pid idx -> HS.notify rejectListener (Tuple pid idx))
             (HS.notify moveListener unit)
         liftEffect (CM.setVocabulary view state.input.vocabulary)
+        liftEffect (CM.setTvoiceColors view state.input.tvoiceColors)
         H.modify_ _ { view = Just view }
   Finalise -> do
     state <- H.get
@@ -161,6 +168,14 @@ handleAction = case _ of
     when (input.vocabulary /= state.input.vocabulary) do
       case state.view of
         Just view -> liftEffect (CM.setVocabulary view input.vocabulary)
+        Nothing -> pure unit
+      H.modify_ _ { input = input }
+    -- Same input-pull pattern for the cue-keyword colour map. Stored
+    -- on Input so we can apply it on Initialise (Query path runs too
+    -- early — CM view doesn't exist when Startup/applyRemote fires).
+    when (input.tvoiceColors /= state.input.tvoiceColors) do
+      case state.view of
+        Just view -> liftEffect (CM.setTvoiceColors view input.tvoiceColors)
         Nothing -> pure unit
       H.modify_ _ { input = input }
   HandleChange content -> do
