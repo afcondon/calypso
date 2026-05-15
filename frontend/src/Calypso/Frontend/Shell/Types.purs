@@ -10,8 +10,10 @@ import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Set as Set
 import Data.Set (Set)
 import Data.String as Str
+import Data.String.CodeUnits as SCU
 import Data.String.Pattern (Pattern(..))
 import Data.Tuple (Tuple(..), snd)
+import Data.CodePoint.Unicode as CP
 import Halogen as H
 import Type.Proxy (Proxy(..))
 
@@ -136,6 +138,95 @@ cellRecAsCueLine c = CompS.serializeStatement
     , whenTag: Nothing
     , body: c.source
     })
+
+-- | Level 2 step 2: rename auto-generated `cell-NNN` ids to
+-- | tvoice-based names so the level-2 serializer can render them in
+-- | the clean named form (`qd1 = body` instead of
+-- | `cue cell-005 [tvoice=qd1] = body`).
+-- |
+-- | Renaming policy:
+-- | - Only ids matching the literal pattern `cell-<digits>` are
+-- |   touched. User-supplied ids like `test1`, `qd1`, etc. are left
+-- |   alone.
+-- | - Cells without a tvoice can't be migrated (no name to use); they
+-- |   keep their `cell-NNN` id.
+-- | - Multiple cells sharing (mvoice, tvoice) get `:a`, `:b`, `:c`
+-- |   suffixes assigned in source-order. Single occurrences get no
+-- |   suffix.
+-- |
+-- | Returns the renamed cells AND whether any rename happened, so the
+-- | caller can decide whether to push the change to the server.
+migrateCellIdsToTvoice
+  :: Array CellRec
+  -> { cells :: Array CellRec, didRename :: Boolean }
+migrateCellIdsToTvoice cells =
+  let
+    -- First pass: count occurrences per (mvoice, tvoice) among the
+    -- migration-eligible cells. Lets us decide whether a `:a/:b/:c`
+    -- suffix is needed (skipped when only one cell uses this tvoice).
+    counts :: Array (Tuple (Tuple (Maybe String) String) Int)
+    counts = Array.foldl bumpCount [] cells
+
+    bumpCount acc c = case c.tvoice, isCellNumberedId c.id of
+      Just tv, true ->
+        let key = Tuple c.mvoice tv
+        in case Array.findIndex (\(Tuple k _) -> k == key) acc of
+          Just i -> fromMaybe acc (Array.modifyAt i (\(Tuple k n) -> Tuple k (n + 1)) acc)
+          Nothing -> Array.snoc acc (Tuple key 1)
+      _, _ -> acc
+
+    multCount :: Tuple (Maybe String) String -> Int
+    multCount key = fromMaybe 1 do
+      Tuple _ n <- Array.find (\(Tuple k _) -> k == key) counts
+      pure n
+
+    -- Second pass: assign renamed ids in source-order. Track running
+    -- counter so the n-th cell with this (mvoice, tvoice) gets the
+    -- n-th suffix.
+    renamed = _.cells (Array.foldl step { cells: [], used: [] } cells)
+
+    step st c = case c.tvoice, isCellNumberedId c.id of
+      Just tv, true ->
+        let
+          key = Tuple c.mvoice tv
+          mult = multCount key
+          idx = nextUsed st.used key
+          used' = recordUsed st.used key idx
+          newId = if mult <= 1
+            then tv
+            else tv <> ":" <> suffixLetter idx
+        in { cells: Array.snoc st.cells (c { id = newId }), used: used' }
+      _, _ -> st { cells = Array.snoc st.cells c }
+
+    nextUsed used key = case Array.find (\(Tuple k _) -> k == key) used of
+      Just (Tuple _ n) -> n
+      Nothing -> 0
+    recordUsed used key n = case Array.findIndex (\(Tuple k _) -> k == key) used of
+      Just i -> fromMaybe used (Array.modifyAt i (\(Tuple k _) -> Tuple k (n + 1)) used)
+      Nothing -> Array.snoc used (Tuple key (n + 1))
+
+    didRename = Array.length renamed == Array.length cells
+      && Array.any identity (Array.zipWith (\a b -> a.id /= b.id) cells renamed)
+  in { cells: renamed, didRename }
+
+-- | `cell-005`, `cell-027` — yes. `cell-`, `cell-abc`, `qd1` — no.
+isCellNumberedId :: String -> Boolean
+isCellNumberedId s = case Str.stripPrefix (Pattern "cell-") s of
+  Just rest -> not (Str.null rest)
+    && Array.all CP.isDecDigit (Str.toCodePointArray rest)
+  Nothing -> false
+
+-- | Map 0/1/2/... → "a"/"b"/"c"/... for cue-id suffixes. Wraps to
+-- | numeric form past 25 (`a..z`, then `1`, `2`, ...) so the suffix
+-- | space is unbounded if you somehow end up with 27 cards under one
+-- | tvoice. Practically: nobody hits this.
+suffixLetter :: Int -> String
+suffixLetter i =
+  let letters = ['a','b','c','d','e','f','g','h','i','j','k','l','m'
+               ,'n','o','p','q','r','s','t','u','v','w','x','y','z']
+  in if i < 26
+       then SCU.singleton (fromMaybe 'a' (Array.index letters i))
+       else show (i - 25)
 
 -- | Phase 2b step 1 (1:1 view commensurability): for each cell in
 -- | `state.cells` that isn't already represented as a `cue` declaration

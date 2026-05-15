@@ -74,6 +74,7 @@ import Calypso.Frontend.Vocabulary as Vocabulary
 import Calypso.Frontend.WsClient as WsClient
 import Calypso.Composition as Comp
 import Calypso.Composition.Parser as Comp
+import Calypso.Composition.Serializer as CompS
 import Calypso.Favorite (Favorite(..))
 import Calypso.Proposal
   ( Proposal(..)
@@ -122,6 +123,7 @@ import Calypso.Frontend.Shell.Types
   , columnKeyLabel
   , defaultVisibility
   , extractCuesAsCellRecs
+  , migrateCellIdsToTvoice
   , gridTemplateForVisibility
   , hideFromVisibility
   , isVisible
@@ -1467,8 +1469,17 @@ applyRemote r = do
   -- 1:1 commensurability between cards and the composition pane on
   -- legacy sessions. Idempotent and safe-on-parse-failure (returns
   -- `Nothing` if the source doesn't parse — we don't touch broken sources).
-  let migratedSource = fromMaybe rm.source
+  let appended = fromMaybe rm.source
         (appendUnrepresentedCellsAsCues rm.source cellRecs)
+      -- Level 2 canonicalization: parse the appended source and
+      -- re-serialize through the level-2-aware serializer. This pulls
+      -- existing cues into section-headed form and emits the named
+      -- form `<tvoice> = body` wherever a cue's id happens to match
+      -- its tvoice. On parse failure, we keep `appended` unchanged
+      -- (defensive — never rewrite a non-parseable source).
+      migratedSource = case Comp.parseComposition appended of
+        Right comp -> CompS.serializeComposition comp <> "\n"
+        Left _ -> appended
   H.modify_ \s ->
     let
       -- Phase 2a (read-only Model B projection): lift any `cue <id>`
