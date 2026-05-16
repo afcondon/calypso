@@ -320,3 +320,24 @@ Subjective ranking by near-term payoff vs effort:
 
 Type discipline, sub-DSLs, constraint solving — fascinating but
 expensive. Wait until a specific need pulls them in.
+
+---
+
+## Parking lot — arm-time rebuild needs a "compile-in-progress" hint
+
+When `ArmTypefulCue` decides to rebuild (cell source differs from
+`lastBuiltModule`), it kicks off `buildSessionRequest` and the user
+sees nothing for ~2 seconds before the OK/error reply lands.  The
+composition-status banner does flip to "arm: rebuilding edited cell…"
+but it's easy to miss while focus is on the cards.
+
+Adds:
+
+- Mouse cursor changes to `wait` / `progress` during the build phase
+  (or just on the card's arm button).
+- The arm button itself dims / shows a spinner while building.
+- Possibly a card-level visual ("compiling…") so the user knows that
+  particular card is the one being built into the BEAM.
+
+Not blocking — the wire mechanics work; the ~2s round-trip is just
+quiet right now.
