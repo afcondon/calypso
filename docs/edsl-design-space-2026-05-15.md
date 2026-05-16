@@ -99,6 +99,45 @@ Tension: cards now reference named patterns whose bodies aren't
 visible in the card. Need a UX answer (peek-on-hover, click-to-expand,
 or a dedicated **Patterns library** pane).
 
+### Split card history into new cards / lines in file
+
+(Idea filed 2026-05-16 — not next.)
+
+Today each card carries an in-memory `cellHistory` — the previous
+bodies you've armed on it, accessible via clickable rows in the
+modal. The history is ephemeral: page reload drops it.
+
+The idea: turn history rows into **first-class cues in the Session
+source**. Each variation you discover becomes a new `qd1A2`, `qd1A3`
+declaration alongside `qd1A`, with its own card on the grid. Same
+mvoice, parallel cards.
+
+```
+-- After editing qd1A's body twice and arming each version:
+qd1A  :: Cue "drums"
+qd1A  = on qd1 (mini "bd bd ~ ~ bd ~ bd ~")
+
+qd1A2 :: Cue "drums"
+qd1A2 = on qd1 (mini "bd ~ bd bd bd ~ ~ bd")
+
+qd1A3 :: Cue "drums"
+qd1A3 = on qd1 (every 4 rev (mini "bd ~ bd bd bd ~ ~ bd"))
+```
+
+Workflow value: history survives reload, is editable as text, and
+each variation gets its own card you can arm independently. Same
+shape as the named-pattern direction but applied to *cue
+declarations* rather than pattern factors.
+
+Naming: auto-suffix (`A2`, `A3`, …) is the cheap path; a "promote
+this history row" affordance with a rename prompt is the dignified
+path. Either way the on-disk artifact is the source of truth.
+
+Adjacent to [[#save-card-pattern-as-a-named-pattern]] (which extracts
+the pattern body) and [[#save-card-back-to-tiderl]] (which overwrites
+the existing declaration). This idea adds the third option: *append*
+a new declaration.
+
 ### Save card back to `.tiderl`
 
 Distinct from save-as-named: just push the edited card body into the
