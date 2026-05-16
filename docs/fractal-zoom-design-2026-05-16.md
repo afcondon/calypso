@@ -480,3 +480,44 @@ are probably:
    that proves the substrate is enough?
 
 But not today. Coffee first.
+
+---
+
+## Parking lot — MFT-driven step sequencer (afternoon-of-2026-05-16)
+
+A Calypso cell whose surface is a row of Midifighter Twister knobs,
+each knob owning one step of a sequence. The interaction model is
+borrowed from how Andrew uses Make Noise René in the modular rig:
+
+- **Turn** a knob → set the pitch (or value) for that step.
+- **Push** a knob → mute that step (rest, but slot still consumed).
+- **Double-push** → skip that step entirely (step dropped, sequence
+  shortens by one in cycle terms).
+- **Push-and-hold** → truncate the sequence at that knob (everything
+  after it is dropped; the playhead wraps back to step 1 from here).
+
+Notes for when we pick this up:
+
+- The MFT is already wired into the rig via
+  [[producing-with-your-feet]] — CC-per-knob, push as a separate CC
+  with discrete press/double/hold events. So the physical surface is
+  free; the work is on the Calypso side.
+- This is naturally a *cell* — a Pattern that's edited live by knob
+  input rather than by text. Fits the "cards are flat" framing in
+  the Layer 0 vision; the cell's source is the projection of MFT
+  state, not handwritten.
+- Mute / skip / truncate are three distinct edit operations on a
+  pattern value, not three different patterns — suggests
+  `Pattern (Maybe Pitch)` plus a length cap, where `Nothing` is a
+  rest and "skip" actually deletes the slot from the cycle.
+- Push-and-hold = truncation is the René-flavoured bit; without it
+  this is just a normal step seq. Worth keeping the gesture.
+- Cross-pollinates nicely with the [[fractal-vision-proposal-2026-05-16]]
+  degree-default substrate: the knob values would map naturally onto
+  scale degrees once MVP-1 lands, so each knob = one degree in the
+  active key, and the sequence stays musical even as you re-key.
+- Probably wants to live in its own pane eventually, or be a cell
+  type that auto-renders an MFT-shaped UI in the card.
+
+Not in any MVP. Sits behind MVP-1..MVP-4. Mentioned here so the idea
+isn't lost.

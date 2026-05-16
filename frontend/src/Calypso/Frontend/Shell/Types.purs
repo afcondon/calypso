@@ -6,6 +6,7 @@ import Data.Array (findIndex, modifyAt)
 import Data.Array as Array
 import Data.Either (Either(..))
 import Data.Map (Map)
+import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Set as Set
 import Data.Set (Set)
@@ -123,6 +124,63 @@ isTypefulSource src = Str.contains (Pattern "module ") src
 -- | so id-as-cue-name is the source-of-truth (and stays stable across
 -- | body edits).  Bodies that don't include `on <binding>` produce
 -- | `tvoice = Nothing`; the card will need a manual override.
+-- | Inverse of `extractTypefulCuesAsCellRecs`: given current source +
+-- | cells, rewrite each cue's body line in source to reflect the cell's
+-- | current source (when it differs).  Used at arm time to roll
+-- | card-modal edits back into the module source before the typeful
+-- | build pipeline runs.
+-- |
+-- | Conservative: only touches lines that look exactly like the bodies
+-- | the matching extractor would recognise (i.e. the line directly
+-- | under a `<name> :: Cue "<mvoice>"` signature).  Other top-level
+-- | bindings (`session = …`, helper defs) are left alone.
+-- |
+-- | Multi-line bodies aren't handled — extractor v1 only takes the
+-- | first def line, so the same line is the only one we'd rewrite.
+syncCellsIntoTypefulSource :: String -> Array CellRec -> String
+syncCellsIntoTypefulSource src cells =
+  let
+    cueIds = Set.fromFoldable
+      (map _.id (extractTypefulCuesAsCellRecs src))
+    cellsById :: Map String CellRec
+    cellsById = Map.fromFoldable (map (\c -> Tuple c.id c) cells)
+    lines = Str.split (Pattern "\n") src
+    rewriteLine line = case parseDefShape line of
+      Just { name, body } | Set.member name cueIds ->
+        case Map.lookup name cellsById of
+          Just c | c.source /= body -> name <> " = " <> c.source
+          _ -> line
+      _ -> line
+  in
+    Str.joinWith "\n" (map rewriteLine lines)
+  where
+  -- `<name> = <body>` where <name> is a PS identifier.  No leading
+  -- whitespace tolerance — top-level defs only.
+  parseDefShape :: String -> Maybe { name :: String, body :: String }
+  parseDefShape line = case Str.indexOf (Pattern "=") line of
+    Nothing -> Nothing
+    Just ix -> do
+      let lhs = Str.trim (Str.take ix line)
+          rhs = Str.trim (Str.drop (ix + 1) line)
+      guardJust (isPsIdent lhs)
+      Just { name: lhs, body: rhs }
+
+  isPsIdent :: String -> Boolean
+  isPsIdent s = case SCU.toCharArray s of
+    [] -> false
+    _ -> Str.length (SCU.fromCharArray (Array.takeWhile isIdentChar (SCU.toCharArray s)))
+           == Str.length s
+
+  isIdentChar c =
+    (c >= 'a' && c <= 'z')
+      || (c >= 'A' && c <= 'Z')
+      || (c >= '0' && c <= '9')
+      || c == '_'
+      || c == '\''
+
+  guardJust :: Boolean -> Maybe Unit
+  guardJust b = if b then Just unit else Nothing
+
 extractTypefulCuesAsCellRecs :: String -> Array CellRec
 extractTypefulCuesAsCellRecs src =
   collectPairs (Str.split (Pattern "\n") src) []
@@ -746,6 +804,13 @@ type State =
   , lastSyncedModule :: String
   , lastSyncedCells :: Map String { source :: String, kind :: String, mvoice :: Maybe String, tvoice :: Maybe String }
   , lastSyncedRuntime :: String
+  -- | The composition source currently *built into the BEAM* (last
+  -- | successful `buildSessionRequest`).  Distinct from
+  -- | `lastSyncedModule` which tracks server-state sync — that just
+  -- | updates Calypso's in-memory store, not the compiled
+  -- | `Calypso.Generated.Session.beam`.  Read by `ArmTypefulCue` to
+  -- | decide whether to fire a full build+reload before arming.
+  , lastBuiltModule :: String
   , visibility :: ColumnVisibility
   , mvoiceOrder :: Map String (Array String)
   , fannedMvoice :: Maybe String

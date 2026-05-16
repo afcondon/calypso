@@ -134,6 +134,7 @@ import Calypso.Frontend.Shell.Types
   , tvoiceTypeShortClass
   , stripLineComment
   , stripModuleLineComment
+  , syncCellsIntoTypefulSource
   , toggleKey
   , visibilityFromHide
   )
@@ -180,6 +181,7 @@ initialState _ =
   , penBanner: Nothing
   , proposals: []
   , lastSyncedModule: ""
+  , lastBuiltModule: ""
   , lastSyncedCells: Map.empty
   , lastSyncedRuntime: ""
   , visibility: defaultVisibility
@@ -437,6 +439,7 @@ handleAction = case _ of
         H.modify_ _
           { compositionStatus = Just
               ("fire typeful: " <> reply <> " (" <> show totalMs <> "ms)")
+          , lastBuiltModule = src
           }
   WipeAndRestore -> do
     -- The Bret-Victor safety net: clear all cells (so the cells pane
@@ -602,10 +605,39 @@ handleAction = case _ of
           , armedModule = Array.foldr Map.delete s.armedModule cellIds
           }
   ArmTypefulCue cellId tvoiceName cueName -> do
-    -- POST /arm `{tvoice, cueName}` — server opens a WS to
-    -- purerl-tidal, sends `play-armed <tvoice> <cueName>`, and the
-    -- BEAM resolves the cue against the already-loaded Session
-    -- module.  Single WS round-trip, ~20ms.
+    -- Two-phase arm:
+    --   1. If any card edits have diverged from what's currently
+    --      built into the BEAM, project them into the module source
+    --      and run a full build+reload first (`buildSessionRequest`).
+    --      Without this step, an edit-then-arm cycle silently rearms
+    --      the *previous* cue body — the BEAM still has it cached.
+    --   2. Send `play-armed <tvoice> <cueName>` via POST /arm.
+    --
+    -- The dirty check compares the cells-projected source against
+    -- `lastBuiltModule` (set by FireTypefulComposition + applyRemote).
+    -- When nothing's dirty we skip the build entirely — arms stay
+    -- ~20ms one-WS-round-trip; only edited cues pay the ~2s build cost.
+    s0 <- H.get
+    let projectedSource = syncCellsIntoTypefulSource s0.moduleSource s0.cells
+        needsBuild = projectedSource /= s0.lastBuiltModule
+    when needsBuild do
+      H.modify_ _
+        { moduleSource = projectedSource
+        , compositionStatus = Just "arm: rebuilding edited cells…"
+        , transportError = Nothing
+        }
+      buildResult <- buildSessionRequest projectedSource
+      case buildResult of
+        Left err -> H.modify_ _
+          { compositionStatus = Just ("arm rebuild failed: " <> err)
+          , transportError = Just err
+          }
+        Right { reply, totalMs } -> H.modify_ _
+          { compositionStatus = Just
+              ("arm rebuild: " <> reply <> " (" <> show totalMs <> "ms)")
+          , lastBuiltModule = projectedSource
+          }
+    -- Phase 2: actual arm.  POST /arm → BEAM `play-armed`.  ~20ms.
     H.modify_ \s -> s { cuePending = Set.insert cellId s.cuePending }
     result <- armCueRequest tvoiceName cueName
     H.modify_ \s -> s { cuePending = Set.delete cellId s.cuePending }
@@ -1603,6 +1635,10 @@ applyRemote r = do
                                         -- server too.
         , lastSyncedCells = syncedCells
         , lastSyncedRuntime = r.runtime
+        , lastBuiltModule = rm.source   -- assume BEAM matches disk after
+                                        -- boot; ArmTypefulCue will only
+                                        -- force a rebuild once cells
+                                        -- diverge from this baseline.
         }
     in s' { tvoiceTypes = recomputeTvoiceTypes s' }
   -- If we migrated, schedule a compile so the server gets the new source.
