@@ -1,15 +1,13 @@
--- | Arm — orchestrate a single cue arm-switch on the purerl-tidal
--- | side.
+-- | Arm — fire a single cue arm-switch on the purerl-tidal side.
 -- |
--- | Given (tvoice, cueName), synthesise a bridge module
--- | Tidal.Generated.M<tvoice> that extracts <cueName>'s body, build
--- | it via purs + purs-backend-erl --filter, erlc the result, then
--- | send `play-armed <tvoice> M<tvoice>` over WS. The handler-side
--- | code:load_file makes the freshly-built BEAM module take effect;
--- | the voice gen_server's pattern swaps on the next cycle.
+-- | Given (tvoice, cueName), open a WS to purerl-tidal and send
+-- | `play-armed <tvoice> <cueName>`.  The BEAM handler resolves the
+-- | cue by calling calypso_generated_session@ps:<cueName>/0 and
+-- | extracts the body Pattern.  No compilation happens here — that
+-- | belongs to /session-source (▶ run).
 -- |
--- | The Aff returns timings for each stage so the frontend can
--- | report what the arm cycle cost.
+-- | The Aff returns total + WS timings so the frontend can report
+-- | what the arm cost.
 module Calypso.Server.Arm
   ( ArmRequest
   , ArmTimings
@@ -35,9 +33,6 @@ type ArmRequest =
 
 type ArmTimings =
   { total :: Int
-  , purs :: Int
-  , be :: Int
-  , erlc :: Int
   , ws :: Int
   }
 
@@ -66,9 +61,6 @@ armRequestCodec = CAR.object "ArmRequest"
 armTimingsCodec :: JsonCodec ArmTimings
 armTimingsCodec = CAR.object "ArmTimings"
   { total: CA.int
-  , purs: CA.int
-  , be: CA.int
-  , erlc: CA.int
   , ws: CA.int
   }
 

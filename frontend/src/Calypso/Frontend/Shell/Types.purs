@@ -817,13 +817,10 @@ data Action
   | OpenEditor String
   | CloseEditor
   | CommitEdit String String
-  | CueCell String String
-  | PlayArmed String String String
-  -- Phase 3 typeful-cues arm — `(cellId, tvoice, cueName)`.  Hits the
-  -- backend's POST /arm which writes the bridge module, builds via
-  -- purs + backend-erl --filter, erlc's, and ships play-armed in one
-  -- round-trip.  Supersedes CueCell + PlayArmed for cells whose
-  -- source is a typed cue identifier (Level 3 sessions).
+  -- Typeful-cues arm — `(cellId, tvoice, cueName)`.  Hits the
+  -- backend's POST /arm which ships `play-armed <tvoice> <cueName>`
+  -- to purerl-tidal in a single WS round-trip; the BEAM resolves the
+  -- cue by calling calypso_generated_session@ps:<cueName>/0.
   | ArmTypefulCue String String String
   | UpdateCellTvoice String String
   | UpdateCellMvoice String String

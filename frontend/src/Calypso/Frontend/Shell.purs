@@ -394,7 +394,17 @@ handleAction = case _ of
           then H.modify_ \s -> s
             { cellResults = Map.insert cellId "(no statements)" s.cellResults }
           else fireCellStatements cellId stmts
-      else fireMusicCell cellId fired
+      else
+        -- Non-verb cells used to fire the legacy `cue` + `play-armed
+        -- M<hash>` pipeline (fireMusicCell, retired with the typeful
+        -- pivot).  Cells whose body is a typed cue identifier arm via
+        -- the `arm` button (ArmTypefulCue), not the fire path.
+        H.modify_ \s -> s
+          { cellResults = Map.insert cellId
+              ("not a verb-cell — use ▶ run on the composition pane "
+                <> "then the card's arm button")
+              s.cellResults
+          }
   FireComposition src -> do
     -- Composition is "all or nothing" but the daemon parses one
     -- statement per /eval call, so we split by line, drop blanks and
@@ -569,63 +579,11 @@ handleAction = case _ of
     -- × or Esc once satisfied.  When compile-armed Cue arrives we'll
     -- be able to gate close on compile error here.
     handleAction (FireCell cellId src)
-  CueCell cellId src -> do
-    -- PR2: send the source through the new `cue` verb on purerl-tidal.
-    -- Backend hashes, compiles to a generated PureScript module, hot-
-    -- loads, replies `OK: cue M<hash>` or `ERR cue: <stderr>`.  On
-    -- success we record the module name in armedModule; the modal's
-    -- Play button enables.  On error we just show the reply text.
-    -- `#` is preserved (sharp accidentals + Tidal param-attach), so
-    -- this uses cellStatements not compositionStatements.
-    let stmts = cellStatements src
-        cleaned = Str.joinWith "\n" (map _.source stmts)
-    if Str.null cleaned
-      then H.modify_ \s -> s
-        { cellResults = Map.insert cellId "(no statements)" s.cellResults }
-      else do
-        -- Mark this cell's cue as in flight so the modal can render
-        -- "compiling…" instead of looking hung during the 7s cold path.
-        H.modify_ \s -> s { cuePending = Set.insert cellId s.cuePending }
-        result <- evalSource ("cue " <> cleaned)
-        H.modify_ \s -> s { cuePending = Set.delete cellId s.cuePending }
-        case result of
-          Left err -> H.modify_ _ { transportError = Just err }
-          Right reply -> do
-            H.modify_ \s -> s
-              { cellResults = Map.insert cellId reply s.cellResults }
-            case parseCueReply reply of
-              Just modName -> do
-                -- Arm + log history.  Dedupe by module name: if this
-                -- exact module already exists in the cell's history,
-                -- pull the entry to the top rather than piling up.
-                let entry = { body: cleaned, modul: modName }
-                H.modify_ \s ->
-                  let existing = fromMaybe [] (Map.lookup cellId s.cellHistory)
-                      filtered = Array.filter (\e -> e.modul /= modName) existing
-                      updated  = Array.cons entry filtered
-                  in s
-                    { armedModule = Map.insert cellId modName s.armedModule
-                    , cellHistory = Map.insert cellId updated s.cellHistory
-                    }
-              Nothing -> pure unit
-  PlayArmed cellId tvoiceName moduleName -> do
-    -- Install the previously-cued module's pattern into the named
-    -- tvoice (binding) on the backend.  Backend looks up the binding
-    -- registered for tvoiceName via `bind` and hands the loaded
-    -- Pattern String to tidal_voice_sup:set_voice_pat.  Pattern
-    -- starts firing through the rig immediately.
-    result <- evalSource
-      ("play-armed " <> tvoiceName <> " " <> moduleName)
-    case result of
-      Left err -> H.modify_ _ { transportError = Just err }
-      Right reply ->
-        H.modify_ \s -> s { cellResults = Map.insert cellId reply s.cellResults }
   ArmTypefulCue cellId tvoiceName cueName -> do
-    -- Phase 3 typeful-cues: POST /arm `{tvoice, cueName}`.  Backend
-    -- writes a per-tvoice bridge module, runs purs + backend-erl
-    -- --filter, erlc's, and sends play-armed over its WS connection
-    -- to purerl-tidal — all in one HTTP round-trip.  ~3s on first
-    -- call, sub-second once the toolchain is warm.
+    -- POST /arm `{tvoice, cueName}` — server opens a WS to
+    -- purerl-tidal, sends `play-armed <tvoice> <cueName>`, and the
+    -- BEAM resolves the cue against the already-loaded Session
+    -- module.  Single WS round-trip, ~20ms.
     H.modify_ \s -> s { cuePending = Set.insert cellId s.cuePending }
     result <- armCueRequest tvoiceName cueName
     H.modify_ \s -> s { cuePending = Set.delete cellId s.cuePending }
@@ -635,17 +593,15 @@ handleAction = case _ of
         H.modify_ \s -> s
           { cellResults = Map.insert cellId reply s.cellResults }
         when ok $
-          -- Wire-side bridge module is `M<tvoice-lowercase-alnum>`;
-          -- mirror that here so the play button's title and the
-          -- history dedupe key match what the backend used.
-          let modName = "M" <> tvoiceTail tvoiceName
-              entry = { body: cueName, modul: modName }
+          -- Track which cue is currently armed on this cell so the
+          -- modal can mark the active row in the history list.
+          let entry = { body: cueName, modul: cueName }
           in H.modify_ \s ->
             let existing = fromMaybe [] (Map.lookup cellId s.cellHistory)
-                filtered = Array.filter (\e -> e.modul /= modName) existing
+                filtered = Array.filter (\e -> e.modul /= cueName) existing
                 updated  = Array.cons entry filtered
             in s
-              { armedModule = Map.insert cellId modName s.armedModule
+              { armedModule = Map.insert cellId cueName s.armedModule
               , cellHistory = Map.insert cellId updated s.cellHistory
               }
   UpdateCellTvoice cellId name -> do
@@ -1102,46 +1058,6 @@ fireCellStatements cellId stmts = go [] stmts
           go (Array.cons ("transport: " <> err) acc) tail
         Right reply -> go (Array.cons reply acc) tail
 
--- | Fire a music cell (non-verb): `cue <body>` to compile + hot-load
--- | the cell as a PureScript module, then `play-armed <tvoice>
--- | <module>` to install the produced Pattern into the named voice.
--- |
--- | Tvoice resolution: prefers the cell's `tvoice` override; falls
--- | back to `extractTvoice src` (first word of the cell, with poly-
--- | signal-alias handling baked in). Empty / sentinel tvoices abort
--- | with a user-visible message rather than firing a bad play-armed.
--- |
--- | Replaces the path-4 wire-protocol dispatch (`<binding>
--- | "<pattern>"`) and the path-2 host-language operator (`<binding>
--- | :<expr>`), both retired per the architectural-bet doc.
-fireMusicCell
-  :: forall o m
-   . MonadAff m
-  => String
-  -> String
-  -> H.HalogenM State Action Slots o m Unit
-fireMusicCell cellId src = do
-  s0 <- H.get
-  case Array.find (\c -> c.id == cellId) s0.cells of
-    Nothing ->
-      H.modify_ \s -> s
-        { cellResults = Map.insert cellId "ERR: cell not found" s.cellResults }
-    Just c -> do
-      let tvoiceName = fromMaybe (extractTvoice src) c.tvoice
-      if tvoiceName == "" || tvoiceName == "(empty)" || tvoiceName == "?"
-        then H.modify_ \s -> s
-          { cellResults = Map.insert cellId
-              "ERR: no tvoice — set one in the card header"
-              s.cellResults
-          }
-        else do
-          handleAction (CueCell cellId src)
-          s1 <- H.get
-          case Map.lookup cellId s1.armedModule of
-            Nothing -> pure unit  -- cue failed; cellResults already has the err
-            Just modName ->
-              handleAction (PlayArmed cellId tvoiceName modName)
-
 -- | If the about-to-fire source contains a clock-dependent polysignal
 -- | (polyclock / polyeuclid / polyeuclid-pairs / polyrand) AND we
 -- | haven't shown the reminder this session yet, surface the Clk-
@@ -1305,18 +1221,6 @@ buildSessionRequest src = do
       | r.status == AX.StatusCode 409 ->
           Left "session-source: pen-held — take the pen first"
       | otherwise -> Left ("session-source: HTTP " <> show r.status)
-
--- | Lowercase + strip non-alphanumerics to mirror the bridge-module
--- | naming used by `Calypso.Server.Arm`.  Keep in sync with the
--- | `tvoiceTail` in `server/src/Calypso/Server/Arm.js`.
-tvoiceTail :: String -> String
-tvoiceTail =
-  Str.toLower
-    >>> SCU.toCharArray
-    >>> Array.filter isAlnum
-    >>> SCU.fromCharArray
-  where
-  isAlnum ch = (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z')
 
 -- | POST /proposals/:id/hunks/:idx/{accept,reject}.  On 2xx we let
 -- | the server's broadcast tell the UI what changed (Snapshot for
@@ -1685,13 +1589,6 @@ applyRemote r = do
 
 parseCellNumber :: String -> Maybe Int
 parseCellNumber s = Str.stripPrefix (Pattern "c") s >>= Int.fromString
-
--- | Parse purerl-tidal's `cue` verb reply for the loaded module name.
--- | Backend replies `OK: cue M<hash>` on success, `ERR cue: <stderr>`
--- | on failure (we ignore the latter here — caller still shows the
--- | text in cellResults).
-parseCueReply :: String -> Maybe String
-parseCueReply reply = Str.trim <$> Str.stripPrefix (Pattern "OK: cue ") reply
 
 
 decorateErrors
