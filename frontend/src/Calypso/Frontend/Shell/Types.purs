@@ -124,32 +124,37 @@ isTypefulSource src = Str.contains (Pattern "module ") src
 -- | so id-as-cue-name is the source-of-truth (and stays stable across
 -- | body edits).  Bodies that don't include `on <binding>` produce
 -- | `tvoice = Nothing`; the card will need a manual override.
--- | Inverse of `extractTypefulCuesAsCellRecs`: given current source +
--- | cells, rewrite each cue's body line in source to reflect the cell's
--- | current source (when it differs).  Used at arm time to roll
--- | card-modal edits back into the module source before the typeful
--- | build pipeline runs.
+-- | Inverse of `extractTypefulCuesAsCellRecs`: rewrite ONE cue's body
+-- | line in source to reflect that cell's current source.  Used at
+-- | arm time to roll the just-edited card's body back into the
+-- | module source before the typeful build pipeline runs.
 -- |
--- | Conservative: only touches lines that look exactly like the bodies
--- | the matching extractor would recognise (i.e. the line directly
--- | under a `<name> :: Cue "<mvoice>"` signature).  Other top-level
--- | bindings (`session = …`, helper defs) are left alone.
+-- | Single-cell scope is deliberate: if cell X has unsaved bad syntax
+-- | and the user arms cell Y, only cell Y's body is touched.  Cell X's
+-- | body in source stays at the last-built version, so Y can still
+-- | arm cleanly.  Without this scoping, a broken edit in one card
+-- | would poison every arm — purs compile would fail on Cell X every
+-- | time even when the user is trying to test a different cue.
+-- |
+-- | Conservative: only touches a line if it looks exactly like the
+-- | body line the matching extractor would recognise (i.e. the line
+-- | directly under a `<name> :: Cue "<mvoice>"` signature where name
+-- | equals the target cell's id).  Other top-level bindings
+-- | (`session = …`, helper defs) are left alone.
 -- |
 -- | Multi-line bodies aren't handled — extractor v1 only takes the
 -- | first def line, so the same line is the only one we'd rewrite.
-syncCellsIntoTypefulSource :: String -> Array CellRec -> String
-syncCellsIntoTypefulSource src cells =
+syncCellIntoTypefulSource :: CellRec -> String -> String
+syncCellIntoTypefulSource cell src =
   let
     cueIds = Set.fromFoldable
       (map _.id (extractTypefulCuesAsCellRecs src))
-    cellsById :: Map String CellRec
-    cellsById = Map.fromFoldable (map (\c -> Tuple c.id c) cells)
     lines = Str.split (Pattern "\n") src
     rewriteLine line = case parseDefShape line of
-      Just { name, body } | Set.member name cueIds ->
-        case Map.lookup name cellsById of
-          Just c | c.source /= body -> name <> " = " <> c.source
-          _ -> line
+      Just { name, body }
+        | name == cell.id
+        , Set.member name cueIds
+        , cell.source /= body -> name <> " = " <> cell.source
       _ -> line
   in
     Str.joinWith "\n" (map rewriteLine lines)

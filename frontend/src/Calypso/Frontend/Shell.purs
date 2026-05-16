@@ -134,7 +134,7 @@ import Calypso.Frontend.Shell.Types
   , tvoiceTypeShortClass
   , stripLineComment
   , stripModuleLineComment
-  , syncCellsIntoTypefulSource
+  , syncCellIntoTypefulSource
   , toggleKey
   , visibilityFromHide
   )
@@ -606,58 +606,76 @@ handleAction = case _ of
           }
   ArmTypefulCue cellId tvoiceName cueName -> do
     -- Two-phase arm:
-    --   1. If any card edits have diverged from what's currently
-    --      built into the BEAM, project them into the module source
-    --      and run a full build+reload first (`buildSessionRequest`).
-    --      Without this step, an edit-then-arm cycle silently rearms
-    --      the *previous* cue body — the BEAM still has it cached.
+    --   1. If THIS card's body has diverged from what's currently
+    --      built into the BEAM, project just its line back into the
+    --      module source and run a full build+reload first.  We
+    --      explicitly scope to a single cell so a broken edit in
+    --      some OTHER card doesn't poison the build path here —
+    --      every cue stays independently armable.
     --   2. Send `play-armed <tvoice> <cueName>` via POST /arm.
     --
-    -- The dirty check compares the cells-projected source against
-    -- `lastBuiltModule` (set by FireTypefulComposition + applyRemote).
-    -- When nothing's dirty we skip the build entirely — arms stay
-    -- ~20ms one-WS-round-trip; only edited cues pay the ~2s build cost.
+    -- If the build fails (purs/erlc/etc.) we surface the error in
+    -- the card's result area and bail out — the BEAM still has the
+    -- previously-built body, so silently arming here would mislead
+    -- the user into hearing the OLD pattern after a failed edit.
     s0 <- H.get
-    let projectedSource = syncCellsIntoTypefulSource s0.moduleSource s0.cells
-        needsBuild = projectedSource /= s0.lastBuiltModule
-    when needsBuild do
-      H.modify_ _
-        { moduleSource = projectedSource
-        , compositionStatus = Just "arm: rebuilding edited cells…"
-        , transportError = Nothing
-        }
-      buildResult <- buildSessionRequest projectedSource
-      case buildResult of
-        Left err -> H.modify_ _
-          { compositionStatus = Just ("arm rebuild failed: " <> err)
-          , transportError = Just err
-          }
-        Right { reply, totalMs } -> H.modify_ _
-          { compositionStatus = Just
-              ("arm rebuild: " <> reply <> " (" <> show totalMs <> "ms)")
-          , lastBuiltModule = projectedSource
-          }
-    -- Phase 2: actual arm.  POST /arm → BEAM `play-armed`.  ~20ms.
-    H.modify_ \s -> s { cuePending = Set.insert cellId s.cuePending }
-    result <- armCueRequest tvoiceName cueName
-    H.modify_ \s -> s { cuePending = Set.delete cellId s.cuePending }
-    case result of
-      Left err -> H.modify_ _ { transportError = Just err }
-      Right { ok, reply } -> do
-        H.modify_ \s -> s
-          { cellResults = Map.insert cellId reply s.cellResults }
-        when ok $
-          -- Track which cue is currently armed on this cell so the
-          -- modal can mark the active row in the history list.
-          let entry = { body: cueName, modul: cueName }
-          in H.modify_ \s ->
-            let existing = fromMaybe [] (Map.lookup cellId s.cellHistory)
-                filtered = Array.filter (\e -> e.modul /= cueName) existing
-                updated  = Array.cons entry filtered
-            in s
-              { armedModule = Map.insert cellId cueName s.armedModule
-              , cellHistory = Map.insert cellId updated s.cellHistory
+    let mCell = Array.find (\c -> c.id == cellId) s0.cells
+    case mCell of
+      Nothing -> pure unit  -- can't happen via UI, but bail safely
+      Just cell -> do
+        let projectedSource = syncCellIntoTypefulSource cell s0.moduleSource
+            needsBuild = projectedSource /= s0.lastBuiltModule
+        buildOk <- if needsBuild
+          then do
+            H.modify_ _
+              { moduleSource = projectedSource
+              , compositionStatus = Just "arm: rebuilding edited cell…"
+              , transportError = Nothing
               }
+            buildResult <- buildSessionRequest projectedSource
+            case buildResult of
+              Left err -> do
+                -- Build pipeline reported failure (purs / erlc / WS /
+                -- transport).  Surface in the card AND the composition
+                -- status; bail out without arming so the user doesn't
+                -- silently re-arm the previously-built body.
+                H.modify_ \s -> s
+                  { compositionStatus = Just ("arm rebuild failed: " <> err)
+                  , transportError = Just err
+                  , cellResults = Map.insert cellId
+                      ("rebuild failed: " <> err) s.cellResults
+                  }
+                pure false
+              Right { reply, totalMs } -> do
+                H.modify_ _
+                  { compositionStatus = Just
+                      ("arm rebuild: " <> reply <> " (" <> show totalMs <> "ms)")
+                  , lastBuiltModule = projectedSource
+                  }
+                pure true
+          else pure true
+        when buildOk do
+          -- Phase 2: actual arm.  POST /arm → BEAM `play-armed`.
+          H.modify_ \s -> s { cuePending = Set.insert cellId s.cuePending }
+          result <- armCueRequest tvoiceName cueName
+          H.modify_ \s -> s { cuePending = Set.delete cellId s.cuePending }
+          case result of
+            Left err -> H.modify_ _ { transportError = Just err }
+            Right { ok, reply } -> do
+              H.modify_ \s -> s
+                { cellResults = Map.insert cellId reply s.cellResults }
+              when ok $
+                -- Track which cue is currently armed on this cell so the
+                -- modal can mark the active row in the history list.
+                let entry = { body: cueName, modul: cueName }
+                in H.modify_ \s ->
+                  let existing = fromMaybe [] (Map.lookup cellId s.cellHistory)
+                      filtered = Array.filter (\e -> e.modul /= cueName) existing
+                      updated  = Array.cons entry filtered
+                  in s
+                    { armedModule = Map.insert cellId cueName s.armedModule
+                    , cellHistory = Map.insert cellId updated s.cellHistory
+                    }
   UpdateCellTvoice cellId name -> do
     -- The tvoice name binds the cell's pattern to a purerl-tidal
     -- voice (set up via `bind`).  Empty string clears (defaults
