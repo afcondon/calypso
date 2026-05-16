@@ -707,6 +707,21 @@ handleAction = case _ of
     void $ H.tell _editorModal unit (Editor.ReplaceContent body)
     handleAction (CellChanged cellId body)
     H.modify_ \s -> s { armedModule = Map.insert cellId modul s.armedModule }
+  PlayPiece name -> do
+    -- Hand the named Section to the BEAM conductor.  The composition
+    -- must have been ▶ run first so calypso_generated_session@ps:
+    -- <name>/0 is loaded; otherwise the BEAM replies with an error.
+    result <- evalSource ("play-piece " <> name)
+    case result of
+      Left err -> H.modify_ _ { transportError = Just err }
+      Right reply ->
+        H.modify_ _ { compositionStatus = Just ("piece " <> name <> ": " <> reply) }
+  StopPiece -> do
+    result <- evalSource "stop-piece"
+    case result of
+      Left err -> H.modify_ _ { transportError = Just err }
+      Right reply ->
+        H.modify_ _ { compositionStatus = Just reply }
   ScheduleCompile -> do
     s <- H.get
     case s.pendingCompile of

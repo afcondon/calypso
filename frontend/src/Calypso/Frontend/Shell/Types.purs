@@ -276,6 +276,42 @@ extractTypefulCuesAsCellRecs src =
   guardJust :: Boolean -> Maybe Unit
   guardJust b = if b then Just unit else Nothing
 
+-- | Extract the names of top-level `Section` declarations from a
+-- | composition source.  Mirrors `extractTypefulCuesAsCellRecs` but
+-- | matches `<name> :: Section` type signatures.  Used by the
+-- | composition pane to render one Play-piece button per detected
+-- | section.
+extractSectionNames :: String -> Array String
+extractSectionNames src =
+  Array.mapMaybe parseSectionSig (Str.split (Pattern "\n") src)
+  where
+  parseSectionSig :: String -> Maybe String
+  parseSectionSig line =
+    let trimmed = Str.trim line
+    in case Str.split (Pattern "::") trimmed of
+      [ left, right ] -> do
+        let lName = Str.trim left
+            rTrim = Str.trim right
+        guardJustS (isPsIdentS lName)
+        guardJustS (rTrim == "Section")
+        Just lName
+      _ -> Nothing
+
+  guardJustS :: Boolean -> Maybe Unit
+  guardJustS b = if b then Just unit else Nothing
+
+  isIdentCharS c =
+    (c >= 'a' && c <= 'z')
+      || (c >= 'A' && c <= 'Z')
+      || (c >= '0' && c <= '9')
+      || c == '_'
+      || c == '\''
+
+  isPsIdentS s = case SCU.toCharArray s of
+    [] -> false
+    _ -> Str.length (SCU.fromCharArray
+           (Array.takeWhile isIdentCharS (SCU.toCharArray s))) == Str.length s
+
 -- | Merge composition-derived cells (the new lens) into the existing
 -- | cells array (the wire/JSON lens). Used at session-hydrate time;
 -- | "wire-loaded wins on id collision" so pre-existing JSON sessions
@@ -900,4 +936,9 @@ data Action
   | UpdateCellMvoice String String
   | NewVoiceCard
   | LoadHistoryEntry String String String
+  -- MVP-2 conductor: send `play-piece <name>` / `stop-piece` over /eval.
+  -- The named value must be a `Section` (Pattern AnyCue) at module
+  -- top-level in Calypso.Generated.Session.
+  | PlayPiece String
+  | StopPiece
   | Startup
