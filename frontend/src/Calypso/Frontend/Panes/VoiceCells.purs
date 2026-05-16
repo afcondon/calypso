@@ -350,6 +350,12 @@ renderVoiceCard state kind c =
                           , HP.title "arm — compile + hot-load this cue"
                           ]
                           [ HH.text "arm" ]
+                      , HH.button
+                          [ HP.class_ (H.ClassName "voice-card-btn voice-card-silence")
+                          , HE.onClick \_ -> SilenceVoice c.id tvoiceName
+                          , HP.title ("silence — clear the pattern on " <> tvoiceName)
+                          ]
+                          [ HH.text "silence" ]
                       ]
                 )
             ])
@@ -524,6 +530,12 @@ renderEditingModal state = case state.editingCard of
                                    ]
                             )
                             [ HH.text (if cueInFlight then "…" else "arm") ]
+                        , HH.button
+                            [ HP.class_ (H.ClassName "voice-card-btn voice-card-silence")
+                            , HE.onClick \_ -> SilenceVoice c.id tvoiceName
+                            , HP.title ("silence — clear the pattern on " <> tvoiceName)
+                            ]
+                            [ HH.text "silence" ]
                         ]
                   )
               ]

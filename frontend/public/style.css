@@ -1427,6 +1427,17 @@ body::before {
   border-color: var(--fg);
 }
 
+.voice-card-silence {
+  color: var(--red);
+  border-color: var(--red);
+  opacity: 0.7;
+}
+
+.voice-card-silence:hover {
+  opacity: 1;
+  box-shadow: 0 0 5px rgba(255, 90, 77, 0.4);
+}
+
 /* Play button is disabled until the corresponding cell has been
    successfully cued (compiled + hot-loaded on the backend).  Visually
    dim the colour and remove the hover affordance; the actual click

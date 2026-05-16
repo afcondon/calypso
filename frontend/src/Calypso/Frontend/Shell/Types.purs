@@ -822,6 +822,10 @@ data Action
   -- to purerl-tidal in a single WS round-trip; the BEAM resolves the
   -- cue by calling calypso_generated_session@ps:<cueName>/0.
   | ArmTypefulCue String String String
+  -- Silence one voice — `(cellId, tvoice)`.  Sends `silence <tvoice>`
+  -- through /eval; the BEAM clears the voice's pattern but keeps the
+  -- binding so re-arming restarts it cleanly.
+  | SilenceVoice String String
   | UpdateCellTvoice String String
   | UpdateCellMvoice String String
   | NewVoiceCard

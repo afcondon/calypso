@@ -579,6 +579,28 @@ handleAction = case _ of
     -- × or Esc once satisfied.  When compile-armed Cue arrives we'll
     -- be able to gate close on compile error here.
     handleAction (FireCell cellId src)
+  SilenceVoice cellId tvoiceName -> do
+    -- Clear the named voice's pattern on the BEAM.  Binding stays so
+    -- any card targeting this tvoice can re-arm cleanly afterward.
+    -- No pen required — silence is a transient runtime action, not a
+    -- session edit.
+    result <- evalSource ("silence " <> tvoiceName)
+    case result of
+      Left err -> H.modify_ _ { transportError = Just err }
+      Right reply -> do
+        -- Clear armed markers on ALL cards targeting this tvoice
+        -- (armedModule is per-cell but the "is playing" state is
+        -- per-tvoice).  Without this, sibling cards keep showing
+        -- the ▶ marker after their shared voice was silenced.
+        s0 <- H.get
+        let cellsOnVoice = Array.filter
+              (\c -> fromMaybe (extractTvoice c.source) c.tvoice == tvoiceName)
+              s0.cells
+            cellIds = map _.id cellsOnVoice
+        H.modify_ \s -> s
+          { cellResults = Map.insert cellId reply s.cellResults
+          , armedModule = Array.foldr Map.delete s.armedModule cellIds
+          }
   ArmTypefulCue cellId tvoiceName cueName -> do
     -- POST /arm `{tvoice, cueName}` — server opens a WS to
     -- purerl-tidal, sends `play-armed <tvoice> <cueName>`, and the
