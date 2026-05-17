@@ -26,6 +26,7 @@ import Calypso.Favorite (Favorite)
 import Calypso.Frontend.Completion (Completion)
 import Calypso.Frontend.Editor as Editor
 import Calypso.Frontend.WsClient as WsClient
+import Calypso.Frontend.Studio (StudioSnapshot)
 import Calypso.Pen (PenState, SubscriberId)
 import Calypso.Proposal (Proposal, ProposalId)
 import Calypso.Session (Cell(..), CellRange, CompileError)
@@ -641,7 +642,7 @@ cellSection c =
       , "clear-scale"
       ]
 
--- | The seven top-level panes.
+-- | The eight top-level panes.
 data ColumnKey
   = KeyComposition
   | KeyReplies
@@ -650,6 +651,7 @@ data ColumnKey
   | KeyHylograph
   | KeyConfig
   | KeyVoiceCells
+  | KeyStudio
 
 derive instance Eq ColumnKey
 
@@ -662,6 +664,7 @@ allColumnKeys =
   , KeyHylograph
   , KeyConfig
   , KeyVoiceCells
+  , KeyStudio
   ]
 
 type ColumnVisibility =
@@ -672,6 +675,7 @@ type ColumnVisibility =
   , showHylograph :: Boolean
   , showConfig :: Boolean
   , showVoiceCells :: Boolean
+  , showStudio :: Boolean
   }
 
 allVisible :: ColumnVisibility
@@ -683,6 +687,7 @@ allVisible =
   , showHylograph: true
   , showConfig: true
   , showVoiceCells: true
+  , showStudio: true
   }
 
 defaultVisibility :: ColumnVisibility
@@ -694,6 +699,7 @@ defaultVisibility =
   , showHylograph: false
   , showConfig: false
   , showVoiceCells: false
+  , showStudio: false
   }
 
 isVisible :: ColumnKey -> ColumnVisibility -> Boolean
@@ -705,6 +711,7 @@ isVisible = case _ of
   KeyHylograph -> _.showHylograph
   KeyConfig -> _.showConfig
   KeyVoiceCells -> _.showVoiceCells
+  KeyStudio -> _.showStudio
 
 toggleKey :: ColumnKey -> ColumnVisibility -> ColumnVisibility
 toggleKey k v = case k of
@@ -715,6 +722,7 @@ toggleKey k v = case k of
   KeyHylograph -> v { showHylograph = not v.showHylograph }
   KeyConfig -> v { showConfig = not v.showConfig }
   KeyVoiceCells -> v { showVoiceCells = not v.showVoiceCells }
+  KeyStudio -> v { showStudio = not v.showStudio }
 
 columnKeyLabel :: ColumnKey -> String
 columnKeyLabel = case _ of
@@ -725,6 +733,7 @@ columnKeyLabel = case _ of
   KeyHylograph -> "Hylograph"
   KeyConfig -> "Config"
   KeyVoiceCells -> "Voice Cells"
+  KeyStudio -> "Studio"
 
 columnKeyToken :: ColumnKey -> String
 columnKeyToken = case _ of
@@ -735,6 +744,7 @@ columnKeyToken = case _ of
   KeyHylograph -> "hylograph"
   KeyConfig -> "config"
   KeyVoiceCells -> "voice-cells"
+  KeyStudio -> "studio"
 
 -- | Decode the `?hide=` query value into a `ColumnVisibility`.
 visibilityFromHide :: String -> ColumnVisibility
@@ -749,6 +759,7 @@ visibilityFromHide hide =
     , showHylograph: has "hylograph" || has "render" || has "values" || has "gutter"
     , showConfig: has "config"
     , showVoiceCells: has "voice-cells" || has "voicecells"
+    , showStudio: has "studio"
     }
 
 hideFromVisibility :: ColumnVisibility -> String
@@ -879,6 +890,10 @@ type State =
   , armedModule :: Map String String
   , cuePending :: Set String
   , cellHistory :: Map String (Array { body :: String, modul :: String })
+  -- | Cached snapshot of the Studio pane.  Nothing pre-fetch; refreshed
+  -- | on session-load (Welcome broadcast) and after a successful
+  -- | typeful-composition fire (reload-baseline repopulates Studio).
+  , studio :: Maybe StudioSnapshot
   }
 
 type Slots =
@@ -960,4 +975,9 @@ data Action
   -- top-level in Calypso.Generated.Session.
   | PlayPiece String
   | StopPiece
+  -- | Fetch GET /studio and refresh `state.studio`.  Fired on session
+  -- | load (Welcome broadcast handler) and after a successful typeful-
+  -- | composition fire; also user-triggerable via the pane's refresh
+  -- | button.
+  | RefreshStudio
   | Startup

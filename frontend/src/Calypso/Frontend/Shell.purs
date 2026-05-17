@@ -58,6 +58,7 @@ import Calypso.Frontend.Panes.Config (renderConfigColumn)
 import Calypso.Frontend.Panes.Hylograph (renderHylographColumn)
 import Calypso.Frontend.Panes.MiniNotation (renderMiniNotationColumn)
 import Calypso.Frontend.Panes.Replies (renderRepliesColumn)
+import Calypso.Frontend.Panes.Studio (renderStudioColumn)
 import Calypso.Frontend.Panes.Vocabulary (renderVocabularyColumn)
 import Calypso.Frontend.Panes.VoiceCells
   ( clkReminderText
@@ -70,6 +71,7 @@ import Calypso.Frontend.Panes.VoiceCells
   , renderVoiceCellsColumn
   )
 import Calypso.Frontend.Primer as Primer
+import Calypso.Frontend.Studio as Studio
 import Calypso.Frontend.Vocabulary as Vocabulary
 import Calypso.Frontend.WsClient as WsClient
 import Calypso.Composition as Comp
@@ -192,6 +194,7 @@ initialState _ =
   , armedModule: Map.empty
   , cuePending: Set.empty
   , cellHistory: Map.empty
+  , studio: Nothing
   }
 
 debounceMs :: Milliseconds
@@ -435,12 +438,16 @@ handleAction = case _ of
           { compositionStatus = Just ("fire typeful: " <> err)
           , transportError = Just err
           }
-      Right { reply, totalMs } ->
+      Right { reply, totalMs } -> do
         H.modify_ _
           { compositionStatus = Just
               ("fire typeful: " <> reply <> " (" <> show totalMs <> "ms)")
           , lastBuiltModule = src
           }
+        -- Reload-baseline repopulates the BEAM Studio module; refresh
+        -- the pane so a freshly-built composition's devices /
+        -- instruments / drumKits show up without an extra click.
+        handleAction RefreshStudio
   WipeAndRestore -> do
     -- The Bret-Victor safety net: clear all cells (so the cells pane
     -- shows no overrides), then re-fire the prepared code-pane
@@ -722,6 +729,15 @@ handleAction = case _ of
       Left err -> H.modify_ _ { transportError = Just err }
       Right reply ->
         H.modify_ _ { compositionStatus = Just reply }
+  RefreshStudio -> do
+    -- Fetch GET /studio and stash the decoded snapshot.  On failure
+    -- surface via transportError (same channel as other read errors)
+    -- and leave any prior snapshot in place — a stale view is more
+    -- useful than a wiped one.
+    result <- H.liftAff Studio.fetchStudioSnapshot
+    case result of
+      Left err -> H.modify_ _ { transportError = Just err }
+      Right snap -> H.modify_ _ { studio = Just snap }
   ScheduleCompile -> do
     s <- H.get
     case s.pendingCompile of
@@ -1427,6 +1443,7 @@ subscribeWindowShortcuts = do
       "5" -> Just 5
       "6" -> Just 6
       "7" -> Just 7
+      "8" -> Just 8
       _   -> Nothing
 
 openWebSocket
@@ -1467,6 +1484,10 @@ handleIncomingBroadcast raw = case jsonParser raw of
         case r.pen.holder of
           Nothing -> handleAction RequestPenAction
           Just _ -> pure unit
+        -- Populate the Studio pane on session load so opening it
+        -- (Cmd-8) shows the current rig snapshot without a manual
+        -- refresh.  Independent of the pen state — Studio is read-only.
+        handleAction RefreshStudio
       Snapshot r -> do
         H.modify_ _ { pen = r.pen }
         s <- H.get
@@ -1766,6 +1787,7 @@ render state =
             <> (if state.visibility.showHylograph then [ renderHylographColumn state ] else [])
             <> (if state.visibility.showConfig then [ renderConfigColumn state ] else [])
             <> (if state.visibility.showVoiceCells then [ renderVoiceCellsColumn state ] else [])
+            <> (if state.visibility.showStudio then [ renderStudioColumn state ] else [])
         )
     , renderErrorPanel state
     , renderEditingModal state

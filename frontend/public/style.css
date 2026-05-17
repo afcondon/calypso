@@ -374,6 +374,7 @@ body::before {
 .pane-mini-notation { background: var(--bg-panel); }
 .pane-hylograph     { background: var(--bg-panel); }
 .pane-config        { background: var(--bg-deep); }
+.pane-studio        { background: var(--bg-panel); }
 
 .config-toolbar {
   display: flex;
@@ -770,6 +771,163 @@ body::before {
   color: var(--fg-bright);
 }
 .replies-fire-err .replies-fire-reply { color: var(--red); }
+
+/* ===== Studio pane ====================================================== */
+/* Audio/MIDI-Setup-style read-only view of the rig.  Swiss-typographic:
+   restrained palette, hierarchy via type weight + spacing, no decoration. */
+.studio-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--fg-rule);
+  background: var(--bg-deep);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.studio-title {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-bright);
+  font-weight: bold;
+}
+.studio-refresh-btn {
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  padding: 0.15rem 0.6rem;
+  background: transparent;
+  border: 1px solid var(--fg-dim);
+  color: var(--fg);
+  cursor: pointer;
+}
+.studio-refresh-btn:hover {
+  border-color: var(--fg);
+  color: var(--fg-bright);
+}
+
+.studio-body {
+  display: flex;
+  flex-direction: column;
+}
+.studio-empty {
+  padding: 0.8rem 0.6rem;
+  font-family: var(--mono-code);
+  font-size: 0.9rem;
+}
+
+.studio-section {
+  padding: 0.5rem 0.6rem 0.8rem;
+  border-bottom: 1px solid var(--fg-rule);
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.studio-section:last-child { border-bottom: none; }
+
+.studio-section-header {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  margin-bottom: 0.25rem;
+}
+.studio-section-header-warn {
+  color: var(--red);
+  text-shadow: 0 0 4px rgba(255, 90, 77, 0.4);
+}
+
+.studio-table {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.studio-row {
+  display: grid;
+  align-items: baseline;
+  column-gap: 0.7rem;
+  padding: 0.18rem 0.2rem;
+  font-family: var(--mono-code);
+  font-size: 0.88rem;
+  color: var(--fg-bright);
+}
+.studio-row-head {
+  color: var(--fg-dim);
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--fg-rule);
+  padding-bottom: 0.25rem;
+  margin-bottom: 0.15rem;
+}
+.studio-table-devices       .studio-row { grid-template-columns: 10rem 1fr 7rem; }
+.studio-table-instruments   .studio-row { grid-template-columns: 8rem 8rem 3rem 1fr; }
+
+.studio-col-alias { font-weight: bold; }
+.studio-col-num   { text-align: right; }
+.studio-col-defs  { color: var(--fg); }
+
+.studio-empty-row {
+  padding: 0.2rem 0.2rem;
+  font-family: var(--mono-code);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.studio-drumkit {
+  padding: 0.25rem 0.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  border-top: 1px solid var(--fg-rule);
+}
+.studio-drumkit:first-of-type { border-top: none; }
+.studio-drumkit-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  font-family: var(--mono-code);
+  font-size: 0.88rem;
+}
+.studio-drumkit-meta {
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+}
+.studio-drumkit-hits {
+  font-family: var(--mono-code);
+  font-size: 0.82rem;
+  color: var(--fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding-left: 0.4rem;
+}
+
+.studio-conflict-row {
+  border-left: 3px solid var(--red);
+  background: rgba(255, 80, 80, 0.06);
+  padding: 0.35rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.studio-conflict-message {
+  font-family: var(--mono-code);
+  font-size: 0.9rem;
+  color: var(--red);
+}
+.studio-conflict-meta {
+  font-family: var(--mono-code);
+  font-size: 0.8rem;
+  color: var(--fg-dim);
+}
+.studio-conflict-loc {
+  color: var(--fg);
+  font-weight: bold;
+}
 
 /* ===== Error panel ====================================================== */
 .error-panel {
