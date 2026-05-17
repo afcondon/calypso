@@ -107,14 +107,19 @@ isTypefulSource :: String -> Boolean
 isTypefulSource src = Str.contains (Pattern "module ") src
 
 -- | Phase 4 (typeful-cues projection): walk PureScript source line-by-line
--- | looking for cue declarations of the form
+-- | looking for part declarations of the form
 -- |
--- |     bass1A :: Cue "bass"
--- |     bass1A = on bass1 (mini "c2 e2 g2 ~ b2 ~ ~ g2 e2")
+-- |     bass1A :: PitchedPart
+-- |     bass1A = on "bass" bass1 (mini "c2 e2 g2 ~ b2 ~ ~ g2 e2")
 -- |
--- | For each matched pair, produce a `CellRec` with id = cue name,
--- | mvoice = type-level Symbol, tvoice extracted from `on <binding>` in
--- | the RHS, source = body display text (the RHS after `=`).
+-- | (PR 1, 2026-05-17 — the substrate rename replaced the phantom-typed
+-- | `Cue "bass"` shape with `PitchedPart` + mvoice-as-runtime-string on
+-- | the `on` call.  See purerl-tidal/docs/dsl-naming-refactor-plan.md.)
+-- |
+-- | For each matched pair, produce a `CellRec` with id = part name,
+-- | mvoice extracted from the quoted first argument of `on`,
+-- | tvoice extracted from the instrument name (second arg of `on`),
+-- | source = body display text (the RHS after `=`).
 -- |
 -- | Definition lines can span multiple physical lines (next-line
 -- | continuations indented under the `=`); v1 takes only the rest of the
@@ -199,20 +204,25 @@ extractTypefulCuesAsCellRecs src =
           Just { head: defLine, tail: rest } ->
             case parseDef sig.name defLine of
               Just body ->
-                let cell =
+                let mvtv = extractMvoiceAndTvoice body
+                    cell =
                       { id: sig.name
                       , kind: "expr"
                       , source: body
                       , author: Nothing
-                      , mvoice: Just sig.mvoice
-                      , tvoice: extractTvoiceFromBody body
+                      , mvoice: mvtv.mvoice
+                      , tvoice: mvtv.tvoice
                       }
                 in collectPairs rest (Array.cons cell acc)
               Nothing -> collectPairs rest acc
       Nothing -> collectPairs tail acc
 
-  -- Match `<name> :: Cue "<mvoice>"` with whitespace tolerance.
-  parseTypeSig :: String -> Maybe { name :: String, mvoice :: String }
+  -- Match `<name> :: PitchedPart` (or PR-2's `DrumPart`) with
+  -- whitespace tolerance.  PR 1 keeps the projector deliberately
+  -- narrow: only Part type-sigs project to cells.  Helper top-level
+  -- defs (mPart, subject, intro, session) don't carry these types and
+  -- are skipped.
+  parseTypeSig :: String -> Maybe { name :: String }
   parseTypeSig line =
     let trimmed = Str.trim line
     in case Str.split (Pattern "::") trimmed of
@@ -220,8 +230,8 @@ extractTypefulCuesAsCellRecs src =
         let lName = Str.trim left
             rTrim = Str.trim right
         guardJust (isPsIdent lName)
-        mv <- extractCueMvoice rTrim
-        Just { name: lName, mvoice: mv }
+        guardJust (rTrim == "PitchedPart" || rTrim == "DrumPart")
+        Just { name: lName }
       _ -> Nothing
 
   -- Match `<name> = <body>` where <name> equals the previous sig's name.
@@ -236,31 +246,34 @@ extractTypefulCuesAsCellRecs src =
         guardJust (lhs == expectedName)
         Just rhs
 
-  -- `Cue "mvoice"` → Just "mvoice"; tolerates extra whitespace.
-  extractCueMvoice :: String -> Maybe String
-  extractCueMvoice s =
-    case Str.indexOf (Pattern "Cue ") s of
-      Nothing -> Nothing
-      Just _ ->
-        case Str.indexOf (Pattern "\"") s of
-          Nothing -> Nothing
-          Just q1 ->
-            let rest = Str.drop (q1 + 1) s
-            in case Str.indexOf (Pattern "\"") rest of
-              Nothing -> Nothing
-              Just q2 -> Just (Str.take q2 rest)
-
-  -- `on bass1 (mini "...")` → Just "bass1"; first occurrence wins.
-  extractTvoiceFromBody :: String -> Maybe String
-  extractTvoiceFromBody body =
+  -- Parse `on "mvoice" instrument …` to recover both metadata fields.
+  -- Returns Nothing in both fields if the body doesn't open with the
+  -- expected `on "..." <ident>` shape.
+  extractMvoiceAndTvoice
+    :: String -> { mvoice :: Maybe String, tvoice :: Maybe String }
+  extractMvoiceAndTvoice body =
     case Str.indexOf (Pattern "on ") body of
-      Nothing -> Nothing
+      Nothing -> empty
       Just ix ->
-        let after = Str.drop (ix + 3) body
-            firstWord =
-              SCU.fromCharArray
-                (Array.takeWhile isIdentChar (SCU.toCharArray after))
-        in if Str.null firstWord then Nothing else Just firstWord
+        let afterOn = Str.drop (ix + 3) body
+        in case Str.indexOf (Pattern "\"") afterOn of
+          Nothing -> empty
+          Just q1 ->
+            let afterOpen = Str.drop (q1 + 1) afterOn
+            in case Str.indexOf (Pattern "\"") afterOpen of
+              Nothing -> empty
+              Just q2 ->
+                let mv = Str.take q2 afterOpen
+                    afterClose = Str.trim (Str.drop (q2 + 1) afterOpen)
+                    firstWord = SCU.fromCharArray
+                      (Array.takeWhile isIdentChar
+                        (SCU.toCharArray afterClose))
+                in { mvoice: Just mv
+                   , tvoice:
+                       if Str.null firstWord then Nothing else Just firstWord
+                   }
+    where
+    empty = { mvoice: Nothing, tvoice: Nothing }
 
   isIdentChar c =
     (c >= 'a' && c <= 'z')
