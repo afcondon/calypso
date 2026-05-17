@@ -623,6 +623,9 @@ cellSection c =
       , "save"
       , "fh2-envelope"
       , "config"
+      -- Scale bus — wire verbs that need the ▶ fire button, not arm.
+      , "set-scale"
+      , "clear-scale"
       ]
 
 -- | The seven top-level panes.
