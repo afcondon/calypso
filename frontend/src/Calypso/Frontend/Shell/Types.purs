@@ -552,12 +552,15 @@ daemonVerbs :: Array String
 daemonVerbs =
   -- Transport / lifecycle
   [ "hush", "silence", "state"
+  , "play-piece", "stop-piece", "reload-baseline"
   -- Config
   , "bpm", "config", "log-level", "look-ahead-ms", "gate-enabled"
   , "note-duration", "cv-lead-ms", "gate-duration", "channel-offset"
   , "load", "save"
   -- Voices / binding
   , "bind", "unbind", "midi-device"
+  -- Scale bus (live scale changes)
+  , "set-scale", "clear-scale"
   -- Cue / play / control bus
   , "cue", "play-armed", "set-control", "release-claim"
   -- Pattern dispatch verbs (carry a pattern body)
