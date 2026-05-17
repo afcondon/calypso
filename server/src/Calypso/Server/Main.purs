@@ -62,6 +62,7 @@ import Calypso.Server.Session (EvalRequest, EvalResponse, ModulePatch(..), Sessi
 import Calypso.Server.Session as Session
 import Calypso.Server.Arm (armCue, armRequestCodec, armResultCodec)
 import Calypso.Server.SessionSource (buildSession, sessionSourceRequestCodec, sessionSourceResultCodec)
+import Calypso.Server.Studio (getStudio, studioSnapshotCodec)
 import Calypso.Server.Subscribers (Subscribers)
 import Calypso.Server.Subscribers as Subscribers
 import Data.String as String
@@ -130,6 +131,10 @@ data Route
   -- targets cues from the freshly-built session. Phase 4 of
   -- typeful cues.
   | SessionSource
+  -- GET — return the current Studio snapshot from purerl-tidal:
+  -- devices, instruments, drum kits, and any reservation conflicts.
+  -- The frontend's Studio pane consumes this; reservations Phase 1b.
+  | StudioRoute
 
 derive instance Generic Route _
 
@@ -152,6 +157,7 @@ route = root $ sum
   , "FireLogRoute": "log" / noArgs
   , "Arm": "arm" / noArgs
   , "SessionSource": "session-source" / noArgs
+  , "StudioRoute": "studio" / noArgs
   }
 
 -- ============================================================
@@ -870,6 +876,15 @@ mkRouter ctx req@{ route: r, method, body } =
                     (stringify (CA.encode sessionSourceResultCodec result))
         _ -> response' Status.methodNotAllowed jsonCors
           (errorJson "MethodNotAllowed" "/session-source accepts POST")
+
+      StudioRoute -> case method of
+        Get -> do
+          result <- liftAff getStudio
+          case result of
+            Left err -> badRequest' jsonCors (errorJson "StudioFetchFailed" err)
+            Right snap -> ok' jsonCors (stringify (CA.encode studioSnapshotCodec snap))
+        _ -> response' Status.methodNotAllowed jsonCors
+          (errorJson "MethodNotAllowed" "/studio accepts GET")
 
       ProposalsRoute -> case method of
         Get -> do
