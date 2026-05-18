@@ -436,8 +436,16 @@ handleAction = case _ of
     result <- buildSessionRequest src
     case result of
       Left err ->
-        H.modify_ _
-          { compositionStatus = Just ("fire typeful: " <> err)
+        -- `err` is `headline\n\ndetails` (see buildSessionRequest).
+        -- The action row is single-line, so show only the headline
+        -- there; the full thing including raw compiler output renders
+        -- in the bottom ERRORS panel's HH.pre block.
+        let
+          headline = case Str.split (Pattern "\n\n") err of
+            [] -> err
+            arr -> fromMaybe err (Array.head arr)
+        in H.modify_ _
+          { compositionStatus = Just ("fire typeful: " <> headline)
           , transportError = Just err
           }
       Right { reply, totalMs } -> do
@@ -1353,14 +1361,20 @@ buildSessionRequest src = do
                     (Object.lookup "reply" o >>= AJ.toString)
                   err = fromMaybe ""
                     (Object.lookup "error" o >>= AJ.toString)
+                  details = fromMaybe ""
+                    (Object.lookup "pursErrorsJson" o >>= AJ.toString)
                   total = fromMaybe 0 do
                     t <- Object.lookup "timings" o
                     tObj <- AJ.toObject t
                     n <- Object.lookup "total" tObj >>= AJ.toNumber
                     Int.fromNumber n
+                  headline = if Str.null err then reply else err
+                  full = if Str.null details
+                           then headline
+                           else headline <> "\n\n" <> details
               in if ok
                  then Right { reply, totalMs: total }
-                 else Left (if Str.null err then reply else err)
+                 else Left full
       | r.status == AX.StatusCode 409 ->
           Left "session-source: pen-held — take the pen first"
       | otherwise -> Left ("session-source: HTTP " <> show r.status)
