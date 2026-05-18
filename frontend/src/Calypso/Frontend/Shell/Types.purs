@@ -835,6 +835,8 @@ polyFamilyShortLabel = case _ of
   Comp.PFPolyEuclid      -> "euc"
   Comp.PFPolyEuclidPairs -> "eucp"
   Comp.PFPolyRand        -> "rnd"
+  Comp.PFPolyPreset      -> "pre"
+  Comp.PFPolyPresetNote  -> "pren"
 
 type State =
   { moduleSource :: String

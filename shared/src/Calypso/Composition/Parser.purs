@@ -758,6 +758,8 @@ allFamilies =
   , polyEuclidSpec
   , polyEuclidPairsSpec
   , polyRandSpec
+  , polyPresetSpec
+  , polyPresetNoteSpec
   ]
 
 polyLfoSpec :: FamilySpec
@@ -900,6 +902,53 @@ polyRandSpec =
             ["c","c#","d","d#","e","f","f#","g","g#","a","a#","b"] }
       , { cellName: "gateLength", envName: "gateLength", shape: ShInt }
       , { cellName: "ranges",     envName: "range",      shape: ShToken outputRangeTokens }
+      ]
+  }
+
+-- | polypreset — eight fixed voltages on a CV-capable bank.  The
+-- | simplest family: one parameter, eight Numbers (volts), the
+-- | daemon's `voltsToDirectLevel` does the offset-binary 14-bit
+-- | encoding.  Cell text:
+-- |
+-- |     polypreset myLadder cv2 <>
+-- |       values  -5.0  -3.0  -1.0  0.0  1.0  2.0  3.0  5.0 <>
+-- |       range   ±5v
+-- |
+-- | Use cases (per memory `reference_polypreset_families`): drone
+-- | bedrock, calibration ladders, static counterweights to other
+-- | polysignals on the same expander.
+polyPresetSpec :: FamilySpec
+polyPresetSpec =
+  { family: PFPolyPreset
+  , verb: "polypreset"
+  , arity: 8
+  , bankOk: \b -> case b of
+      BankGt _ -> false
+      _ -> true
+  , bankErr: "polypreset needs a CV-capable bank (main or cv*); got gt*"
+  , params:
+      [ { cellName: "values", envName: "value", shape: ShNumber }
+      ]
+  }
+
+-- | polypresetnote — eight fixed MIDI pitches as V/oct.  The daemon
+-- | converts each note to volts via `(note - 12) / 12.0` (note 12 =
+-- | C0 at 0V; note 60 = middle C at +4V).  Cell text:
+-- |
+-- |     polypresetnote cMajor cv1 <>
+-- |       notes  60  62  64  65  67  69  71  72 <>
+-- |       range  ±5v
+polyPresetNoteSpec :: FamilySpec
+polyPresetNoteSpec =
+  { family: PFPolyPresetNote
+  , verb: "polypresetnote"
+  , arity: 8
+  , bankOk: \b -> case b of
+      BankGt _ -> false
+      _ -> true
+  , bankErr: "polypresetnote needs a CV-capable bank (main or cv*); got gt*"
+  , params:
+      [ { cellName: "notes", envName: "note", shape: ShInt }
       ]
   }
 
@@ -1467,6 +1516,8 @@ familyToWire = case _ of
   PFPolyEuclid      -> "polyeuclid"
   PFPolyEuclidPairs -> "polyeuclid-pairs"
   PFPolyRand        -> "polyrand"
+  PFPolyPreset      -> "polypreset"
+  PFPolyPresetNote  -> "polypresetnote"
 
 slotToJson :: PolySlot -> String
 slotToJson slot =
@@ -1500,6 +1551,8 @@ familySpecFor = case _ of
   PFPolyEuclid      -> polyEuclidSpec
   PFPolyEuclidPairs -> polyEuclidPairsSpec
   PFPolyRand        -> polyRandSpec
+  PFPolyPreset      -> polyPresetSpec
+  PFPolyPresetNote  -> polyPresetNoteSpec
 
 -- | Map an envName (AST/wire form, e.g. `ratio`) back to the cellName
 -- | (user-facing form, e.g. `ratios`). Falls through to the envName

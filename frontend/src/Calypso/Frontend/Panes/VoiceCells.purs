@@ -668,6 +668,8 @@ cellPolyFamily src =
     "polyeuclid"       -> Just Comp.PFPolyEuclid
     "polyeuclid-pairs" -> Just Comp.PFPolyEuclidPairs
     "polyrand"         -> Just Comp.PFPolyRand
+    "polypreset"       -> Just Comp.PFPolyPreset
+    "polypresetnote"   -> Just Comp.PFPolyPresetNote
     _ -> Nothing
 
 -- | Compact body preview for the card face.

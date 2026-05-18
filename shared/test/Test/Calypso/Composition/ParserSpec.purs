@@ -13,7 +13,7 @@ import Calypso.Composition
   , PolyValue(..)
   , Statement(..)
   )
-import Calypso.Composition.Parser (parseComposition, parseStatement, prettyPolySignal)
+import Calypso.Composition.Parser (parseComposition, parseStatement, polySignalEnvelopeJson, prettyPolySignal)
 import Control.Monad.Error.Class as Control.Monad.Error.Class
 import Data.Array as Array
 import Data.Either (Either(..))
@@ -33,6 +33,7 @@ parserSpec = describe "Calypso.Composition.Parser" do
   latShortFormSpec
   tiderlPhase1Spec
   level2GrammarSpec
+  polyPresetFamilies
 
 -- ──────────────────────────────────────────────────────────────────────
 -- Shared test helpers
@@ -515,6 +516,96 @@ baseShape = describe "base polysignal shape" do
     case polysignalParse "polylfo bad gt1" of
       Left _ -> pure unit
       Right r -> fail $ "expected parse failure, got: " <> show r
+
+-- ──────────────────────────────────────────────────────────────────────
+-- polyPreset / polyPresetNote (Slab C step 2)
+-- ──────────────────────────────────────────────────────────────────────
+
+polyPresetFamilies :: Spec Unit
+polyPresetFamilies = describe "polypreset / polypresetnote" do
+  describe "polypreset cell text" do
+    it "parses an 8-slot voltage ladder" do
+      let src = "polypreset myLadder cv2 <>\n"
+              <> "  values [-5.0, -3.0, -1.0, 0.0, 1.0, 2.0, 3.0, 5.0] <>\n"
+              <> "  range  ±5v"
+      case polysignalParse src of
+        Left e -> fail $ "parse failed: " <> e
+        Right cfg -> do
+          cfg.family `shouldEqual` PFPolyPreset
+          cfg.alias `shouldEqual` "myLadder"
+          cfg.bank `shouldEqual` BankCv 1   -- AST is 0-indexed; cell-text cv2 → BankCv 1
+          cfg.outputRange `shouldEqual` Just "±5v"
+          Array.length cfg.slots `shouldEqual` 8
+          (lookupParam "value" =<< Array.index cfg.slots 0)
+            `shouldEqual` Just (PVNumber (-5.0))
+          (lookupParam "value" =<< Array.index cfg.slots 7)
+            `shouldEqual` Just (PVNumber 5.0)
+
+    it "emits the daemon's expected JSON envelope shape" do
+      let src = "polypreset myLadder cv2 <>\n"
+              <> "  values [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]"
+      case polysignalParse src of
+        Left e -> fail $ "parse failed: " <> e
+        Right cfg -> do
+          let json = polySignalEnvelopeJson cfg
+          Str.contains (Str.Pattern "\"family\":\"polypreset\"") json
+            `shouldEqual` true
+          Str.contains (Str.Pattern "\"alias\":\"myLadder\"") json
+            `shouldEqual` true
+          Str.contains (Str.Pattern "\"bank\":\"cv1\"") json
+            `shouldEqual` true
+          Str.contains (Str.Pattern "\"value\":1.0") json
+            `shouldEqual` true
+
+    it "rejects polypreset on a gate-only bank" do
+      let src = "polypreset gateLadder gt1 <>\n"
+              <> "  values [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]"
+      case polysignalParse src of
+        Left _ -> pure unit
+        Right _ -> fail "expected parse failure on gt* bank"
+
+  describe "polypresetnote cell text" do
+    it "parses a C-major scale across eight outputs" do
+      let src = "polypresetnote cMajor cv1 <>\n"
+              <> "  notes [60, 62, 64, 65, 67, 69, 71, 72] <>\n"
+              <> "  range  ±5v"
+      case polysignalParse src of
+        Left e -> fail $ "parse failed: " <> e
+        Right cfg -> do
+          cfg.family `shouldEqual` PFPolyPresetNote
+          cfg.alias `shouldEqual` "cMajor"
+          cfg.bank `shouldEqual` BankCv 0
+          Array.length cfg.slots `shouldEqual` 8
+          (lookupParam "note" =<< Array.index cfg.slots 0)
+            `shouldEqual` Just (PVInt 60)
+          (lookupParam "note" =<< Array.index cfg.slots 7)
+            `shouldEqual` Just (PVInt 72)
+
+    it "emits family=polypresetnote in the JSON envelope" do
+      -- cell-text banks are 1-indexed (cv1 = first FHX-8CV); the JSON
+      -- envelope's bank is 0-indexed (cv0).
+      let src = "polypresetnote drone cv1 <>\n"
+              <> "  notes [36, 38, 40, 41, 43, 45, 47, 48]"
+      case polysignalParse src of
+        Left e -> fail $ "parse failed: " <> e
+        Right cfg -> do
+          let json = polySignalEnvelopeJson cfg
+          Str.contains (Str.Pattern "\"family\":\"polypresetnote\"") json
+            `shouldEqual` true
+          Str.contains (Str.Pattern "\"note\":36") json `shouldEqual` true
+          Str.contains (Str.Pattern "\"note\":48") json `shouldEqual` true
+
+  describe "pretty-printer round-trip" do
+    it "round-trips polypreset through parse → pretty → parse" do
+      let src = "polypreset myLadder cv2 <>\n"
+              <> "  values [-5.0, -3.0, -1.0, 0.0, 1.0, 2.0, 3.0, 5.0]"
+      case polysignalParse src of
+        Left e -> fail $ "first parse failed: " <> e
+        Right cfg1 -> do
+          let pretty = prettyPolySignal cfg1
+          case polysignalParse pretty of
+            Left e -> fail $ "second parse failed: " <> e <> "\npretty was:\n" <> pretty
+            Right cfg2 -> cfg2 `shouldEqual` cfg1
 
 -- ──────────────────────────────────────────────────────────────────────
 -- Helpers

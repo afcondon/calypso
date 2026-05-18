@@ -418,9 +418,13 @@ instance showBank :: Show Bank where
   show (BankCv n)  = "BankCv " <> show n
   show (BankGt n)  = "BankGt " <> show n
 
--- | The six poly-family verbs supported by the cell-text grammar. Each
+-- | The poly-family verbs supported by the cell-text grammar.  Each
 -- | dictates which parameter names the slot decoder will accept (the
 -- | per-family vocabulary lives in `fh2-config`'s `FH2.PolyBank`).
+-- |
+-- | `PFPolyPreset` and `PFPolyPresetNote` (added 2026-05-18) are the
+-- | simplest families: a fixed voltage (or MIDI pitch) per output.
+-- | See `reference_polypreset_families` for the convention.
 data PolyFamily
   = PFPolyLfo
   | PFPolyClock
@@ -428,6 +432,8 @@ data PolyFamily
   | PFPolyEuclid
   | PFPolyEuclidPairs
   | PFPolyRand
+  | PFPolyPreset
+  | PFPolyPresetNote
 
 derive instance eqPolyFamily :: Eq PolyFamily
 
@@ -438,6 +444,8 @@ instance showPolyFamily :: Show PolyFamily where
   show PFPolyEuclid      = "PFPolyEuclid"
   show PFPolyEuclidPairs = "PFPolyEuclidPairs"
   show PFPolyRand        = "PFPolyRand"
+  show PFPolyPreset      = "PFPolyPreset"
+  show PFPolyPresetNote  = "PFPolyPresetNote"
 
 -- | One slot-major parameter value. Slots are opaque on the Calypso
 -- | side — we don't typecheck per-family parameter sets here, only
@@ -515,6 +523,8 @@ polyFamilyCodec = CAS.enumSum printFamily parseFamily
     PFPolyEuclid      -> "polyeuclid"
     PFPolyEuclidPairs -> "polyeuclid-pairs"
     PFPolyRand        -> "polyrand"
+    PFPolyPreset      -> "polypreset"
+    PFPolyPresetNote  -> "polypresetnote"
   parseFamily = case _ of
     "polylfo"          -> Just PFPolyLfo
     "polyclock"        -> Just PFPolyClock
@@ -522,6 +532,8 @@ polyFamilyCodec = CAS.enumSum printFamily parseFamily
     "polyeuclid"       -> Just PFPolyEuclid
     "polyeuclid-pairs" -> Just PFPolyEuclidPairs
     "polyrand"         -> Just PFPolyRand
+    "polypreset"       -> Just PFPolyPreset
+    "polypresetnote"   -> Just PFPolyPresetNote
     _ -> Nothing
 
 polyValueCodec :: JsonCodec PolyValue
