@@ -247,11 +247,17 @@ decodeStudioPostBody body = case AJ.toObject body of
     let ok = fromMaybe false (Object.lookup "ok" o >>= AJ.toBoolean)
         reply = fromMaybe "" (Object.lookup "reply" o >>= AJ.toString)
         err = fromMaybe "" (Object.lookup "error" o >>= AJ.toString)
+        details = fromMaybe "" (Object.lookup "pursErrorsJson" o >>= AJ.toString)
         total = fromMaybe 0 do
           t <- Object.lookup "timings" o
           tObj <- AJ.toObject t
           n <- Object.lookup "total" tObj >>= AJ.toNumber
           Int.fromNumber n
+        headline = if String.null err then reply else err
+        full =
+          if String.null details
+            then headline
+            else headline <> "\n\n" <> details
     in if ok
        then Right { reply, totalMs: total }
-       else Left (if String.null err then reply else err)
+       else Left full

@@ -96,18 +96,24 @@ renderStudioColumn state =
               , HE.onClick \_ -> CancelEditStudio
               ]
               [ HH.text "cancel" ]
-          , statusChip
+          , case state.studioFireStatus of
+              Just (Right { reply, totalMs }) ->
+                HH.span [ HP.class_ (H.ClassName "studio-fire-ok") ]
+                  [ HH.text $ "OK (" <> show totalMs <> "ms) — " <> reply ]
+              _ -> HH.text ""
           ]
+      , statusChip
       ]
 
+  -- Error-only block beneath the action row.  OK status is inline next
+  -- to the buttons (see above) — short and immediate.  Errors are
+  -- multi-line (purs compiler output etc.), so they get a scrollable
+  -- monospace pane that preserves whitespace.
   statusChip = case state.studioFireStatus of
-    Nothing -> HH.text ""
-    Just (Right { reply, totalMs }) ->
-      HH.span [ HP.class_ (H.ClassName "studio-fire-ok") ]
-        [ HH.text $ "OK (" <> show totalMs <> "ms) — " <> reply ]
     Just (Left err) ->
-      HH.span [ HP.class_ (H.ClassName "studio-fire-err") ]
-        [ HH.text $ "ERR: " <> err ]
+      HH.pre [ HP.class_ (H.ClassName "studio-fire-err") ]
+        [ HH.text ("ERR: " <> err) ]
+    _ -> HH.text ""
 
   notLoaded =
     HH.div [ HP.class_ (H.ClassName "studio-empty muted") ]

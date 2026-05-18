@@ -156,13 +156,15 @@ async function runBuild({ source }) {
     { cwd: root },
   );
   if (pursR.code !== 0) {
-    const candidate = (pursR.stdout || "").trim();
-    const isJson = candidate.startsWith("{");
+    // Always surface the raw compiler output — JSON-shaped when purs
+    // ran with --json, plain text otherwise.  Field name lies a bit
+    // for legacy reasons; treat it as "compiler-error details".
+    const details = ((pursR.stderr || "") + (pursR.stdout || "")).trim();
     return {
       ok: false,
       reply: "",
       error: "purs compile failed",
-      pursErrorsJson: isJson ? candidate : "",
+      pursErrorsJson: details,
       timings: {
         write: tWrite,
         purs: Date.now() - tPurs0,

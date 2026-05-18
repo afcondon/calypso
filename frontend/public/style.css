@@ -848,7 +848,20 @@ body::before {
   color: var(--fg-bright);
 }
 .studio-fire-ok { color: var(--accent-green, #4f4); margin-left: 0.5rem; }
-.studio-fire-err { color: var(--accent-red, #f55); margin-left: 0.5rem; }
+.studio-fire-err {
+  color: var(--accent-red, #f55);
+  margin: 0.5rem 0 0 0;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--accent-red, #f55);
+  background: rgba(255, 85, 85, 0.04);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  max-height: 24rem;
+  overflow: auto;
+  width: 100%;
+}
 
 .studio-body {
   display: flex;
