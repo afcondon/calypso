@@ -13,9 +13,10 @@ import Calypso.Composition
   , PolyValue(..)
   , Statement(..)
   )
-import Calypso.Composition.Parser (parseComposition, parseStatement, polySignalEnvelopeJson, prettyPolySignal)
+import Calypso.Composition.Parser (parseComposition, parseStatement, gridsCellEnvelopeJson, polySignalEnvelopeJson, prettyPolySignal)
 import Control.Monad.Error.Class as Control.Monad.Error.Class
 import Data.Array as Array
+import Data.Bifunctor (lmap)
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..))
 import Data.String (Pattern(..), contains) as Str
@@ -34,6 +35,7 @@ parserSpec = describe "Calypso.Composition.Parser" do
   tiderlPhase1Spec
   level2GrammarSpec
   polyPresetFamilies
+  gridsCellSpec
 
 -- ──────────────────────────────────────────────────────────────────────
 -- Shared test helpers
@@ -67,6 +69,7 @@ describeStmt = case _ of
   StmtTag _          -> "StmtTag"
   StmtCue _          -> "StmtCue"
   StmtSection name   -> "StmtSection " <> show name
+  StmtGridsCell _    -> "StmtGridsCell"
 
 -- | Level 2 grammar: section headers (`section <Name>`) + named cues
 -- | (`<tvoice>[:suffix] = body`). Mvoice for a named cue is resolved
@@ -606,6 +609,59 @@ polyPresetFamilies = describe "polypreset / polypresetnote" do
           case polysignalParse pretty of
             Left e -> fail $ "second parse failed: " <> e <> "\npretty was:\n" <> pretty
             Right cfg2 -> cfg2 `shouldEqual` cfg1
+
+-- ──────────────────────────────────────────────────────────────────────
+-- grids cell-text (Grids vmod Phase 4)
+-- ──────────────────────────────────────────────────────────────────────
+
+gridsCellSpec :: Spec Unit
+gridsCellSpec = describe "grids cell-text" do
+  it "parses a header + three indented param lines" do
+    let src = "grids myKit fh2 13\n"
+            <> "  fillBd = 220\n"
+            <> "  fillSd = 100\n"
+            <> "  fillHh = 200"
+    case parseStatement src of
+      Right (StmtGridsCell g) -> do
+        g.alias `shouldEqual` "myKit"
+        g.deviceName `shouldEqual` "FH-2"
+        g.channel `shouldEqual` 13
+        g.fillBd `shouldEqual` 220
+        g.fillSd `shouldEqual` 100
+        g.fillHh `shouldEqual` 200
+        -- Defaults survive for unspecified slots.
+        g.x `shouldEqual` 128
+        g.randomness `shouldEqual` 0
+      other -> failWith "StmtGridsCell" (lmap parseErrorMessage other)
+
+  it "round-trips a grids cell through gridsCellEnvelopeJson" do
+    let src = "grids drums fh2qd 14\n"
+            <> "  x = 200\n"
+            <> "  y = 50\n"
+            <> "  randomness = 64"
+    case parseStatement src of
+      Left e -> fail $ "parse failed: " <> parseErrorMessage e
+      Right (StmtGridsCell g) -> do
+        let json = gridsCellEnvelopeJson g
+        Str.contains (Str.Pattern "\"alias\":\"drums\"") json
+          `shouldEqual` true
+        Str.contains (Str.Pattern "\"deviceName\":\"FH-2\"") json
+          `shouldEqual` true
+        Str.contains (Str.Pattern "\"channel\":14") json
+          `shouldEqual` true
+        Str.contains (Str.Pattern "\"x\":200") json
+          `shouldEqual` true
+        Str.contains (Str.Pattern "\"randomness\":64") json
+          `shouldEqual` true
+      other -> failWith "StmtGridsCell" (lmap parseErrorMessage other)
+
+  it "accepts quoted device name" do
+    let src = "grids weird \"My Custom Port\" 5\n"
+            <> "  fillBd = 100"
+    case parseStatement src of
+      Right (StmtGridsCell g) -> do
+        g.deviceName `shouldEqual` "My Custom Port"
+      other -> failWith "StmtGridsCell" (lmap parseErrorMessage other)
 
 -- ──────────────────────────────────────────────────────────────────────
 -- Helpers

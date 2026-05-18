@@ -1023,7 +1023,8 @@ compositionStatements src =
         (\i s -> { lineNum: i + 1, source: stripModuleLineComment s }) filtered
       nonEmpty = Array.filter (\e -> not (Str.null (Str.trim e.source))) indexed
   in Comp.collapsePolySignalEntries
-       (Comp.collapseMacroEntries nonEmpty)
+       (Comp.collapseGridsEntries
+         (Comp.collapseMacroEntries nonEmpty))
 
 -- | Replace every `cue <id>` block (header line + any indented
 -- | continuation lines) with a blank line per replaced line, so the
@@ -1094,7 +1095,8 @@ cellStatements src =
         (\i s -> { lineNum: i + 1, source: stripLineComment s }) lines
       nonEmpty = Array.filter (\e -> not (Str.null (Str.trim e.source))) indexed
   in Comp.collapsePolySignalEntries
-       (Comp.collapseMacroEntries nonEmpty)
+       (Comp.collapseGridsEntries
+         (Comp.collapseMacroEntries nonEmpty))
 
 -- | Fire a list of statements in order against /eval.  Stops on the
 -- | first error and reports the failing line; on full success reports

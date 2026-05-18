@@ -12,10 +12,12 @@ module Calypso.Composition.Parser
   , statementP
   , collapsePolySignalBlocks
   , collapsePolySignalEntries
+  , collapseGridsEntries
   , collapseMacroEntries
   , polySignalEnvelopeJson
   , prettyPolySignal
   , autoformatPolySignalCell
+  , gridsCellEnvelopeJson
   ) where
 
 import Prelude
@@ -35,6 +37,8 @@ import Calypso.Composition
   , Fh2VoiceMode(..)
   , Fh2ModeConfig
   , GateBinding
+  , GridsCellConfig
+  , defaultGridsCellConfig
   , Latency
   , MidiCcBinding
   , MidiNoteBinding
@@ -224,6 +228,7 @@ statementP = choice
   , try (StmtLinkSync <$> linkSyncP)
   , try (StmtControl <$> controlP)
   , try (StmtTag <$> tagDeclP)
+  , try (StmtGridsCell <$> gridsCellP)
   , try (StmtBinding <$> bindingP)
   , try (StmtDeviceConfig <$> deviceConfigP)
   , try (StmtDevice <$> deviceP)
@@ -303,6 +308,103 @@ linkSyncP = do
     "on" -> pure true
     "off" -> pure false
     other -> fail ("link sync expects on|off, got: " <> other)
+
+-- | `grids <alias> <device> <channel>` header + indented `<param> =
+-- | <int>` body.  Builds a `GridsCellConfig` ready to ship as the
+-- | `grids <json>` wire frame.
+-- |
+-- | Examples:
+-- |
+-- |     grids myKit fh2 13
+-- |       fillBd = 220
+-- |       fillSd = 100
+-- |       fillHh = 200
+-- |
+-- | The `device` token resolves through `gridsDeviceTokenToPortName`
+-- | for a small set of known aliases (fh2, fh2qd, iac); quoted
+-- | strings pass through verbatim so users with non-standard port
+-- | names can write e.g. `"My Custom Port"`.
+gridsCellP :: Parser String GridsCellConfig
+gridsCellP = do
+  _ <- keyword "grids"
+  alias <- identP
+  _ <- hspace1
+  device <- gridsDeviceP
+  _ <- hspace1
+  channel <- gridsChannelP
+  _ <- hspace
+  _ <- optionMaybe commentP
+  _ <- optionMaybe lineEndingP
+  _ <- many blankLineP
+  paramLines <- many (try gridsParamLineP)
+  let initial = defaultGridsCellConfig alias device channel
+  pure (foldl applyGridsParam initial paramLines)
+
+-- | One indented body line: `<indent> <name> = <int>`.
+gridsParamLineP :: Parser String { name :: String, value :: Int }
+gridsParamLineP = do
+  _ <- takeWhile1 isHSpaceCP   -- non-empty indent
+  name <- identP
+  _ <- hspace
+  _ <- char '='
+  _ <- hspace
+  value <- intDecimal
+  _ <- hspace
+  _ <- optionMaybe commentP
+  _ <- optionMaybe lineEndingP
+  pure { name, value }
+
+-- | Device token: bare identifier (mapped via known aliases) or
+-- | quoted string (verbatim CoreMIDI port name).
+gridsDeviceP :: Parser String String
+gridsDeviceP =
+  try quotedStringP <|> (gridsDeviceTokenToPortName <$> identP)
+
+-- | Map a small set of friendly identifiers to their CoreMIDI port
+-- | names.  Unknown tokens fall through verbatim — works fine if the
+-- | user's port has an identifier-shaped name.
+gridsDeviceTokenToPortName :: String -> String
+gridsDeviceTokenToPortName = case _ of
+  "fh2"   -> "FH-2"
+  "fh2qd" -> "FH-2"
+  "iac"   -> "IAC Driver Tidal"
+  other   -> other
+
+-- | `ch<N>` or bare `<N>` — accept either form for the channel.
+gridsChannelP :: Parser String Int
+gridsChannelP = try chPrefixed <|> intDecimal
+  where
+  chPrefixed = do
+    _ <- string "ch"
+    intDecimal
+
+-- | A `"..."` literal — no escape sequences, just balanced quotes.
+quotedStringP :: Parser String String
+quotedStringP = do
+  _ <- char '"'
+  raw <- takeWhile1 (\cp -> cp /= cpQuote && cp /= cpNewline)
+  _ <- char '"'
+  pure raw
+
+cpQuote :: CodePoint
+cpQuote = codePointFromChar '"'
+
+-- | Apply one param-line update to a GridsCellConfig.  Unknown
+-- | parameter names are silently ignored (forward-compat for future
+-- | additions like `swing`).
+applyGridsParam
+  :: GridsCellConfig
+  -> { name :: String, value :: Int }
+  -> GridsCellConfig
+applyGridsParam cfg { name, value } = case name of
+  "x"          -> cfg { x          = value }
+  "y"          -> cfg { y          = value }
+  "fillBd"     -> cfg { fillBd     = value }
+  "fillSd"     -> cfg { fillSd     = value }
+  "fillHh"     -> cfg { fillHh     = value }
+  "randomness" -> cfg { randomness = value }
+  "mode"       -> cfg { mode       = value }
+  _            -> cfg
 
 -- | `control <name> = <number>`. Initial value for the live-control
 -- | bus slot of the given name.
@@ -1402,6 +1504,53 @@ macroVerbs =
 -- | reporting and strips trailing `<>` continuation markers as it
 -- | joins. Lines whose verb isn't in `macroVerbs` pass through
 -- | unchanged.
+-- | Collapse multi-line `grids` cell blocks (header + indented param
+-- | lines) into a single-line `grids <json>` wire frame ready for the
+-- | purerl-tidal WS verb of the same name.
+-- |
+-- | Mirrors collapsePolySignalEntries but indentation-driven, not
+-- | continuation-marker-driven: a `grids ` header consumes every
+-- | subsequent line whose first column is whitespace.
+collapseGridsEntries
+  :: Array { lineNum :: Int, source :: String }
+  -> Array { lineNum :: Int, source :: String }
+collapseGridsEntries entries = go [] entries
+  where
+  go acc remaining = case Array.uncons remaining of
+    Nothing -> Array.reverse acc
+    Just { head, tail } ->
+      if isGridsHeader head.source then
+        let { block, rest } = collectGridsBlock head tail
+            joined = Str.joinWith "\n" (map _.source block)
+        in case parseStatement joined of
+          Right (StmtGridsCell g) ->
+            let wire = "grids " <> gridsCellEnvelopeJson g
+            in go (Array.cons { lineNum: head.lineNum, source: wire } acc)
+                  rest
+          _ -> go (Array.cons head acc) tail
+      else
+        go (Array.cons head acc) tail
+
+  isGridsHeader s = case Str.stripPrefix (Str.Pattern "grids ") (Str.trim s) of
+    Just _ -> true
+    Nothing -> false
+
+  -- Consume the header line plus all subsequent indentation-prefixed
+  -- lines.  Returns the block (header + body) and the unconsumed tail.
+  collectGridsBlock header xs = go2 [header] xs
+    where
+    go2 taken rest = case Array.uncons rest of
+      Nothing -> { block: Array.reverse taken, rest: [] }
+      Just { head: h, tail: t } ->
+        if startsWithSpace h.source then
+          go2 (Array.cons h taken) t
+        else
+          { block: Array.reverse taken, rest }
+
+  startsWithSpace s = case SCU.charAt 0 s of
+    Just c -> c == ' ' || c == '\t'
+    Nothing -> false
+
 collapseMacroEntries
   :: Array { lineNum :: Int, source :: String }
   -> Array { lineNum :: Int, source :: String }
@@ -1466,6 +1615,22 @@ firstIdent s =
 -- | round-trip identity); the envelope has flat unwrapped values.
 -- | `outputRange` is omitted from the wire when Nothing — fh2-config
 -- | treats absence as "leave the bank's existing output ranges alone".
+-- | Serialise a `GridsCellConfig` to the JSON envelope shape
+-- | purerl-tidal's `grids <json>` WS verb expects.
+gridsCellEnvelopeJson :: GridsCellConfig -> String
+gridsCellEnvelopeJson cfg =
+  "{\"alias\":\"" <> cfg.alias
+    <> "\",\"deviceName\":\"" <> cfg.deviceName
+    <> "\",\"channel\":" <> show cfg.channel
+    <> ",\"x\":" <> show cfg.x
+    <> ",\"y\":" <> show cfg.y
+    <> ",\"fillBd\":" <> show cfg.fillBd
+    <> ",\"fillSd\":" <> show cfg.fillSd
+    <> ",\"fillHh\":" <> show cfg.fillHh
+    <> ",\"randomness\":" <> show cfg.randomness
+    <> ",\"mode\":" <> show cfg.mode
+    <> "}"
+
 polySignalEnvelopeJson :: PolySignalConfig -> String
 polySignalEnvelopeJson cfg =
   "{\"bank\":\"" <> bankToWire cfg.bank

@@ -31,6 +31,8 @@ module Calypso.Composition
   , ControlStmt
   , TagStmt
   , CueStmt
+  , GridsCellConfig
+  , defaultGridsCellConfig
   , compositionCodec
   , statementCodec
   , deviceCodec
@@ -38,6 +40,7 @@ module Calypso.Composition
   , controlStmtCodec
   , tagStmtCodec
   , cueStmtCodec
+  , gridsCellConfigCodec
   ) where
 
 import Prelude
@@ -85,6 +88,11 @@ data Statement
   | StmtSection String              -- ^ `# <Name>` section header; sets
                                     --   the mvoice context for subsequent
                                     --   `<tvoice> = <body>` declarations
+  -- Grids vmod (2026-05-18): a BEAM-native virtual module declared
+  -- inline from a cell.  Static scalar values per parameter slot;
+  -- richer Pattern slots are expressed in Studio.purs.  See
+  -- `reference_grids_cell_text` for the cell-text grammar.
+  | StmtGridsCell GridsCellConfig
 
 derive instance eqStatement :: Eq Statement
 
@@ -137,9 +145,54 @@ cueStmtCodec = CAR.object "CueStmt"
   , body: CA.string
   }
 
+-- | A Grids cell declaration.  Header carries the alias + device
+-- | port name + MIDI channel; the body sets each of the seven
+-- | parameter slots to a scalar (Int).  Slots not present in the
+-- | cell take the system default (128 for X/Y/fills, 0 for
+-- | randomness/mode) when the wire frame reaches purerl-tidal.
+type GridsCellConfig =
+  { alias :: String
+  , deviceName :: String   -- raw CoreMIDI port name (e.g. "FH-2")
+  , channel :: Int
+  , x :: Int
+  , y :: Int
+  , fillBd :: Int
+  , fillSd :: Int
+  , fillHh :: Int
+  , randomness :: Int
+  , mode :: Int
+  }
+
+gridsCellConfigCodec :: JsonCodec GridsCellConfig
+gridsCellConfigCodec = CAR.object "GridsCellConfig"
+  { alias: CA.string
+  , deviceName: CA.string
+  , channel: CA.int
+  , x: CA.int
+  , y: CA.int
+  , fillBd: CA.int
+  , fillSd: CA.int
+  , fillHh: CA.int
+  , randomness: CA.int
+  , mode: CA.int
+  }
+
+-- | Sensible defaults for unspecified slots.  Matches the engine's
+-- | central-node values where every slot is 128 except randomness
+-- | (off) and mode (Drums).
+defaultGridsCellConfig :: String -> String -> Int -> GridsCellConfig
+defaultGridsCellConfig alias deviceName channel =
+  { alias, deviceName, channel
+  , x: 128, y: 128
+  , fillBd: 128, fillSd: 128, fillHh: 128
+  , randomness: 0
+  , mode: 0
+  }
+
 data StatementTag
   = TagDevice | TagDeviceConfig | TagBinding
   | TagBpm | TagLinkSync | TagControl | TagTag | TagCue | TagSection
+  | TagGridsCell
 
 derive instance eqStatementTag :: Eq StatementTag
 
@@ -156,6 +209,7 @@ statementCodec = CAS.taggedSum "Statement" printTag parseTag decodeBy encodeBy
     TagTag -> "tag"
     TagCue -> "cue"
     TagSection -> "section"
+    TagGridsCell -> "gridsCell"
   parseTag = case _ of
     "device" -> Just TagDevice
     "deviceConfig" -> Just TagDeviceConfig
@@ -166,6 +220,7 @@ statementCodec = CAS.taggedSum "Statement" printTag parseTag decodeBy encodeBy
     "tag" -> Just TagTag
     "cue" -> Just TagCue
     "section" -> Just TagSection
+    "gridsCell" -> Just TagGridsCell
     _ -> Nothing
   decodeBy :: StatementTag -> Either Statement (Json -> Either JsonDecodeError Statement)
   decodeBy = case _ of
@@ -178,6 +233,7 @@ statementCodec = CAS.taggedSum "Statement" printTag parseTag decodeBy encodeBy
     TagTag          -> Right (map StmtTag          <<< Codec.decode tagStmtCodec)
     TagCue          -> Right (map StmtCue          <<< Codec.decode cueStmtCodec)
     TagSection      -> Right (map StmtSection      <<< Codec.decode CA.string)
+    TagGridsCell    -> Right (map StmtGridsCell    <<< Codec.decode gridsCellConfigCodec)
   encodeBy :: Statement -> Tuple StatementTag (Maybe Json)
   encodeBy = case _ of
     StmtDevice d       -> Tuple TagDevice       (Just (Codec.encode deviceCodec d))
@@ -189,6 +245,7 @@ statementCodec = CAS.taggedSum "Statement" printTag parseTag decodeBy encodeBy
     StmtTag t          -> Tuple TagTag          (Just (Codec.encode tagStmtCodec t))
     StmtCue c          -> Tuple TagCue          (Just (Codec.encode cueStmtCodec c))
     StmtSection name   -> Tuple TagSection      (Just (Codec.encode CA.string name))
+    StmtGridsCell g    -> Tuple TagGridsCell    (Just (Codec.encode gridsCellConfigCodec g))
 
 -- ───────────────────────────────────────────────────────────────────
 -- Devices

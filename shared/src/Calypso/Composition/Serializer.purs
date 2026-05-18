@@ -33,6 +33,7 @@ import Calypso.Composition
   , Fh2VoiceMode(..)
   , Fh2ModeConfig
   , GateBinding
+  , GridsCellConfig
   , Latency
   , MidiCcBinding
   , MidiNoteBinding
@@ -102,6 +103,7 @@ serializeStatement = case _ of
   StmtDevice d -> renderDevice d
   StmtDeviceConfig dc -> renderDeviceConfig dc
   StmtBinding b -> renderBinding b
+  StmtGridsCell g -> renderGridsCell g
 
 -- ───────────────────────────────────────────────────────────────────
 -- Numbers
@@ -330,3 +332,28 @@ renderCvMode = case _ of
   CvVoct -> "voct"
   CvLiteral -> "literal"
   CvSampleMap -> "sample-map"
+
+-- | Render a `GridsCellConfig` as canonical cell text.  Mirrors the
+-- | parser's grammar: header line + one indented `<param> = <int>`
+-- | per non-default slot.
+renderGridsCell :: GridsCellConfig -> String
+renderGridsCell g =
+  let header = "grids " <> g.alias <> " " <> showDevice <> " ch"
+                       <> show g.channel
+      showDevice = case g.deviceName of
+        "FH-2"             -> "fh2"
+        "IAC Driver Tidal" -> "iac"
+        other              -> "\"" <> other <> "\""
+      paramLines = Array.catMaybes
+        [ paramLine "x"          g.x          128
+        , paramLine "y"          g.y          128
+        , paramLine "fillBd"     g.fillBd     128
+        , paramLine "fillSd"     g.fillSd     128
+        , paramLine "fillHh"     g.fillHh     128
+        , paramLine "randomness" g.randomness 0
+        , paramLine "mode"       g.mode       0
+        ]
+      paramLine name v dflt =
+        if v == dflt then Nothing
+        else Just ("  " <> name <> " = " <> show v)
+  in Str.joinWith "\n" (Array.cons header paramLines)
