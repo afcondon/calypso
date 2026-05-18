@@ -1421,12 +1421,25 @@ polySignalEnvelopeJson :: PolySignalConfig -> String
 polySignalEnvelopeJson cfg =
   "{\"bank\":\"" <> bankToWire cfg.bank
     <> "\",\"family\":\"" <> familyToWire cfg.family
-    <> "\"" <> rangeField cfg.outputRange
+    <> "\"" <> aliasField cfg.alias
+    <> rangeField cfg.outputRange
     <> ",\"slots\":[" <> Str.joinWith "," (map slotToJson cfg.slots) <> "]}"
   where
   rangeField = case _ of
     Nothing -> ""
     Just r -> ",\"outputRange\":\"" <> r <> "\""
+
+  -- | Emit the cell-text owner name (`polylfo myLFO main` → "myLFO")
+  -- | as the JSON envelope's `alias` field.  Port-claims-design step
+  -- | 4b — the daemon uses this as the `OwnerId` for the polysignal
+  -- | claim, so re-firing the same alias is a same-owner update and
+  -- | firing under a new alias is partial-conflict against existing
+  -- | claims on overlapping slots.  Empty when the parser produced
+  -- | no name; the daemon then derives `<family>-<bank>` as a
+  -- | back-compat stable identity.
+  aliasField a
+    | a == "" = ""
+    | otherwise = ",\"alias\":\"" <> a <> "\""
 
 bankToWire :: Bank -> String
 bankToWire = case _ of
