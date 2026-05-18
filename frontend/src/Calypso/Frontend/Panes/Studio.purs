@@ -14,6 +14,7 @@ module Calypso.Frontend.Panes.Studio (renderStudioColumn) where
 import Prelude
 
 import Data.Array as Array
+import Data.Either (Either(..))
 import Data.Maybe (Maybe(..))
 import Data.String as Str
 import Halogen as H
@@ -36,7 +37,9 @@ renderStudioColumn :: forall m. State -> H.ComponentHTML Action Slots m
 renderStudioColumn state =
   HH.section [ HP.class_ (H.ClassName "pane pane-studio") ]
     [ studioHeader
-    , body
+    , case state.studioBuffer of
+        Just buf -> editPanel buf
+        Nothing -> body
     ]
   where
   body = case state.studio of
@@ -45,8 +48,22 @@ renderStudioColumn state =
 
   studioHeader =
     HH.div [ HP.class_ (H.ClassName "studio-header") ]
-      [ HH.span [ HP.class_ (H.ClassName "studio-title") ]
-          [ HH.text "Studio" ]
+      ([ HH.span [ HP.class_ (H.ClassName "studio-title") ]
+            [ HH.text "Studio" ]
+       ] <> headerButtons)
+
+  headerButtons = case state.studioBuffer of
+    Just _ ->
+      -- In edit mode the refresh + edit buttons are hidden; cancel /
+      -- save are inline below the textarea.
+      []
+    Nothing ->
+      [ HH.button
+          [ HP.class_ (H.ClassName "studio-refresh-btn")
+          , HP.title "Open Studio.purs for editing (Workstream 2 fast pipeline)"
+          , HE.onClick \_ -> StartEditStudio
+          ]
+          [ HH.text "📝 edit" ]
       , HH.button
           [ HP.class_ (H.ClassName "studio-refresh-btn")
           , HP.title "Re-fetch the Studio snapshot from the daemon"
@@ -54,6 +71,43 @@ renderStudioColumn state =
           ]
           [ HH.text "↻ refresh" ]
       ]
+
+  -- Inline edit buffer.  Plain textarea (no syntax highlighting yet —
+  -- a CodeMirror surface is the obvious upgrade once the fast pipeline
+  -- is in steady use).  Save submits, Cancel drops the buffer.
+  editPanel buf =
+    HH.div [ HP.class_ (H.ClassName "studio-edit-panel") ]
+      [ HH.textarea
+          [ HP.class_ (H.ClassName "studio-edit-textarea")
+          , HP.rows 30
+          , HP.spellcheck false
+          , HP.value buf
+          , HE.onValueInput UpdateStudioBuffer
+          ]
+      , HH.div [ HP.class_ (H.ClassName "studio-edit-actions") ]
+          [ HH.button
+              [ HP.class_ (H.ClassName "studio-save-btn")
+              , HE.onClick \_ -> SaveStudio
+              , HP.title "POST /studio-source — write + build + reload-baseline (~700ms)"
+              ]
+              [ HH.text "💾 save Studio" ]
+          , HH.button
+              [ HP.class_ (H.ClassName "studio-cancel-btn")
+              , HE.onClick \_ -> CancelEditStudio
+              ]
+              [ HH.text "cancel" ]
+          , statusChip
+          ]
+      ]
+
+  statusChip = case state.studioFireStatus of
+    Nothing -> HH.text ""
+    Just (Right { reply, totalMs }) ->
+      HH.span [ HP.class_ (H.ClassName "studio-fire-ok") ]
+        [ HH.text $ "OK (" <> show totalMs <> "ms) — " <> reply ]
+    Just (Left err) ->
+      HH.span [ HP.class_ (H.ClassName "studio-fire-err") ]
+        [ HH.text $ "ERR: " <> err ]
 
   notLoaded =
     HH.div [ HP.class_ (H.ClassName "studio-empty muted") ]

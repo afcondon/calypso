@@ -16,20 +16,34 @@ module Calypso.Frontend.Studio
   , StudioOwner
   , StudioConflict
   , StudioSnapshot
+  , StudioSourceFetch
+  , StudioSourceResult
+  , StudioSourceTimings
   , studioSnapshotCodec
   , fetchStudioSnapshot
+  , fetchStudioSource
+  , postStudioSource
   ) where
 
 import Prelude
 
+import Affjax.RequestBody (string) as RB
+import Affjax.RequestHeader (RequestHeader) as AX
 import Affjax.ResponseFormat as RF
+import Affjax.StatusCode (StatusCode(..)) as AX
 import Affjax.Web (defaultRequest, printError, request) as AX
+import Data.Argonaut.Core as AJ
+import Data.Argonaut.Core (stringify)
 import Data.Codec.Argonaut (JsonCodec)
 import Data.Codec.Argonaut as CA
 import Data.Codec.Argonaut.Record as CAR
 import Data.Either (Either(..))
 import Data.HTTP.Method (Method(..))
+import Data.Int as Int
+import Data.Maybe (Maybe(..), fromMaybe)
+import Data.String as String
 import Effect.Aff (Aff)
+import Foreign.Object as Object
 
 import Calypso.Frontend.Config (backendUrl)
 
@@ -150,3 +164,94 @@ fetchStudioSnapshot = do
     Right { body } -> case CA.decode studioSnapshotCodec body of
       Left decodeErr -> Left ("studio decode: " <> CA.printJsonDecodeError decodeErr)
       Right snap -> Right snap
+
+-- | Studio.purs source on disk — GET /studio-source.
+type StudioSourceFetch =
+  { ok :: Boolean
+  , source :: String
+  , error :: String
+  }
+
+type StudioSourceTimings =
+  { write :: Int
+  , purs :: Int
+  , be :: Int
+  , erlc :: Int
+  , ws :: Int
+  , total :: Int
+  }
+
+type StudioSourceResult =
+  { ok :: Boolean
+  , reply :: String
+  , error :: String
+  , pursErrorsJson :: String
+  , timings :: StudioSourceTimings
+  }
+
+studioSourceFetchCodec :: JsonCodec StudioSourceFetch
+studioSourceFetchCodec = CAR.object "StudioSourceFetch"
+  { ok: CA.boolean
+  , source: CA.string
+  , error: CA.string
+  }
+
+-- | GET /studio-source.  Auth-free; returns the current Studio.purs
+-- | source so the frontend pane can populate its edit buffer.
+fetchStudioSource :: Aff (Either String String)
+fetchStudioSource = do
+  result <- AX.request $ AX.defaultRequest
+    { method = Left GET
+    , url = backendUrl <> "/studio-source"
+    , responseFormat = RF.json
+    }
+  pure case result of
+    Left err -> Left ("studio-source fetch: " <> AX.printError err)
+    Right { body } -> case CA.decode studioSourceFetchCodec body of
+      Left decodeErr ->
+        Left ("studio-source decode: " <> CA.printJsonDecodeError decodeErr)
+      Right r ->
+        if r.ok then Right r.source else Left r.error
+
+-- | POST /studio-source `{source}`.  Caller supplies the auth header
+-- | array (pen).  Returns the timings + reply on success or an error
+-- | string on failure.  Mirrors `buildSessionRequest` in Shell.purs.
+postStudioSource
+  :: Array AX.RequestHeader
+  -> String
+  -> Aff (Either String { reply :: String, totalMs :: Int })
+postStudioSource authHeaders src = do
+  let body = stringify
+        ( AJ.fromObject (Object.singleton "source" (AJ.fromString src)) )
+  result <- AX.request $ AX.defaultRequest
+    { method = Left POST
+    , url = backendUrl <> "/studio-source"
+    , responseFormat = RF.json
+    , content = Just (RB.string body)
+    , headers = authHeaders
+    }
+  pure case result of
+    Left err -> Left (AX.printError err)
+    Right r
+      | r.status == AX.StatusCode 200 -> decodeStudioPostBody r.body
+      | r.status == AX.StatusCode 409 ->
+          Left "studio-source: pen-held — take the pen first"
+      | otherwise -> Left ("studio-source: HTTP " <> show r.status)
+
+decodeStudioPostBody
+  :: AJ.Json
+  -> Either String { reply :: String, totalMs :: Int }
+decodeStudioPostBody body = case AJ.toObject body of
+  Nothing -> Left "studio-source: response not an object"
+  Just o ->
+    let ok = fromMaybe false (Object.lookup "ok" o >>= AJ.toBoolean)
+        reply = fromMaybe "" (Object.lookup "reply" o >>= AJ.toString)
+        err = fromMaybe "" (Object.lookup "error" o >>= AJ.toString)
+        total = fromMaybe 0 do
+          t <- Object.lookup "timings" o
+          tObj <- AJ.toObject t
+          n <- Object.lookup "total" tObj >>= AJ.toNumber
+          Int.fromNumber n
+    in if ok
+       then Right { reply, totalMs: total }
+       else Left (if String.null err then reply else err)

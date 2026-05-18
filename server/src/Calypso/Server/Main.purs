@@ -62,6 +62,7 @@ import Calypso.Server.Session (EvalRequest, EvalResponse, ModulePatch(..), Sessi
 import Calypso.Server.Session as Session
 import Calypso.Server.Arm (armCue, armRequestCodec, armResultCodec)
 import Calypso.Server.SessionSource (buildSession, sessionSourceRequestCodec, sessionSourceResultCodec)
+import Calypso.Server.StudioSource (buildStudio, fetchStudio, studioSourceFetchCodec, studioSourceRequestCodec, studioSourceResultCodec)
 import Calypso.Server.Studio (getStudio, studioSnapshotCodec)
 import Calypso.Server.Subscribers (Subscribers)
 import Calypso.Server.Subscribers as Subscribers
@@ -135,6 +136,10 @@ data Route
   -- devices, instruments, drum kits, and any reservation conflicts.
   -- The frontend's Studio pane consumes this; reservations Phase 1b.
   | StudioRoute
+  -- POST {source} — write Studio.purs and rebuild via the per-cell
+  -- pipeline (purs --filter + backend-erl --filter + erlc).
+  -- ~700ms warm-toolchain.  Workstream 2 of studio-pane-day-plan.md.
+  | StudioSource
 
 derive instance Generic Route _
 
@@ -158,6 +163,7 @@ route = root $ sum
   , "Arm": "arm" / noArgs
   , "SessionSource": "session-source" / noArgs
   , "StudioRoute": "studio" / noArgs
+  , "StudioSource": "studio-source" / noArgs
   }
 
 -- ============================================================
@@ -885,6 +891,26 @@ mkRouter ctx req@{ route: r, method, body } =
             Right snap -> ok' jsonCors (stringify (CA.encode studioSnapshotCodec snap))
         _ -> response' Status.methodNotAllowed jsonCors
           (errorJson "MethodNotAllowed" "/studio accepts GET")
+
+      StudioSource -> case method of
+        Get -> do
+          result <- liftAff fetchStudio
+          ok' jsonCors (stringify (CA.encode studioSourceFetchCodec result))
+        Post -> do
+          authResult <- requirePen ctx req
+          case authResult of
+            Left r' -> pure r'
+            Right sid -> do
+              bodyStr <- toString body
+              case parseBody studioSourceRequestCodec bodyStr of
+                Left msg -> badRequest' jsonCors (errorJson "BadRequest" msg)
+                Right req' -> do
+                  result <- liftAff (buildStudio req')
+                  liftEffect $ Pen.heartbeat ctx.penStore sid
+                  ok' jsonCors
+                    (stringify (CA.encode studioSourceResultCodec result))
+        _ -> response' Status.methodNotAllowed jsonCors
+          (errorJson "MethodNotAllowed" "/studio-source accepts GET or POST")
 
       ProposalsRoute -> case method of
         Get -> do

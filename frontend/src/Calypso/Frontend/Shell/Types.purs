@@ -896,6 +896,13 @@ type State =
   -- | on session-load (Welcome broadcast) and after a successful
   -- | typeful-composition fire (reload-baseline repopulates Studio).
   , studio :: Maybe StudioSnapshot
+  -- | Workstream 2 inline-edit state.  Nothing = read-only view;
+  -- | Just buf = textarea showing current Studio.purs (or a user-edited
+  -- | copy).  Save → POST /studio-source → walker re-runs.
+  , studioBuffer :: Maybe String
+  -- | Last result of a POST /studio-source — total ms on success,
+  -- | an error string on failure; Nothing = no save attempted yet.
+  , studioFireStatus :: Maybe (Either String { reply :: String, totalMs :: Int })
   }
 
 type Slots =
@@ -982,4 +989,13 @@ data Action
   -- | composition fire; also user-triggerable via the pane's refresh
   -- | button.
   | RefreshStudio
+  -- | Workstream 2 (2026-05-18): inline Studio.purs editing.
+  --   StartEditStudio fetches /studio-source and opens the edit buffer.
+  --   UpdateStudioBuffer is the textarea input handler.
+  --   SaveStudio POSTs the buffer; on success the walker re-runs.
+  --   CancelEditStudio drops the buffer without saving.
+  | StartEditStudio
+  | UpdateStudioBuffer String
+  | SaveStudio
+  | CancelEditStudio
   | Startup

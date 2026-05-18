@@ -809,6 +809,47 @@ body::before {
   color: var(--fg-bright);
 }
 
+/* Workstream 2 — inline Studio.purs edit panel. */
+.studio-edit-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem;
+}
+.studio-edit-textarea {
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--fg-dim);
+  padding: 0.5rem;
+  resize: vertical;
+  box-sizing: border-box;
+}
+.studio-edit-actions {
+  display: flex;
+  flex-direction: row;
+  gap: 0.5rem;
+  align-items: center;
+}
+.studio-save-btn, .studio-cancel-btn {
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  padding: 0.2rem 0.8rem;
+  background: transparent;
+  border: 1px solid var(--fg-dim);
+  color: var(--fg);
+  cursor: pointer;
+}
+.studio-save-btn:hover, .studio-cancel-btn:hover {
+  border-color: var(--fg);
+  color: var(--fg-bright);
+}
+.studio-fire-ok { color: var(--accent-green, #4f4); margin-left: 0.5rem; }
+.studio-fire-err { color: var(--accent-red, #f55); margin-left: 0.5rem; }
+
 .studio-body {
   display: flex;
   flex-direction: column;

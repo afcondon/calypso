@@ -195,6 +195,8 @@ initialState _ =
   , cuePending: Set.empty
   , cellHistory: Map.empty
   , studio: Nothing
+  , studioBuffer: Nothing
+  , studioFireStatus: Nothing
   }
 
 debounceMs :: Milliseconds
@@ -738,6 +740,42 @@ handleAction = case _ of
     case result of
       Left err -> H.modify_ _ { transportError = Just err }
       Right snap -> H.modify_ _ { studio = Just snap }
+  StartEditStudio -> do
+    -- Fetch the current Studio.purs source from disk via /studio-source
+    -- and open the inline edit buffer.  On fetch failure surface via
+    -- transportError; the pane stays in read-only mode.
+    result <- H.liftAff Studio.fetchStudioSource
+    case result of
+      Left err -> H.modify_ _ { transportError = Just err }
+      Right src -> H.modify_ _
+        { studioBuffer = Just src
+        , studioFireStatus = Nothing
+        }
+  UpdateStudioBuffer src ->
+    H.modify_ _ { studioBuffer = Just src }
+  CancelEditStudio ->
+    H.modify_ _ { studioBuffer = Nothing, studioFireStatus = Nothing }
+  SaveStudio -> do
+    s <- H.get
+    case s.studioBuffer of
+      Nothing -> pure unit
+      Just src -> do
+        let authHeaders = case s.myId of
+              Nothing -> []
+              Just sid ->
+                [ AX.RequestHeader "X-Atelier-Subscriber-Id"
+                    (unSubscriberId sid)
+                ]
+        result <- H.liftAff (Studio.postStudioSource authHeaders src)
+        H.modify_ _ { studioFireStatus = Just result }
+        case result of
+          Right _ -> do
+            -- Build + reload-baseline succeeded.  Drop the edit buffer,
+            -- re-fetch the Studio snapshot so the pane reflects the new
+            -- rig declarations + cleared/new claim conflicts.
+            H.modify_ _ { studioBuffer = Nothing }
+            handleAction RefreshStudio
+          Left _ -> pure unit  -- error already in studioFireStatus
   ScheduleCompile -> do
     s <- H.get
     case s.pendingCompile of
