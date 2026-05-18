@@ -19,6 +19,30 @@ import {
 import { spawn, execFile } from "node:child_process";
 import { join, resolve } from "node:path";
 
+// Buffer-vs-disk divergence logger.  See SessionSource.js for context.
+function logDivergence(diskPath, incomingSource, label) {
+  if (!existsSync(diskPath)) return;
+  let onDisk;
+  try { onDisk = readFileSync(diskPath, "utf-8"); } catch (_) { return; }
+  if (onDisk === incomingSource) return;
+  const dl = onDisk.split("\n");
+  const il = incomingSource.split("\n");
+  const dset = new Set(dl);
+  const iset = new Set(il);
+  const added   = il.filter((l) => !dset.has(l));
+  const removed = dl.filter((l) => !iset.has(l));
+  if (added.length === 0 && removed.length === 0) return;
+  const head = (xs) => xs.slice(0, 5).map((l) => `  ${l}`).join("\n");
+  const more = (xs) => xs.length > 5 ? `\n  … (${xs.length - 5} more)` : "";
+  console.error(
+    `[divergence] ${label}: incoming POST differs from disk ` +
+    `(+${added.length} / -${removed.length} unique lines). ` +
+    `Stale browser buffer about to clobber out-of-band edits?\n` +
+    (removed.length > 0 ? `  --- on disk, NOT in incoming ---\n${head(removed)}${more(removed)}\n` : "") +
+    (added.length   > 0 ? `  --- in incoming, NOT on disk ---\n${head(added)}${more(added)}\n` : "")
+  );
+}
+
 const PURERL_TIDAL_WS_URL = "ws://localhost:3012/ws";
 const WS_TIMEOUT_MS = 10000;
 
@@ -134,6 +158,9 @@ async function runBuild({ source }) {
   const buildTxt = join(root, "output-erl", "build.txt");
   const beamOut  = join(root, "ebin");
 
+  // Buffer-vs-disk divergence guard.  See SessionSource.js for context.
+  logDivergence(studioPsPath, source, "Studio.purs");
+
   const tWrite0 = Date.now();
   try {
     writeFileSync(studioPsPath, source);
@@ -207,6 +234,11 @@ async function runBuild({ source }) {
   if (!existsSync(studioErlPath)) {
     return emptyResult(`Studio .erl not found after build: ${studioErlPath}`);
   }
+  mkdirSync(beamOut, { recursive: true });
+  const studioBeamPath = join(beamOut, `${studioErlBase}.beam`);
+  // Capture the .erl mtime up front: any .beam older than the .erl after
+  // erlc reportedly succeeded is the bug we hit on 2026-05-17.
+  const erlMtime = statSync(studioErlPath).mtimeMs;
   const tErlc0 = Date.now();
   const erlcR = await new Promise((resolve) => {
     execFile(
@@ -229,6 +261,43 @@ async function runBuild({ source }) {
         erlc: Date.now() - tErlc0,
         ws: 0,
         total: Date.now() - t0,
+      },
+    };
+  }
+  // Post-check: erlc claimed success — confirm the .beam actually got
+  // written.  If the .beam is older than the .erl, erlc silently
+  // skipped (stale toolchain on PATH, weird filesystem state, etc.)
+  // and reload-baseline would happily load the old code.
+  if (!existsSync(studioBeamPath)) {
+    return {
+      ok: false,
+      reply: "",
+      error:
+        `erlc reported success but ${studioBeamPath} does not exist — ` +
+        `toolchain produced no output. ` +
+        (erlcR.stderr || erlcR.stdout || ""),
+      pursErrorsJson: "",
+      timings: {
+        write: tWrite, purs: tPurs, be: tBe,
+        erlc: Date.now() - tErlc0, ws: 0, total: Date.now() - t0,
+      },
+    };
+  }
+  const beamMtime = statSync(studioBeamPath).mtimeMs;
+  if (beamMtime < erlMtime) {
+    return {
+      ok: false,
+      reply: "",
+      error:
+        `erlc reported success but ${studioBeamPath} (mtime ${new Date(beamMtime).toISOString()}) ` +
+        `is older than ${studioErlPath} (mtime ${new Date(erlMtime).toISOString()}) — ` +
+        `the toolchain silently skipped.  Restart calypso-api to refresh PATH, or run ` +
+        `erlc manually from purerl-tidal/. ` +
+        (erlcR.stderr || erlcR.stdout || ""),
+      pursErrorsJson: "",
+      timings: {
+        write: tWrite, purs: tPurs, be: tBe,
+        erlc: Date.now() - tErlc0, ws: 0, total: Date.now() - t0,
       },
     };
   }

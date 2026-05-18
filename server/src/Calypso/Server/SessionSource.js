@@ -25,6 +25,35 @@ import {
 import { spawn, execFile } from "node:child_process";
 import { join, resolve } from "node:path";
 
+// Buffer-vs-disk divergence logger.  Surfaces to server stderr when the
+// incoming fire-typeful POST is about to overwrite disk content the
+// browser was never shown — the stale-buffer-clobbers-correct-disk
+// footgun from 2026-05-17.  Inlined (vs shared module) because purs
+// compile copies FFI .js into per-module output dirs, breaking
+// relative-import resolution.
+function logDivergence(diskPath, incomingSource, label) {
+  if (!existsSync(diskPath)) return;
+  let onDisk;
+  try { onDisk = readFileSync(diskPath, "utf-8"); } catch (_) { return; }
+  if (onDisk === incomingSource) return;
+  const dl = onDisk.split("\n");
+  const il = incomingSource.split("\n");
+  const dset = new Set(dl);
+  const iset = new Set(il);
+  const added   = il.filter((l) => !dset.has(l));
+  const removed = dl.filter((l) => !iset.has(l));
+  if (added.length === 0 && removed.length === 0) return;
+  const head = (xs) => xs.slice(0, 5).map((l) => `  ${l}`).join("\n");
+  const more = (xs) => xs.length > 5 ? `\n  … (${xs.length - 5} more)` : "";
+  console.error(
+    `[divergence] ${label}: incoming POST differs from disk ` +
+    `(+${added.length} / -${removed.length} unique lines). ` +
+    `Stale browser buffer about to clobber out-of-band edits?\n` +
+    (removed.length > 0 ? `  --- on disk, NOT in incoming ---\n${head(removed)}${more(removed)}\n` : "") +
+    (added.length   > 0 ? `  --- in incoming, NOT on disk ---\n${head(added)}${more(added)}\n` : "")
+  );
+}
+
 const PURERL_TIDAL_WS_URL = "ws://localhost:3012/ws";
 const WS_TIMEOUT_MS = 10000;
 
@@ -145,6 +174,12 @@ async function runBuild({ source }) {
   const buildTxt = join(root, "output-erl", "build.txt");
   const beamOut = join(root, "ebin");
 
+  // Buffer-vs-disk divergence guard: surface to server logs when the
+  // browser is about to overwrite disk content it never saw.  This is
+  // the silent footgun from 2026-05-17 — the user's stale buffer
+  // clobbered correct disk content because fire-typeful is unconditional.
+  logDivergence(sessionPsPath, source, "Session.purs");
+
   const tWrite0 = Date.now();
   try {
     writeFileSync(sessionPsPath, source);
@@ -167,16 +202,18 @@ async function runBuild({ source }) {
     { cwd: root },
   );
   if (pursR.code !== 0) {
-    // The spago-derived glob already passes --json-errors, so the
-    // failing output is a JSON envelope. Forward it verbatim so the
-    // frontend can render structured errors in the gutter.
-    const candidate = (pursR.stdout || "").trim();
-    const isJson = candidate.startsWith("{");
+    // Always surface the raw compiler output.  In principle the spago-
+    // derived glob passes --json-errors and we get a JSON envelope, but
+    // in practice some failure modes (parse errors before --json takes
+    // effect, plain-text warnings-as-errors, etc.) emerge as plain
+    // text and we'd rather show those than nothing.  Field name lies
+    // a bit for legacy reasons; treat it as "compiler-error details".
+    const details = ((pursR.stderr || "") + (pursR.stdout || "")).trim();
     return {
       ok: false,
       reply: "",
       error: "purs compile failed",
-      pursErrorsJson: isJson ? candidate : "",
+      pursErrorsJson: details,
       timings: {
         write: tWrite,
         purs: Date.now() - tPurs0,
@@ -222,6 +259,9 @@ async function runBuild({ source }) {
   if (!existsSync(sessionErlPath)) {
     return emptyResult(`session .erl not found after build: ${sessionErlPath}`);
   }
+  mkdirSync(beamOut, { recursive: true });
+  const sessionBeamPath = join(beamOut, `${sessionErlBase}.beam`);
+  const erlMtime = statSync(sessionErlPath).mtimeMs;
   const tErlc0 = Date.now();
   const erlcR = await new Promise((resolve) => {
     execFile(
@@ -244,6 +284,42 @@ async function runBuild({ source }) {
         erlc: Date.now() - tErlc0,
         ws: 0,
         total: Date.now() - t0,
+      },
+    };
+  }
+  // Post-check: see StudioSource.js for the rationale.  We hit a silent
+  // erlc skip on 2026-05-17 where the .erl was updated but the .beam was
+  // stale by hours; reload-baseline happily loaded the stale code.
+  if (!existsSync(sessionBeamPath)) {
+    return {
+      ok: false,
+      reply: "",
+      error:
+        `erlc reported success but ${sessionBeamPath} does not exist — ` +
+        `toolchain produced no output. ` +
+        (erlcR.stderr || erlcR.stdout || ""),
+      pursErrorsJson: "",
+      timings: {
+        write: tWrite, purs: tPurs, be: tBe,
+        erlc: Date.now() - tErlc0, ws: 0, total: Date.now() - t0,
+      },
+    };
+  }
+  const beamMtime = statSync(sessionBeamPath).mtimeMs;
+  if (beamMtime < erlMtime) {
+    return {
+      ok: false,
+      reply: "",
+      error:
+        `erlc reported success but ${sessionBeamPath} (mtime ${new Date(beamMtime).toISOString()}) ` +
+        `is older than ${sessionErlPath} (mtime ${new Date(erlMtime).toISOString()}) — ` +
+        `the toolchain silently skipped.  Restart calypso-api to refresh PATH, or run ` +
+        `erlc manually from purerl-tidal/. ` +
+        (erlcR.stderr || erlcR.stdout || ""),
+      pursErrorsJson: "",
+      timings: {
+        write: tWrite, purs: tPurs, be: tBe,
+        erlc: Date.now() - tErlc0, ws: 0, total: Date.now() - t0,
       },
     };
   }
