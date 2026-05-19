@@ -74,6 +74,8 @@ import Calypso.Frontend.Primer as Primer
 import Calypso.Frontend.Studio as Studio
 import Calypso.Frontend.Vocabulary as Vocabulary
 import Calypso.Frontend.WsClient as WsClient
+import Calypso.Frontend.Controller (subscribeTwister)
+import Calypso.Frontend.Controller.Bindings (twister) as ControllerBindings
 import Calypso.Composition as Comp
 import Calypso.Composition.Parser as Comp
 import Calypso.Composition.Serializer as CompS
@@ -541,7 +543,16 @@ handleAction = case _ of
     H.modify_ \s -> s { visibility = toggleKey key s.visibility }
     s <- H.get
     H.liftEffect $ writeHideParam (hideFromVisibility s.visibility)
-  WsOpened -> pure unit
+  WsOpened -> do
+    -- Controller layer: subscribe to Midifighter Twister via WebMIDI
+    -- and forward encoder turns to the BEAM live-control bus as
+    -- `set-control <name> <value>` text verbs.  The pump opens its
+    -- own WS to BEAM (`ws://localhost:3012/ws`); Calypso's session WS
+    -- on :3060 isn't a transparent BEAM proxy.  Best-effort: if the
+    -- browser blocks WebMIDI or the device isn't present, the pump
+    -- logs to the console and the rest of Calypso comes up regardless.
+    _ <- H.fork $ H.liftAff $ subscribeTwister ControllerBindings.twister
+    pure unit
   WsIncoming raw -> handleIncomingBroadcast raw
   WsClosed _ _ -> H.modify_ _ { ws = Nothing }
   WsErrored -> pure unit
