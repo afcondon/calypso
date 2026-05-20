@@ -27,10 +27,13 @@ import Calypso.Frontend.Studio
   ( StudioConflict
   , StudioDevice
   , StudioDrumKit
+  , StudioGateDrumKit
+  , StudioGateHit
   , StudioHit
   , StudioInstrument
   , StudioOwner
   , StudioSnapshot
+  , StudioVPerOctInstrument
   )
 
 renderStudioColumn :: forall m. State -> H.ComponentHTML Action Slots m
@@ -124,7 +127,9 @@ renderStudioColumn state =
       isEmpty =
         Array.null snap.devices
           && Array.null snap.instruments
+          && Array.null snap.voctInstruments
           && Array.null snap.drumKits
+          && Array.null snap.gateDrumKits
           && Array.null snap.conflicts
     in
       if isEmpty
@@ -136,7 +141,9 @@ renderStudioColumn state =
             ( conflictsSection snap.conflicts
                 <> devicesSection snap.devices
                 <> instrumentsSection snap.instruments
+                <> voctInstrumentsSection snap.voctInstruments
                 <> drumKitsSection snap.drumKits
+                <> gateDrumKitsSection snap.gateDrumKits
             )
 
 conflictsSection :: forall m. Array StudioConflict -> Array (H.ComponentHTML Action Slots m)
@@ -284,3 +291,92 @@ hitsText :: Array StudioHit -> String
 hitsText hits =
   Str.joinWith ", "
     (map (\h -> h.name <> ":" <> show h.note <> "/" <> show h.vel <> "/" <> show h.durMs) hits)
+
+-- ---------------------------------------------------------------------------
+-- V/oct instruments — pitched voices routed through cv-router via
+-- gate + V/oct CV.  Separate section from MIDI instruments because
+-- the routing fabric (cv-router/bus) is different from MIDI
+-- (device/channel).  Empty section hidden entirely (no header) to
+-- keep the pane tidy when no V/oct instruments are declared.
+-- ---------------------------------------------------------------------------
+
+voctInstrumentsSection
+  :: forall m. Array StudioVPerOctInstrument
+  -> Array (H.ComponentHTML Action Slots m)
+voctInstrumentsSection [] = []
+voctInstrumentsSection instruments =
+  [ HH.div [ HP.class_ (H.ClassName "studio-section") ]
+      ( [ HH.div [ HP.class_ (H.ClassName "studio-section-header") ]
+            [ HH.text "V/oct instruments" ]
+        , HH.div [ HP.class_ (H.ClassName "studio-table studio-table-instruments") ]
+            ( [ voctHeaderRow ] <> map renderVoctRow instruments )
+        ]
+      )
+  ]
+
+voctHeaderRow :: forall m. H.ComponentHTML Action Slots m
+voctHeaderRow =
+  HH.div [ HP.class_ (H.ClassName "studio-row studio-row-head") ]
+    [ HH.span [ HP.class_ (H.ClassName "studio-col studio-col-alias") ]
+        [ HH.text "alias" ]
+    , HH.span [ HP.class_ (H.ClassName "studio-col studio-col-dev") ]
+        [ HH.text "router" ]
+    , HH.span [ HP.class_ (H.ClassName "studio-col studio-col-num") ]
+        [ HH.text "gate" ]
+    , HH.span [ HP.class_ (H.ClassName "studio-col studio-col-num") ]
+        [ HH.text "v/oct bus" ]
+    ]
+
+renderVoctRow
+  :: forall m. StudioVPerOctInstrument
+  -> H.ComponentHTML Action Slots m
+renderVoctRow i =
+  HH.div [ HP.class_ (H.ClassName "studio-row") ]
+    [ HH.span [ HP.class_ (H.ClassName "studio-col studio-col-alias") ]
+        [ HH.text i.alias ]
+    , HH.span [ HP.class_ (H.ClassName "studio-col studio-col-dev") ]
+        [ HH.text i.routerAlias ]
+    , HH.span [ HP.class_ (H.ClassName "studio-col studio-col-num") ]
+        [ HH.text (show i.gateChannel) ]
+    , HH.span [ HP.class_ (H.ClassName "studio-col studio-col-num") ]
+        [ HH.text (show i.voctBus) ]
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Gate drum kits — drum hits dispatched as cv-router gate triggers
+-- instead of MIDI notes.  Each hit shows its gate channel + pulse
+-- duration; no note/velocity (gates are binary).  Empty section
+-- hidden entirely.
+-- ---------------------------------------------------------------------------
+
+gateDrumKitsSection
+  :: forall m. Array StudioGateDrumKit
+  -> Array (H.ComponentHTML Action Slots m)
+gateDrumKitsSection [] = []
+gateDrumKitsSection kits =
+  [ HH.div [ HP.class_ (H.ClassName "studio-section") ]
+      ( [ HH.div [ HP.class_ (H.ClassName "studio-section-header") ]
+            [ HH.text "Gate drum kits" ]
+        ] <> map renderGateDrumKit kits
+      )
+  ]
+
+renderGateDrumKit
+  :: forall m. StudioGateDrumKit
+  -> H.ComponentHTML Action Slots m
+renderGateDrumKit k =
+  HH.div [ HP.class_ (H.ClassName "studio-drumkit") ]
+    [ HH.div [ HP.class_ (H.ClassName "studio-drumkit-head") ]
+        [ HH.span [ HP.class_ (H.ClassName "studio-col-alias") ]
+            [ HH.text k.alias ]
+        , HH.span [ HP.class_ (H.ClassName "studio-drumkit-meta muted") ]
+            [ HH.text ("via " <> k.routerAlias) ]
+        ]
+    , HH.div [ HP.class_ (H.ClassName "studio-drumkit-hits") ]
+        [ HH.text (gateHitsText k.hits) ]
+    ]
+
+gateHitsText :: Array StudioGateHit -> String
+gateHitsText hits =
+  Str.joinWith ", "
+    (map (\h -> h.name <> ":g" <> show h.gateChannel <> "/" <> show h.durMs <> "ms") hits)

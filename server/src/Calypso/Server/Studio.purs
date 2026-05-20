@@ -13,8 +13,11 @@
 module Calypso.Server.Studio
   ( StudioDevice
   , StudioInstrument
+  , StudioVPerOctInstrument
   , StudioHit
   , StudioDrumKit
+  , StudioGateHit
+  , StudioGateDrumKit
   , StudioOwner
   , StudioConflict
   , StudioSnapshot
@@ -53,6 +56,18 @@ type StudioInstrument =
   , defDurMs :: Int
   }
 
+-- | V/oct instrument — routed through cv-router, declared with
+-- | `vPerOct`.  Each event fires a gate pulse on `gateChannel` and
+-- | sets a pitch CV on `voctBus`.  Separate alias map from MIDI
+-- | instruments because the routing fabric (cv-router) and the data
+-- | (gate + bus) are different from MIDI's (device + channel).
+type StudioVPerOctInstrument =
+  { alias :: String
+  , routerAlias :: String
+  , gateChannel :: Int
+  , voctBus :: Int
+  }
+
 type StudioHit =
   { name :: String
   , note :: Int
@@ -65,6 +80,21 @@ type StudioDrumKit =
   , deviceAlias :: String
   , channel :: Int
   , hits :: Array StudioHit
+  }
+
+-- | Gate drum kit — drums via cv-router gate triggers instead of
+-- | MIDI notes.  Each hit names a gate channel + pulse duration; no
+-- | note/velocity (gates are binary).
+type StudioGateHit =
+  { name :: String
+  , gateChannel :: Int
+  , durMs :: Int
+  }
+
+type StudioGateDrumKit =
+  { alias :: String
+  , routerAlias :: String
+  , hits :: Array StudioGateHit
   }
 
 type StudioOwner =
@@ -82,13 +112,21 @@ type StudioConflict =
 type StudioSnapshot =
   { devices :: Array StudioDevice
   , instruments :: Array StudioInstrument
+  , voctInstruments :: Array StudioVPerOctInstrument
   , drumKits :: Array StudioDrumKit
+  , gateDrumKits :: Array StudioGateDrumKit
   , conflicts :: Array StudioConflict
   }
 
 emptyStudioSnapshot :: StudioSnapshot
 emptyStudioSnapshot =
-  { devices: [], instruments: [], drumKits: [], conflicts: [] }
+  { devices: []
+  , instruments: []
+  , voctInstruments: []
+  , drumKits: []
+  , gateDrumKits: []
+  , conflicts: []
+  }
 
 -- | One round-trip: ship `get-studio` over the purerl-tidal WS, parse
 -- | the multi-line reply.  Left on transport failure or malformed
@@ -135,6 +173,19 @@ parseStudioReply raw =
               , channel: parseIntOr 0 chStr
               , hits: parseHits hitsStr
               } }
+      ["vperoct", alias, router, gStr, vStr] ->
+        acc { voctInstruments = Array.snoc acc.voctInstruments
+              { alias
+              , routerAlias: router
+              , gateChannel: parseIntOr 0 gStr
+              , voctBus: parseIntOr 0 vStr
+              } }
+      ["gatekit", alias, router, hitsStr] ->
+        acc { gateDrumKits = Array.snoc acc.gateDrumKits
+              { alias
+              , routerAlias: router
+              , hits: parseGateHits hitsStr
+              } }
       ["conflict", dev, chStr, ownersStr, msg] ->
         acc { conflicts = Array.snoc acc.conflicts
               { deviceAlias: dev
@@ -156,6 +207,21 @@ parseStudioReply raw =
         { name
         , note: parseIntOr 0 noteStr
         , vel: parseIntOr 0 velStr
+        , durMs: parseIntOr 0 durStr
+        }
+      _ -> Nothing
+
+  -- Gate-kit hit spec: `<name>:<gateChannel>:<durMs>` — no note or
+  -- velocity (gates are binary).
+  parseGateHits "" = []
+  parseGateHits s =
+    Array.mapMaybe parseGateHit (Str.split (Pattern ",") s)
+
+  parseGateHit hitStr =
+    case Str.split (Pattern ":") hitStr of
+      [name, gStr, durStr] -> Just
+        { name
+        , gateChannel: parseIntOr 0 gStr
         , durMs: parseIntOr 0 durStr
         }
       _ -> Nothing
@@ -202,6 +268,28 @@ studioDrumKitCodec = CAR.object "StudioDrumKit"
   , hits: CA.array studioHitCodec
   }
 
+studioVPerOctInstrumentCodec :: JsonCodec StudioVPerOctInstrument
+studioVPerOctInstrumentCodec = CAR.object "StudioVPerOctInstrument"
+  { alias: CA.string
+  , routerAlias: CA.string
+  , gateChannel: CA.int
+  , voctBus: CA.int
+  }
+
+studioGateHitCodec :: JsonCodec StudioGateHit
+studioGateHitCodec = CAR.object "StudioGateHit"
+  { name: CA.string
+  , gateChannel: CA.int
+  , durMs: CA.int
+  }
+
+studioGateDrumKitCodec :: JsonCodec StudioGateDrumKit
+studioGateDrumKitCodec = CAR.object "StudioGateDrumKit"
+  { alias: CA.string
+  , routerAlias: CA.string
+  , hits: CA.array studioGateHitCodec
+  }
+
 studioOwnerCodec :: JsonCodec StudioOwner
 studioOwnerCodec = CAR.object "StudioOwner"
   { kind: CA.string
@@ -220,6 +308,8 @@ studioSnapshotCodec :: JsonCodec StudioSnapshot
 studioSnapshotCodec = CAR.object "StudioSnapshot"
   { devices: CA.array studioDeviceCodec
   , instruments: CA.array studioInstrumentCodec
+  , voctInstruments: CA.array studioVPerOctInstrumentCodec
   , drumKits: CA.array studioDrumKitCodec
+  , gateDrumKits: CA.array studioGateDrumKitCodec
   , conflicts: CA.array studioConflictCodec
   }
