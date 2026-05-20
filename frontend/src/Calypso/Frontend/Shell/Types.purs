@@ -846,6 +846,12 @@ type State =
   , favorites :: Array Favorite
   , favoriteKey :: Maybe String
   , favoriteMenuOpen :: Boolean
+  -- Session library (src/Sessions/*.purs in purerl-tidal): loaded
+  -- from GET /sessions on app start, dropdown in the top-bar lets the
+  -- user switch the active Calypso.Generated.Session.
+  , sessions :: Array String
+  , sessionKey :: Maybe String
+  , sessionsMenuOpen :: Boolean
   , vocabulary :: Vocabulary
   , completions :: Array Completion
   , settingsOpen :: Boolean
@@ -946,6 +952,13 @@ data Action
   | ToggleFavoriteMenu
   | LoadFavorite String
   | FavoritesLoaded (Array Favorite)
+  -- Session library: GET /sessions returns the list; LoadSession
+  -- fetches /sessions/<name> + routes through the existing
+  -- FireTypefulComposition path (replaces editor buffer + writes
+  -- disk + recompiles + hot-loads).
+  | ToggleSessionsMenu
+  | LoadSession String
+  | SessionsLoaded (Array String)
   | VocabularyLoaded Vocabulary
   | KeyboardShortcut Int
   | RefreshConfigState

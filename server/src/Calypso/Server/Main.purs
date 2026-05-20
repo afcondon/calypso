@@ -64,6 +64,7 @@ import Calypso.Server.Arm (armCue, armRequestCodec, armResultCodec)
 import Calypso.Server.SessionSource (buildSession, sessionSourceRequestCodec, sessionSourceResultCodec)
 import Calypso.Server.StudioSource (buildStudio, fetchStudio, studioSourceFetchCodec, studioSourceRequestCodec, studioSourceResultCodec)
 import Calypso.Server.Studio (getStudio, studioSnapshotCodec)
+import Calypso.Server.Sessions as Sessions
 import Calypso.Server.Subscribers (Subscribers)
 import Calypso.Server.Subscribers as Subscribers
 import Data.String as String
@@ -140,6 +141,16 @@ data Route
   -- pipeline (purs --filter + backend-erl --filter + erlc).
   -- ~700ms warm-toolchain.  Workstream 2 of studio-pane-day-plan.md.
   | StudioSource
+  -- GET — return the list of available session templates in
+  -- purerl-tidal/src/Sessions/, e.g. ["Fugue", "Grids", "Rene", ...].
+  -- The frontend's gear menu populates the session picker from this.
+  | SessionsList
+  -- GET /sessions/<name> — return the named template's source with
+  -- the module declaration rewritten to `Calypso.Generated.Session`.
+  -- Frontend feeds this directly into the existing fire-typeful path
+  -- (PATCH /session/module + POST /session-source) — no special
+  -- machinery needed.
+  | SessionsGet String
 
 derive instance Generic Route _
 
@@ -164,6 +175,8 @@ route = root $ sum
   , "SessionSource": "session-source" / noArgs
   , "StudioRoute": "studio" / noArgs
   , "StudioSource": "studio-source" / noArgs
+  , "SessionsList": "sessions" / noArgs
+  , "SessionsGet": "sessions" / segment
   }
 
 -- ============================================================
@@ -911,6 +924,25 @@ mkRouter ctx req@{ route: r, method, body } =
                     (stringify (CA.encode studioSourceResultCodec result))
         _ -> response' Status.methodNotAllowed jsonCors
           (errorJson "MethodNotAllowed" "/studio-source accepts GET or POST")
+
+      SessionsList -> case method of
+        Get -> do
+          dir   <- liftEffect Sessions.sessionsDir
+          names <- liftAff (Sessions.listSessions dir)
+          ok' jsonCors (stringify (CA.encode Sessions.sessionsListCodec { names }))
+        _ -> response' Status.methodNotAllowed jsonCors
+          (errorJson "MethodNotAllowed" "/sessions accepts GET")
+
+      SessionsGet name -> case method of
+        Get -> do
+          dir    <- liftEffect Sessions.sessionsDir
+          result <- liftAff (Sessions.readSession dir name)
+          case result of
+            Left  err    -> badRequest' jsonCors (errorJson "SessionsRead" err)
+            Right source -> ok' jsonCors
+              (stringify (CA.encode Sessions.sessionContentCodec { source }))
+        _ -> response' Status.methodNotAllowed jsonCors
+          (errorJson "MethodNotAllowed" "/sessions/<name> accepts GET")
 
       ProposalsRoute -> case method of
         Get -> do

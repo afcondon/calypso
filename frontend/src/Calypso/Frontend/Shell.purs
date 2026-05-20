@@ -18,6 +18,7 @@ import Data.String as Str
 import Data.String.CodeUnits (takeRight) as Str.CU
 import Data.String.CodeUnits as SCU
 import Data.Codec.Argonaut as CA
+import Data.Codec.Argonaut.Record as CAR
 import Data.Either (Either(..))
 import Data.HTTP.Method (Method(..))
 import Data.Map (Map)
@@ -30,7 +31,7 @@ import Data.String.Pattern (Pattern(..))
 import Data.Traversable (for)
 import Data.Tuple (Tuple(..))
 import Data.Time.Duration (Milliseconds(..))
-import Effect.Aff (delay)
+import Effect.Aff (Aff, delay)
 import Effect.Aff.Class (class MonadAff)
 import Foreign.Object as Object
 import Halogen as H
@@ -156,6 +157,9 @@ initialState _ =
   , favorites: []
   , favoriteKey: Nothing
   , favoriteMenuOpen: false
+  , sessions: []
+  , sessionKey: Nothing
+  , sessionsMenuOpen: false
   , vocabulary: Vocabulary.emptyVocabulary
   , completions: []
   , settingsOpen: false
@@ -228,6 +232,8 @@ handleAction = case _ of
     openWebSocket
     favs <- H.liftAff Favorite.fetchFavorites
     handleAction (FavoritesLoaded favs)
+    sessions <- H.liftAff fetchSessionsList
+    handleAction (SessionsLoaded sessions)
     vocab <- H.liftAff Vocabulary.fetchVocabulary
     handleAction (VocabularyLoaded vocab)
     -- Pull the rig snapshot so the tvoice picker + card colors have
@@ -236,6 +242,28 @@ handleAction = case _ of
     handleAction RefreshConfigState
   FavoritesLoaded favs ->
     H.modify_ _ { favorites = favs }
+  SessionsLoaded names ->
+    H.modify_ _ { sessions = names }
+  ToggleSessionsMenu ->
+    H.modify_ \s -> s { sessionsMenuOpen = not s.sessionsMenuOpen }
+  LoadSession name -> do
+    -- Fetch the template's source (module declaration already
+    -- rewritten by the server), push it into the editor + state, then
+    -- route through FireTypefulComposition — same path as clicking
+    -- ▶ run on the composition pane.  Calypso server's session-source
+    -- handler updates RAM + disk + recompiles + hot-loads atomically.
+    result <- H.liftAff (fetchSessionContent name)
+    case result of
+      Left err -> H.modify_ _
+        { compositionStatus = Just ("session load failed: " <> err) }
+      Right source -> do
+        _ <- H.tell _moduleEditor unit (Editor.ReplaceContent source)
+        H.modify_ _
+          { moduleSource    = source
+          , sessionKey      = Just name
+          , sessionsMenuOpen = false
+          }
+        handleAction (FireTypefulComposition source)
   VocabularyLoaded vocab ->
     H.modify_ _
       { vocabulary = vocab
@@ -1930,7 +1958,7 @@ renderHeader state =
     , renderBpmWidget state
     , renderViewToggle state
     , HH.div [ HP.class_ (H.ClassName "header-spacer") ] []
-    , renderFavoritesDropdown state
+    , renderSessionsDropdown state
     , HH.div [ HP.class_ (H.ClassName "header-spacer") ] []
     ]
 
@@ -2265,3 +2293,86 @@ attribute state e =
       n | n >= 0 ->
           Str.take (Str.length suffix) (Str.drop n s) == suffix
       _ -> false
+
+-- ---------------------------------------------------------------------------
+-- Session library — GET /sessions + GET /sessions/<name>
+-- ---------------------------------------------------------------------------
+
+-- | List the session templates available on the server.  On any
+-- | transport or decode failure returns [] so the dropdown silently
+-- | renders empty rather than blocking startup.
+fetchSessionsList :: Aff (Array String)
+fetchSessionsList = do
+  let codec = CAR.object "SessionsList" { names: CA.array CA.string }
+  result <- AX.request $ AX.defaultRequest
+    { method = Left GET
+    , url = backendUrl <> "/sessions"
+    , responseFormat = RF.json
+    }
+  pure case result of
+    Left _ -> []
+    Right { body } -> case CA.decode codec body of
+      Left _ -> []
+      Right { names } -> names
+
+-- | Fetch the source of a named session template, with the module
+-- | declaration already rewritten by the server to
+-- | `Calypso.Generated.Session`.  Returns the source on success or an
+-- | error string the caller can surface to the user.
+fetchSessionContent :: String -> Aff (Either String String)
+fetchSessionContent name = do
+  let codec = CAR.object "SessionContent" { source: CA.string }
+  result <- AX.request $ AX.defaultRequest
+    { method = Left GET
+    , url = backendUrl <> "/sessions/" <> name
+    , responseFormat = RF.json
+    }
+  pure case result of
+    Left err -> Left (AX.printError err)
+    Right { body } -> case CA.decode codec body of
+      Left decodeErr -> Left (CA.printJsonDecodeError decodeErr)
+      Right { source } -> Right source
+
+-- ---------------------------------------------------------------------------
+-- Sessions dropdown — top-bar affordance for switching the active
+-- Calypso.Generated.Session.  Replaces the Favorites dropdown.
+-- ---------------------------------------------------------------------------
+
+renderSessionsDropdown :: forall m. State -> H.ComponentHTML Action Slots m
+renderSessionsDropdown state =
+  HH.div [ HP.class_ (H.ClassName "starter-dropdown") ]
+    [ HH.button
+        [ HP.class_ (H.ClassName "starter-btn")
+        , HE.onClick \_ -> ToggleSessionsMenu
+        ]
+        [ HH.text (currentLabel <> " ▾") ]
+    , if state.sessionsMenuOpen
+        then HH.div [ HP.class_ (H.ClassName "starter-menu") ]
+          (case state.sessions of
+             [] ->
+               [ HH.div [ HP.class_ (H.ClassName "starter-option") ]
+                   [ HH.div [ HP.class_ (H.ClassName "starter-label muted") ]
+                       [ HH.text "(no sessions available)" ]
+                   ]
+               ]
+             names -> map (renderSessionOption state) names)
+        else HH.text ""
+    ]
+  where
+  currentLabel = case state.sessionKey of
+    Just k -> k
+    Nothing -> "Session"
+
+renderSessionOption :: forall m. State -> String -> H.ComponentHTML Action Slots m
+renderSessionOption state name =
+  HH.button
+    [ HP.class_
+        ( H.ClassName
+            ( "starter-option"
+                <> (if state.sessionKey == Just name then " current" else "")
+            )
+        )
+    , HE.onClick \_ -> LoadSession name
+    ]
+    [ HH.div [ HP.class_ (H.ClassName "starter-label") ] [ HH.text name ]
+    ]
