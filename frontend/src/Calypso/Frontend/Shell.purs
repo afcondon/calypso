@@ -1537,12 +1537,20 @@ subscribeWindowShortcuts = do
                 -- Mod-Enter when focus is in an editor; this
                 -- window-level listener catches the case where focus
                 -- is elsewhere (gear menu, pane toolbars, the
-                -- document body).  If the editor consumed the event
-                -- via preventDefault we won't see it here, so no
-                -- double-fire in the typical case.
+                -- document body).
+                --
+                -- DOUBLE-FIRE GUARD: check defaultPrevented first.
+                -- CodeMirror's keymap handler runs on the bubble phase
+                -- before us and calls preventDefault when it handles
+                -- Mod-Enter.  Without this check both handlers would
+                -- fire FireTypefulComposition concurrently and race
+                -- on the same .beam file (erlc atomic-rename failure
+                -- "no such file or directory" — observed 2026-05-20).
                 when (WKey.key kev == "Enter") do
-                  WEvent.preventDefault evt
-                  HS.notify listener RunShortcut
+                  alreadyHandled <- WEvent.defaultPrevented evt
+                  unless alreadyHandled do
+                    WEvent.preventDefault evt
+                    HS.notify listener RunShortcut
     WEvtTarget.addEventListener WKeyTypes.keydown cb false target
   _ <- H.subscribe emitter
   pure unit
