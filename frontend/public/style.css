@@ -80,6 +80,12 @@ body::before {
   align-items: center;
   gap: 1rem;
   background: var(--bg-deep);
+  /* Establish a stacking context above the panes (which create their
+     own contexts via .studio-header's z-index: 1, etc.) so that
+     header-anchored popups like the Sessions dropdown overlay panes
+     instead of getting clipped beneath their headers. */
+  position: relative;
+  z-index: 60;
 }
 
 .header-spacer { flex: 1 1 auto; }

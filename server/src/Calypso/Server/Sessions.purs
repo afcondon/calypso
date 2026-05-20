@@ -83,7 +83,7 @@ readSession dir name =
     result <- Aff.attempt (FSA.readTextFile UTF8 path)
     case result of
       Left e    -> pure (Left ("read " <> path <> ": " <> Aff.message e))
-      Right raw -> pure (Right (rewriteModuleDecl name raw))
+      Right raw -> pure (Right (stripComments (rewriteModuleDecl name raw)))
   where
     safe =
       String.length name > 0
@@ -101,6 +101,37 @@ rewriteModuleDecl name raw =
     (Pattern     ("module Sessions." <> name))
     (Replacement  "module Calypso.Generated.Session")
     raw
+
+-- | Strip whole-line comments + collapse the runs of blank lines that
+-- | result.  Composition-pane readers don't want the on-disk
+-- | docstrings cluttering the editor; the .purs file keeps its
+-- | documentation, the editor gets clean code.  Anti-pattern in normal
+-- | code review but right for "the user is going to *play* this".
+stripComments :: String -> String
+stripComments raw =
+  let
+    lines      = String.split (Pattern "\n") raw
+    -- A "comment line" is one whose first non-whitespace characters
+    -- are `--`.  Keep code lines + inline-comments-following-code (the
+    -- comment lives on the same line as code; rare in our templates).
+    isComment  = \s -> String.take 2 (String.trim s) == "--"
+    keptLines  = Array.filter (not <<< isComment) lines
+    -- Collapse runs of >=2 consecutive blank lines down to one.
+    collapsed  = foldlBlankRuns keptLines
+  in String.joinWith "\n" collapsed
+
+foldlBlankRuns :: Array String -> Array String
+foldlBlankRuns =
+  let
+    step acc line =
+      let blank = String.trim line == ""
+          prevBlank = case Array.last acc of
+            Just s -> String.trim s == ""
+            Nothing -> false
+      in if blank && prevBlank
+           then acc
+           else Array.snoc acc line
+  in Array.foldl step []
 
 -- ---------------------------------------------------------------------------
 -- JSON codecs
