@@ -244,6 +244,11 @@ handleAction = case _ of
     H.modify_ _ { favorites = favs }
   SessionsLoaded names ->
     H.modify_ _ { sessions = names }
+  RunShortcut -> do
+    s <- H.get
+    handleAction (FireTypefulComposition s.moduleSource)
+  DismissRunToast ->
+    H.modify_ _ { compositionStatus = Nothing }
   ToggleSessionsMenu ->
     H.modify_ \s -> s { sessionsMenuOpen = not s.sessionsMenuOpen }
   LoadSession name -> do
@@ -1523,10 +1528,21 @@ subscribeWindowShortcuts = do
           let mod = WKey.metaKey kev || WKey.ctrlKey kev
           when mod do
             case digitFor (WKey.key kev) of
-              Nothing -> pure unit
               Just d -> do
                 WEvent.preventDefault evt
                 HS.notify listener (KeyboardShortcut d)
+              Nothing ->
+                -- Cmd-Enter (Mac) / Ctrl-Enter (others) — Tidal's
+                -- canonical fire gesture.  CodeMirror handles
+                -- Mod-Enter when focus is in an editor; this
+                -- window-level listener catches the case where focus
+                -- is elsewhere (gear menu, pane toolbars, the
+                -- document body).  If the editor consumed the event
+                -- via preventDefault we won't see it here, so no
+                -- double-fire in the typical case.
+                when (WKey.key kev == "Enter") do
+                  WEvent.preventDefault evt
+                  HS.notify listener RunShortcut
     WEvtTarget.addEventListener WKeyTypes.keydown cb false target
   _ <- H.subscribe emitter
   pure unit
@@ -1873,6 +1889,7 @@ render state =
     [ renderHeader state
     , renderPenBanner state
     , if state.settingsOpen then renderSettingsPanel state else HH.text ""
+    , renderRunToast state
     , HH.main
         [ HP.class_ (H.ClassName "columns")
         , HP.style ("grid-template-columns: " <> gridTemplateForVisibility state.visibility)
@@ -1930,12 +1947,30 @@ stateIdleMsFor state = case state.pen.holder of
   Nothing -> 0.0
   Just _ -> state.pen.lastActivityAt
 
+-- | The gear popup — opens from the ⚙ button in the top-bar.  Hosts
+-- | the Run + Stop Piece actions previously living in the composition
+-- | pane's toolbar, plus the about-Calypso tagline.  Session-template
+-- | loading lives in the separate Sessions dropdown to the right.
 renderSettingsPanel :: forall m. State -> H.ComponentHTML Action Slots m
-renderSettingsPanel _ =
+renderSettingsPanel state =
   HH.section [ HP.class_ (H.ClassName "settings-panel") ]
-    [ HH.p [ HP.class_ (H.ClassName "settings-tagline") ]
+    [ HH.div [ HP.class_ (H.ClassName "settings-actions") ]
+        [ HH.button
+            [ HP.class_ (H.ClassName "fire-btn fire-btn-typeful")
+            , HE.onClick \_ -> FireTypefulComposition state.moduleSource
+            , HP.title "Compile and hot-load the composition as a typeful PureScript session (Cmd-Enter)"
+            ]
+            [ HH.text "▶ run" ]
+        , HH.button
+            [ HP.class_ (H.ClassName "fire-btn")
+            , HE.onClick \_ -> StopPiece
+            , HP.title "Clear the conductor (stop-piece); voices keep their current patterns"
+            ]
+            [ HH.text "⏹ stop piece" ]
+        ]
+    , HH.p [ HP.class_ (H.ClassName "settings-tagline") ]
         [ HH.text
-            "Calypso — a workshop afloat the purerl-tidal daemon. Cells fire on Cmd-Enter; the composition holds the durable bones."
+            "Calypso — a workshop afloat the purerl-tidal daemon.  Cells fire on Cmd-Enter; the composition holds the durable bones."
         ]
     ]
 
@@ -2376,3 +2411,26 @@ renderSessionOption state name =
     ]
     [ HH.div [ HP.class_ (H.ClassName "starter-label") ] [ HH.text name ]
     ]
+
+-- ---------------------------------------------------------------------------
+-- Run-result toast — replaces the permanent inline fire-status span
+-- in the composition pane toolbar.  Fixed-position div pinned to the
+-- top of the viewport.  No auto-fade yet; user clicks to dismiss via
+-- the close affordance, or the next FireTypefulComposition overwrites
+-- the message.
+-- ---------------------------------------------------------------------------
+
+renderRunToast :: forall m. State -> H.ComponentHTML Action Slots m
+renderRunToast state = case state.compositionStatus of
+  Nothing -> HH.text ""
+  Just msg ->
+    HH.div [ HP.class_ (H.ClassName "run-toast") ]
+      [ HH.span [ HP.class_ (H.ClassName "run-toast-message") ]
+          [ HH.text msg ]
+      , HH.button
+          [ HP.class_ (H.ClassName "run-toast-dismiss")
+          , HE.onClick \_ -> DismissRunToast
+          , HP.title "Dismiss"
+          ]
+          [ HH.text "×" ]
+      ]

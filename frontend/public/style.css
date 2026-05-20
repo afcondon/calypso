@@ -338,11 +338,17 @@ body::before {
   color: var(--bg-deep);
 }
 
-/* ===== Settings panel =================================================== */
+/* ===== Settings panel (gear popup) ====================================== */
 .settings-panel {
   background: var(--bg-deep);
   border-bottom: 1px solid var(--fg-rule);
   padding: 0.75rem 1rem;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
 }
 
 .settings-tagline {
@@ -350,6 +356,47 @@ body::before {
   color: var(--fg-dim);
   font-size: 1rem;
   letter-spacing: 0.02em;
+}
+
+/* ===== Run toast (replaces inline fire-status) ========================== */
+.run-toast {
+  position: fixed;
+  top: 4rem;
+  right: 1rem;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-deep);
+  border: 1px solid var(--fg-rule);
+  color: var(--fg);
+  font-size: 0.9rem;
+  max-width: 28rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.run-toast-message {
+  flex: 1;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.run-toast-dismiss {
+  background: none;
+  border: 1px solid var(--fg-rule);
+  color: var(--fg-dim);
+  cursor: pointer;
+  width: 1.5rem;
+  height: 1.5rem;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0;
+}
+
+.run-toast-dismiss:hover {
+  color: var(--fg);
+  border-color: var(--fg);
 }
 
 /* ===== Columns / panes ================================================== */

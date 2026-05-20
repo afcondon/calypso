@@ -27,27 +27,11 @@ renderCompositionColumn :: forall m. MonadAff m => State -> H.ComponentHTML Acti
 renderCompositionColumn state =
   HH.section [ HP.class_ (H.ClassName "pane pane-composition") ]
     [ HH.div [ HP.class_ (H.ClassName "pane-toolbar") ]
-        ( [ HH.button
-              [ HP.class_ (H.ClassName "fire-btn fire-btn-typeful")
-              , HE.onClick \_ -> FireTypefulComposition state.moduleSource
-              , HP.title "Compile and hot-load the composition as a typeful PureScript session (Mod-Enter)"
-              ]
-              [ HH.text "▶ run" ]
-          , HH.button
-              [ HP.class_ (H.ClassName "fire-btn")
-              , HE.onClick \_ -> LoadWorkspace
-              , HP.title "Load a calypso-session.json from disk"
-              ]
-              [ HH.text "↥ load…" ]
-          ]
-          <> sectionButtons state.moduleSource
-          <> [ case state.compositionStatus of
-                 Just msg ->
-                   HH.span [ HP.class_ (H.ClassName "fire-status") ]
-                     [ HH.text msg ]
-                 Nothing -> HH.text ""
-             ]
-        )
+        -- Run / Load (the calypso-session.json file dialog) moved to
+        -- the gear popup in the top-bar; session-template loading lives
+        -- in the Sessions dropdown.  Section play buttons stay here
+        -- because they're per-section (one ▶ per declared Section).
+        (sectionButtons state.moduleSource)
     , HH.slot _moduleEditor unit Editor.component
         { initialDoc: state.moduleSource
         , tag: "module"

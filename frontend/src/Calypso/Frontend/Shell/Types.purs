@@ -959,6 +959,12 @@ data Action
   | ToggleSessionsMenu
   | LoadSession String
   | SessionsLoaded (Array String)
+  -- Cmd-Enter (window-level): fires the composition pane's Run when
+  -- focus isn't in an editor (CodeMirror handles Mod-Enter inside).
+  | RunShortcut
+  -- Close the run-result toast.  Also fires automatically when the
+  -- next FireTypefulComposition starts.
+  | DismissRunToast
   | VocabularyLoaded Vocabulary
   | KeyboardShortcut Int
   | RefreshConfigState
