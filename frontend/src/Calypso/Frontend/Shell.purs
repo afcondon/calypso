@@ -75,7 +75,7 @@ import Calypso.Frontend.Studio as Studio
 import Calypso.Frontend.Vocabulary as Vocabulary
 import Calypso.Frontend.WsClient as WsClient
 import Calypso.Frontend.Controller (subscribeTwister)
-import Calypso.Frontend.Controller.Bindings (twister) as ControllerBindings
+import Calypso.Frontend.Controller.Bindings (allBindings) as ControllerBindings
 import Calypso.Composition as Comp
 import Calypso.Composition.Parser as Comp
 import Calypso.Composition.Serializer as CompS
@@ -548,10 +548,14 @@ handleAction = case _ of
     -- and forward encoder turns to the BEAM live-control bus as
     -- `set-control <name> <value>` text verbs.  The pump opens its
     -- own WS to BEAM (`ws://localhost:3012/ws`); Calypso's session WS
-    -- on :3060 isn't a transparent BEAM proxy.  Best-effort: if the
-    -- browser blocks WebMIDI or the device isn't present, the pump
-    -- logs to the console and the rest of Calypso comes up regardless.
-    _ <- H.fork $ H.liftAff $ subscribeTwister ControllerBindings.twister
+    -- on :3060 isn't a transparent BEAM proxy.
+    --
+    -- The pump takes the full list of (Controller, Controllable)
+    -- pairings — it starts on the first and cycles via the Twister
+    -- side buttons.  Best-effort: if the browser blocks WebMIDI or
+    -- the device isn't present, the pump logs to the console and the
+    -- rest of Calypso comes up regardless.
+    _ <- H.fork $ H.liftAff $ subscribeTwister ControllerBindings.allBindings
     pure unit
   WsIncoming raw -> handleIncomingBroadcast raw
   WsClosed _ _ -> H.modify_ _ { ws = Nothing }
