@@ -231,7 +231,22 @@ extractTypefulCuesAsCellRecs src =
         let lName = Str.trim left
             rTrim = Str.trim right
         guardJust (isPsIdent lName)
-        guardJust (rTrim == "PitchedPart" || rTrim == "DrumPart")
+        -- Match by the first whitespace-separated token of the RHS so
+        -- we accept both nullary (`PitchedPart`) and parametric
+        -- (`PitchedPart PitchedNote12`, `Rene "studioRene"`) forms.
+        -- Vmod and polysignal types declare voices that can be fired
+        -- by a cell whose source is just the variable name, so they
+        -- need to project to cells too.
+        let firstWord = case Array.head (Str.split (Pattern " ") rTrim) of
+              Just w -> w
+              Nothing -> rTrim
+            partType = firstWord == "PitchedPart" || firstWord == "DrumPart"
+            vmodType =
+              firstWord == "Rene"
+                || firstWord == "Grids"
+                || firstWord == "Repetitor"
+                || firstWord == "PolySignal"
+        guardJust (partType || vmodType)
         Just { name: lName }
       _ -> Nothing
 
@@ -247,34 +262,89 @@ extractTypefulCuesAsCellRecs src =
         guardJust (lhs == expectedName)
         Just rhs
 
-  -- Parse `on "mvoice" instrument …` to recover both metadata fields.
-  -- Returns Nothing in both fields if the body doesn't open with the
-  -- expected `on "..." <ident>` shape.
+  -- Parse `on <mvoice> <tvoice> …` to recover both metadata fields.
+  -- Two body shapes supported:
+  --
+  --   (1) Quoted form (pre-Slab-A):  on "mvoice-string" instrumentIdent …
+  --       — mvoice is the literal string content; tvoice is the
+  --       identifier immediately following the closing quote.
+  --
+  --   (2) Typed form (post-Slab-A):  on vVoiceName instrumentIdent …
+  --       — mvoice is derived from the VoiceName identifier per the
+  --       Tidal.Voices convention (strip leading `v`, lowercase the
+  --       first remaining char: `vBass` → "bass", `vUpper` → "upper").
+  --       Identifiers not matching the `v<Cap>` convention pass
+  --       through unchanged.  tvoice is the next identifier after
+  --       whitespace.
+  --
+  -- Returns Nothing in both fields if neither shape matches.
   extractMvoiceAndTvoice
     :: String -> { mvoice :: Maybe String, tvoice :: Maybe String }
   extractMvoiceAndTvoice body =
     case Str.indexOf (Pattern "on ") body of
       Nothing -> empty
       Just ix ->
-        let afterOn = Str.drop (ix + 3) body
-        in case Str.indexOf (Pattern "\"") afterOn of
-          Nothing -> empty
-          Just q1 ->
-            let afterOpen = Str.drop (q1 + 1) afterOn
-            in case Str.indexOf (Pattern "\"") afterOpen of
-              Nothing -> empty
-              Just q2 ->
-                let mv = Str.take q2 afterOpen
-                    afterClose = Str.trim (Str.drop (q2 + 1) afterOpen)
-                    firstWord = SCU.fromCharArray
-                      (Array.takeWhile isIdentChar
-                        (SCU.toCharArray afterClose))
-                in { mvoice: Just mv
-                   , tvoice:
-                       if Str.null firstWord then Nothing else Just firstWord
-                   }
+        let afterOn = Str.trim (Str.drop (ix + 3) body)
+        in case SCU.toCharArray afterOn of
+          [] -> empty
+          chars -> case Array.head chars of
+            Just '"' -> parseQuotedForm afterOn
+            Just c | isIdentStartChar c -> parseTypedForm afterOn
+            _ -> empty
     where
     empty = { mvoice: Nothing, tvoice: Nothing }
+
+    -- Shape (1): on "<mvoice>" <tvoice> ...
+    parseQuotedForm s =
+      let afterOpen = Str.drop 1 s
+      in case Str.indexOf (Pattern "\"") afterOpen of
+        Nothing -> empty
+        Just q2 ->
+          let mv = Str.take q2 afterOpen
+              afterClose = Str.trim (Str.drop (q2 + 1) afterOpen)
+              tv = takeIdent afterClose
+          in { mvoice: Just mv
+             , tvoice: if Str.null tv then Nothing else Just tv
+             }
+
+    -- Shape (2): on <voiceIdent> <tvoiceIdent> ...
+    parseTypedForm s =
+      let voiceIdent = takeIdent s
+          afterVoice = Str.trim (Str.drop (Str.length voiceIdent) s)
+          tv = takeIdent afterVoice
+      in { mvoice:
+             if Str.null voiceIdent then Nothing
+             else Just (voiceNameDisplay voiceIdent)
+         , tvoice: if Str.null tv then Nothing else Just tv
+         }
+
+    takeIdent str = SCU.fromCharArray
+      (Array.takeWhile isIdentChar (SCU.toCharArray str))
+
+    -- Tidal.Voices convention: `vBass :: VoiceName "bass"`.  Apply the
+    -- inverse mapping for display.  Identifiers without the `v<Cap>`
+    -- shape (or with no leading `v`) pass through unchanged.
+    voiceNameDisplay ident =
+      let chars = SCU.toCharArray ident
+      in case Array.uncons chars of
+        Just { head: 'v', tail } -> case Array.uncons tail of
+          Just { head: c, tail: rest } | isUpper c ->
+            SCU.fromCharArray (Array.cons (toLowerAscii c) rest)
+          _ -> ident
+        _ -> ident
+
+    isUpper c = c >= 'A' && c <= 'Z'
+
+    -- ASCII-only lowercase: 'A' (65) → 'a' (97).  Falls back to the
+    -- input for non-uppercase chars.  Sufficient for PS identifiers.
+    toLowerAscii c =
+      fromMaybe c
+        (SCU.toChar (Str.toLower (SCU.singleton c)))
+
+    isIdentStartChar c =
+      (c >= 'a' && c <= 'z')
+        || (c >= 'A' && c <= 'Z')
+        || c == '_'
 
   isIdentChar c =
     (c >= 'a' && c <= 'z')

@@ -12,7 +12,7 @@
 // for a one-line projection that the BEAM can do in microseconds.
 // See git tag `interpreted-dsl-final-2026-05-16` for the bridge path.
 
-const PURERL_TIDAL_WS_URL = "ws://localhost:3012/ws";
+const PURERL_TIDAL_WS_URL = "ws://127.0.0.1:3012/ws";
 const WS_TIMEOUT_MS = 10000;
 
 function sendPlayArmed(tvoice, cueName) {
@@ -40,9 +40,18 @@ function sendPlayArmed(tvoice, cueName) {
       const isErr = text.startsWith("ERR") || text.startsWith("ERROR");
       settle({ ok: !isErr, reply: text, error: isErr ? text : "" });
     });
-    ws.addEventListener("error", () => {
+    ws.addEventListener("error", (evt) => {
       clearTimeout(timer);
-      settle({ ok: false, reply: "", error: "WS error connecting to purerl-tidal" });
+      const detail = evt?.error?.message ?? evt?.message ?? evt?.error?.code ?? "(no detail)";
+      console.error(`[arm] WS error to ${PURERL_TIDAL_WS_URL}:`, detail, evt?.error || "");
+      settle({ ok: false, reply: "", error: `WS error connecting to purerl-tidal: ${detail}` });
+    });
+    ws.addEventListener("close", (evt) => {
+      if (resolved) return;
+      const reason = `closed before reply (code=${evt?.code ?? "?"}, reason=${evt?.reason || "(none)"})`;
+      console.error(`[arm] WS close to ${PURERL_TIDAL_WS_URL}: ${reason}`);
+      clearTimeout(timer);
+      settle({ ok: false, reply: "", error: `WS error connecting to purerl-tidal: ${reason}` });
     });
   });
 }

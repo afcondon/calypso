@@ -4,7 +4,11 @@
 //
 // Uses Node's built-in WebSocket (Node ≥ 21).
 
-const PURERL_TIDAL_WS_URL = "ws://localhost:3012/ws";
+// Pin to 127.0.0.1 explicitly — `localhost` can resolve to ::1 on macOS
+// and Node's WebSocket connect fails when the BEAM listens IPv4-only.
+// CLI Node tests with Happy Eyeballs succeed; in-process behaviour
+// here was hitting "WS error connecting" reliably (2026-05-24).
+const PURERL_TIDAL_WS_URL = "ws://127.0.0.1:3012/ws";
 // 30s — covers cold per-cell compiles (~7s today via spago build +
 // purs-backend-erl re-emit; PR4's daemon path will drop this to
 // ~100-300ms and we can pull the timeout back down then).  Most
