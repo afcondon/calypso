@@ -479,7 +479,9 @@ handleBytes ws mOutput rotaryBindings binaryBindings dashboardBindings
       Nothing -> case dashboard of
         Just sb -> case Map.lookup sb dashboardBindings of
           Nothing -> pure unit
-          Just db -> dashboardKnobPress ws mOutput db busState idx
+          Just db -> dashboardKnobPress ws mOutput
+                       rotaryBindings binaryBindings dashboardBindings
+                       db busState idx
         Nothing -> case Array.index rotaryBindings idx of
           Just (Just (Controller cfg)) -> do
             Ref.write idx currentBank
@@ -660,11 +662,15 @@ dashboardKnobTurn ws mOutput (DashboardBank db) busState cc val =
 dashboardKnobPress
   :: WebSocket
   -> Maybe MIDI.MIDIOutput
+  -> Array (Maybe Controller)
+  -> BinaryBindings
+  -> DashboardBindings
   -> DashboardBank
   -> Ref (Map String Number)
   -> Int
   -> Effect Unit
-dashboardKnobPress ws mOutput (DashboardBank db) busState idx =
+dashboardKnobPress ws mOutput rotaryBindings binaryBindings dashboardBindings
+                   (DashboardBank db) busState idx =
   case Map.lookup idx db.pressCommands of
     Just verb -> do
       -- One-shot WS verb: send the literal string (e.g. "hush",
@@ -675,6 +681,17 @@ dashboardKnobPress ws mOutput (DashboardBank db) busState idx =
         "Twister Dashboard '" <> db.label <> "', knob " <> show idx
           <> " command → " <> verb
       WsClient.send ws verb
+      -- clear-controls mirrors the BEAM-side ETS clear locally: empty
+      -- the busState then re-seed bindings' defaults, so when the user
+      -- enters Skip / Gate / Notes / etc. the LEDs reflect the freshly
+      -- reset state rather than the stale pre-clear values.  Then
+      -- repaint the current dashboard so its rings update immediately.
+      when (verb == "clear-controls") do
+        let seeded = seedBusState rotaryBindings
+                                  binaryBindings
+                                  dashboardBindings
+        Ref.write seeded busState
+        paintDashboardBank mOutput (DashboardBank db) busState
       case mOutput of
         Nothing -> pure unit
         Just output ->
