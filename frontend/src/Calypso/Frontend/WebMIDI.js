@@ -27,6 +27,16 @@ export const getInputsImpl = function (access) {
   };
 };
 
+export const getOutputsImpl = function (access) {
+  return function () {
+    var result = [];
+    access.outputs.forEach(function (output) {
+      result.push({ id: output.id, name: output.name });
+    });
+    return result;
+  };
+};
+
 export const openInputImpl = function (just) {
   return function (nothing) {
     return function (access) {
@@ -43,6 +53,22 @@ export const openInputImpl = function (just) {
   };
 };
 
+export const openOutputImpl = function (just) {
+  return function (nothing) {
+    return function (access) {
+      return function (portId) {
+        return function () {
+          var output = null;
+          access.outputs.forEach(function (o) {
+            if (o.id === portId) output = o;
+          });
+          return output ? just(output) : nothing;
+        };
+      };
+    };
+  };
+};
+
 export const onMessageImpl = function (input) {
   return function (callback) {
     return function () {
@@ -53,6 +79,14 @@ export const onMessageImpl = function (input) {
       return function () {
         input.onmidimessage = null;
       };
+    };
+  };
+};
+
+export const sendMessageImpl = function (output) {
+  return function (bytes) {
+    return function () {
+      output.send(bytes);
     };
   };
 };
