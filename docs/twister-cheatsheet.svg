@@ -1,0 +1,271 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 297 210"
+     width="297mm" height="210mm"
+     font-family="Helvetica, Arial, sans-serif">
+  <!--
+    Twister surface cheatsheet for the Odonus multi-playhead sequencer.
+    A4 landscape.  1 SVG user-unit = 1mm at print size.  All font-size
+    values are plain user-units (mm) so they render consistently across
+    macOS Preview / browsers / Inkscape.
+  -->
+
+  <rect width="297" height="210" fill="#ffffff"/>
+
+  <!-- ======== HEADER ======================================================= -->
+  <text x="15"  y="10"  font-size="6" font-weight="700" fill="#111">Twister surface</text>
+  <text x="15"  y="15"  font-size="2.6" fill="#555">Odonus multi-playhead sequencer — fugue mode + per-cell editing</text>
+  <text x="282" y="10"  font-size="2.4" fill="#888" text-anchor="end">v1 · 2026-05-25</text>
+  <text x="282" y="14"  font-size="2.2" fill="#888" text-anchor="end">Midi Fighter Twister · ch1 turns / ch2 presses / ch4 side</text>
+  <line x1="15" y1="19" x2="282" y2="19" stroke="#111" stroke-width="0.25"/>
+
+  <!-- ======== LEFT: ROTARY BANKS 4×4 ====================================== -->
+  <text x="15" y="26" font-size="3.6" font-weight="700" fill="#111" letter-spacing="0.6">ROTARY BANKS</text>
+  <text x="15" y="30" font-size="2.4" fill="#555">Press knob → enter bank.  Turn knob N → set the value at cell N (or playhead N).</text>
+
+  <!-- 4×4 grid.  Cell box 30×34mm.  Origin (15, 35). -->
+  <g transform="translate(15,35)">
+
+    <!-- helper grid lines (very faint) -->
+    <g stroke="#eee" stroke-width="0.15" fill="none">
+      <line x1="0"   y1="34"  x2="120" y2="34"/>
+      <line x1="0"   y1="68"  x2="120" y2="68"/>
+      <line x1="0"   y1="102" x2="120" y2="102"/>
+      <line x1="30"  y1="0"   x2="30"  y2="136"/>
+      <line x1="60"  y1="0"   x2="60"  y2="136"/>
+      <line x1="90"  y1="0"   x2="90"  y2="136"/>
+    </g>
+
+    <!-- Row 0: knobs 0..3  =  notes / vel / prob / ratchet -->
+    <g>
+      <text x="2"  y="4.5" font-size="2.5" font-weight="600" fill="#aaa">0</text>
+      <circle cx="15" cy="13" r="5.5" fill="#4dd23b"/>
+      <text x="15" y="24" font-size="2.8" font-weight="700" fill="#111" text-anchor="middle">NOTES</text>
+      <text x="15" y="28" font-size="2.2" fill="#666" text-anchor="middle">MIDI 36–84</text>
+    </g>
+    <g transform="translate(30,0)">
+      <text x="2"  y="4.5" font-size="2.5" font-weight="600" fill="#aaa">1</text>
+      <circle cx="15" cy="13" r="5.5" fill="#f0d030"/>
+      <text x="15" y="24" font-size="2.8" font-weight="700" fill="#111" text-anchor="middle">VELOCITY</text>
+      <text x="15" y="28" font-size="2.2" fill="#666" text-anchor="middle">0–127</text>
+    </g>
+    <g transform="translate(60,0)">
+      <text x="2"  y="4.5" font-size="2.5" font-weight="600" fill="#aaa">2</text>
+      <circle cx="15" cy="13" r="5.5" fill="#d030d0"/>
+      <text x="15" y="24" font-size="2.6" font-weight="700" fill="#111" text-anchor="middle">PROBABILITY</text>
+      <text x="15" y="28" font-size="2.2" fill="#666" text-anchor="middle">0.0–1.0</text>
+    </g>
+    <g transform="translate(90,0)">
+      <text x="2"  y="4.5" font-size="2.5" font-weight="600" fill="#aaa">3</text>
+      <circle cx="15" cy="13" r="5.5" fill="#f08030"/>
+      <text x="15" y="24" font-size="2.8" font-weight="700" fill="#111" text-anchor="middle">RATCHET</text>
+      <text x="15" y="28" font-size="2.2" fill="#666" text-anchor="middle">1–8</text>
+    </g>
+
+    <!-- Row 1: knobs 4..7  =  mod1-4 -->
+    <g transform="translate(0,34)">
+      <text x="2"  y="4.5" font-size="2.5" font-weight="600" fill="#aaa">4</text>
+      <circle cx="15" cy="13" r="5.5" fill="#30d0d0"/>
+      <text x="15" y="24" font-size="2.8" font-weight="700" fill="#111" text-anchor="middle">MOD 1</text>
+      <text x="15" y="28" font-size="2.2" fill="#666" text-anchor="middle">0–127</text>
+    </g>
+    <g transform="translate(30,34)">
+      <text x="2"  y="4.5" font-size="2.5" font-weight="600" fill="#aaa">5</text>
+      <circle cx="15" cy="13" r="5.5" fill="#60a0e8"/>
+      <text x="15" y="24" font-size="2.8" font-weight="700" fill="#111" text-anchor="middle">MOD 2</text>
+      <text x="15" y="28" font-size="2.2" fill="#666" text-anchor="middle">0–127</text>
+    </g>
+    <g transform="translate(60,34)">
+      <text x="2"  y="4.5" font-size="2.5" font-weight="600" fill="#aaa">6</text>
+      <circle cx="15" cy="13" r="5.5" fill="#4070e0"/>
+      <text x="15" y="24" font-size="2.8" font-weight="700" fill="#111" text-anchor="middle">MOD 3</text>
+      <text x="15" y="28" font-size="2.2" fill="#666" text-anchor="middle">0–127</text>
+    </g>
+    <g transform="translate(90,34)">
+      <text x="2"  y="4.5" font-size="2.5" font-weight="600" fill="#aaa">7</text>
+      <circle cx="15" cy="13" r="5.5" fill="#6040c0"/>
+      <text x="15" y="24" font-size="2.8" font-weight="700" fill="#111" text-anchor="middle">MOD 4</text>
+      <text x="15" y="28" font-size="2.2" fill="#666" text-anchor="middle">0–127</text>
+    </g>
+
+    <!-- Row 2: knobs 8..11  =  direction / speed / transp / range-start -->
+    <g transform="translate(0,68)">
+      <text x="2"  y="4.5" font-size="2.5" font-weight="600" fill="#aaa">8</text>
+      <circle cx="15" cy="13" r="5.5" fill="#a040c0"/>
+      <text x="15" y="24" font-size="2.8" font-weight="700" fill="#111" text-anchor="middle">DIRECTION</text>
+      <text x="15" y="28" font-size="2.2" fill="#666" text-anchor="middle">fwd · back · pend</text>
+    </g>
+    <g transform="translate(30,68)">
+      <text x="2"  y="4.5" font-size="2.5" font-weight="600" fill="#aaa">9</text>
+      <circle cx="15" cy="13" r="5.5" fill="#f04080"/>
+      <text x="15" y="24" font-size="2.8" font-weight="700" fill="#111" text-anchor="middle">SPEED</text>
+      <text x="15" y="28" font-size="2.2" fill="#666" text-anchor="middle">0.25–4.0×</text>
+    </g>
+    <g transform="translate(60,68)">
+      <text x="2"  y="4.5" font-size="2.5" font-weight="600" fill="#aaa">10</text>
+      <circle cx="15" cy="13" r="5.5" fill="#e03030"/>
+      <text x="15" y="24" font-size="2.8" font-weight="700" fill="#111" text-anchor="middle">TRANSPOSE</text>
+      <text x="15" y="28" font-size="2.2" fill="#666" text-anchor="middle">−24 … +24 st</text>
+    </g>
+    <g transform="translate(90,68)">
+      <text x="2"  y="4.5" font-size="2.5" font-weight="600" fill="#aaa">11</text>
+      <circle cx="15" cy="13" r="5.5" fill="#80e040"/>
+      <text x="15" y="24" font-size="2.6" font-weight="700" fill="#111" text-anchor="middle">RANGE START</text>
+      <text x="15" y="28" font-size="2.2" fill="#666" text-anchor="middle">cell 0–15</text>
+    </g>
+
+    <!-- Row 3: knobs 12..15  =  range-end / 3 open -->
+    <g transform="translate(0,102)">
+      <text x="2"  y="4.5" font-size="2.5" font-weight="600" fill="#aaa">12</text>
+      <circle cx="15" cy="13" r="5.5" fill="#b8e040"/>
+      <text x="15" y="24" font-size="2.8" font-weight="700" fill="#111" text-anchor="middle">RANGE END</text>
+      <text x="15" y="28" font-size="2.2" fill="#666" text-anchor="middle">cell 0–15</text>
+    </g>
+    <g transform="translate(30,102)">
+      <text x="2"  y="4.5" font-size="2.5" font-weight="600" fill="#aaa">13</text>
+      <circle cx="15" cy="13" r="5.5" fill="none" stroke="#ccc" stroke-width="0.3"/>
+      <text x="15" y="24" font-size="2.3" font-style="italic" fill="#bbb" text-anchor="middle">(open)</text>
+    </g>
+    <g transform="translate(60,102)">
+      <text x="2"  y="4.5" font-size="2.5" font-weight="600" fill="#aaa">14</text>
+      <circle cx="15" cy="13" r="5.5" fill="none" stroke="#ccc" stroke-width="0.3"/>
+      <text x="15" y="24" font-size="2.3" font-style="italic" fill="#bbb" text-anchor="middle">(open)</text>
+    </g>
+    <g transform="translate(90,102)">
+      <text x="2"  y="4.5" font-size="2.5" font-weight="600" fill="#aaa">15</text>
+      <circle cx="15" cy="13" r="5.5" fill="none" stroke="#ccc" stroke-width="0.3"/>
+      <text x="15" y="24" font-size="2.3" font-style="italic" fill="#bbb" text-anchor="middle">(open)</text>
+    </g>
+
+  </g>
+
+  <!-- Rotary footnote -->
+  <text x="15" y="178" font-size="2.1" fill="#777" font-style="italic">Knobs 0–7 sweep across the 16 cells of the current voice's grid.  Knobs 8–12 sweep across the voice's playheads.</text>
+  <text x="15" y="182" font-size="2.1" fill="#777" font-style="italic">TRANSPOSE has hardware detente at centre = 0.  SPEED is linear here; for finer rates use the L-top fugue dashboard.</text>
+
+  <!-- ======== STRUCTURAL RULE ============================================= -->
+  <line x1="142" y1="22" x2="142" y2="185" stroke="#111" stroke-width="0.2"/>
+
+  <!-- ======== RIGHT TOP: SIDE BUTTONS ===================================== -->
+  <text x="150" y="26" font-size="3.6" font-weight="700" fill="#111" letter-spacing="0.6">SIDE BUTTONS</text>
+  <text x="150" y="30" font-size="2.4" fill="#555">Six bezel switches (channel 4 CC 8–13).  Set Switch Action = CC Hold in Midifighter Utility.</text>
+
+  <g transform="translate(150,36)" font-size="2.7">
+    <!-- L-top -->
+    <text x="0"  y="3"  font-weight="700" fill="#555">L-top</text>
+    <rect x="14" y="0"  width="5" height="4" fill="#80e040"/>
+    <text x="23" y="3"  font-weight="700" fill="#111">FUGUE</text>
+    <text x="45" y="3"  font-size="2.3" fill="#777">→ dashboard mode (below)</text>
+
+    <!-- L-mid -->
+    <text x="0"  y="9"  font-weight="700" fill="#555">L-mid</text>
+    <rect x="14" y="6"  width="5" height="4" fill="none" stroke="#ccc" stroke-width="0.3"/>
+    <text x="23" y="9"  font-size="2.3" font-style="italic" fill="#bbb">(open — globals?)</text>
+
+    <!-- L-bot -->
+    <text x="0"  y="15" font-weight="700" fill="#555">L-bot</text>
+    <rect x="14" y="12" width="5" height="4" fill="none" stroke="#ccc" stroke-width="0.3"/>
+    <text x="23" y="15" font-size="2.3" font-style="italic" fill="#bbb">(open — voice-select?)</text>
+
+    <!-- gap -->
+
+    <!-- R-top -->
+    <text x="0"  y="23" font-weight="700" fill="#555">R-top</text>
+    <rect x="14" y="20" width="5" height="4" fill="#b8e040"/>
+    <text x="23" y="23" font-weight="700" fill="#111">GATE</text>
+    <text x="45" y="23" font-size="2.3" fill="#777">binary toggles · default ON (lit = audible)</text>
+
+    <!-- R-mid -->
+    <text x="0"  y="29" font-weight="700" fill="#555">R-mid</text>
+    <rect x="14" y="26" width="5" height="4" fill="#f04830"/>
+    <text x="23" y="29" font-weight="700" fill="#111">SKIP</text>
+    <text x="45" y="29" font-size="2.3" fill="#777">binary toggles · default off (lit = skipped)</text>
+
+    <!-- R-bot -->
+    <text x="0"  y="35" font-weight="700" fill="#555">R-bot</text>
+    <rect x="14" y="32" width="5" height="4" fill="#c030a0"/>
+    <text x="23" y="35" font-weight="700" fill="#111">GLIDE</text>
+    <text x="45" y="35" font-size="2.3" fill="#777">binary toggles · default off</text>
+  </g>
+
+  <!-- ======== RIGHT BOTTOM: FUGUE DASHBOARD INSET ========================= -->
+  <text x="150" y="86" font-size="3.6" font-weight="700" fill="#111" letter-spacing="0.6">L-TOP · FUGUE DASHBOARD</text>
+  <text x="150" y="90" font-size="2.4" fill="#555">Columns = playheads A–D.  Press L-top to enter; press again to exit to rotary.</text>
+
+  <g transform="translate(150,95)">
+    <!-- Column headers -->
+    <text x="44"  y="3" font-size="2.4" font-weight="700" fill="#999" text-anchor="middle">A</text>
+    <text x="64"  y="3" font-size="2.4" font-weight="700" fill="#999" text-anchor="middle">B</text>
+    <text x="84"  y="3" font-size="2.4" font-weight="700" fill="#999" text-anchor="middle">C</text>
+    <text x="104" y="3" font-size="2.4" font-weight="700" fill="#999" text-anchor="middle">D</text>
+
+    <!-- Row MUTE (press toggles, inverted: lit = audible) -->
+    <g transform="translate(0,5)">
+      <text x="0"  y="5.5" font-size="2.6" font-weight="700" fill="#333">MUTE</text>
+      <text x="0"  y="9"   font-size="2"   fill="#999">press</text>
+      <rect x="34" y="0" width="20" height="10" rx="1.5" fill="#80e040"/>
+      <circle cx="44"  cy="5" r="1" fill="#fff"/>
+      <rect x="54" y="0" width="20" height="10" rx="1.5" fill="#80e040"/>
+      <circle cx="64"  cy="5" r="1" fill="#fff"/>
+      <rect x="74" y="0" width="20" height="10" rx="1.5" fill="#80e040"/>
+      <circle cx="84"  cy="5" r="1" fill="#fff"/>
+      <rect x="94" y="0" width="20" height="10" rx="1.5" fill="#80e040"/>
+      <circle cx="104" cy="5" r="1" fill="#fff"/>
+    </g>
+
+    <!-- Row DIRECTION -->
+    <g transform="translate(0,17)">
+      <text x="0"  y="5.5" font-size="2.6" font-weight="700" fill="#333">DIRECTION</text>
+      <text x="0"  y="9"   font-size="2"   fill="#999">turn · 0–2</text>
+      <rect x="34" y="0" width="20" height="10" rx="1.5" fill="#cdf09a"/>
+      <rect x="54" y="0" width="20" height="10" rx="1.5" fill="#cdf09a"/>
+      <rect x="74" y="0" width="20" height="10" rx="1.5" fill="#cdf09a"/>
+      <rect x="94" y="0" width="20" height="10" rx="1.5" fill="#cdf09a"/>
+      <text x="44"  y="6.5" font-size="2.3" fill="#222" text-anchor="middle">fwd</text>
+      <text x="64"  y="6.5" font-size="2.3" fill="#222" text-anchor="middle">back</text>
+      <text x="84"  y="6.5" font-size="2.3" fill="#222" text-anchor="middle">pend</text>
+      <text x="104" y="6.5" font-size="2.3" fill="#666" text-anchor="middle">…</text>
+    </g>
+
+    <!-- Row SPEED -->
+    <g transform="translate(0,29)">
+      <text x="0"  y="5.5" font-size="2.6" font-weight="700" fill="#333">SPEED</text>
+      <text x="0"  y="9"   font-size="2"   fill="#999">turn · exp</text>
+      <rect x="34" y="0" width="20" height="10" rx="1.5" fill="#cdf09a"/>
+      <rect x="54" y="0" width="20" height="10" rx="1.5" fill="#cdf09a"/>
+      <rect x="74" y="0" width="20" height="10" rx="1.5" fill="#cdf09a"/>
+      <rect x="94" y="0" width="20" height="10" rx="1.5" fill="#cdf09a"/>
+      <text x="44"  y="6.5" font-size="2.3" fill="#222" text-anchor="middle">1.0</text>
+      <text x="64"  y="6.5" font-size="2.3" fill="#222" text-anchor="middle">2.0</text>
+      <text x="84"  y="6.5" font-size="2.3" fill="#222" text-anchor="middle">0.5</text>
+      <text x="104" y="6.5" font-size="2.3" fill="#222" text-anchor="middle">1.5</text>
+    </g>
+
+    <!-- Row TRANSPOSE -->
+    <g transform="translate(0,41)">
+      <text x="0"  y="5.5" font-size="2.6" font-weight="700" fill="#333">TRANSPOSE</text>
+      <text x="0"  y="9"   font-size="2"   fill="#999">turn · linear</text>
+      <rect x="34" y="0" width="20" height="10" rx="1.5" fill="#cdf09a"/>
+      <rect x="54" y="0" width="20" height="10" rx="1.5" fill="#cdf09a"/>
+      <rect x="74" y="0" width="20" height="10" rx="1.5" fill="#cdf09a"/>
+      <rect x="94" y="0" width="20" height="10" rx="1.5" fill="#cdf09a"/>
+      <text x="44"  y="6.5" font-size="2.3" fill="#222" text-anchor="middle">0</text>
+      <text x="64"  y="6.5" font-size="2.3" fill="#222" text-anchor="middle">+7</text>
+      <text x="84"  y="6.5" font-size="2.3" fill="#222" text-anchor="middle">+12</text>
+      <text x="104" y="6.5" font-size="2.3" fill="#222" text-anchor="middle">−5</text>
+    </g>
+  </g>
+
+  <!-- Dashboard footnotes -->
+  <text x="150" y="159" font-size="2.1" fill="#777" font-style="italic">SPEED is exponential 1/32 … 32× with knob-centre = 1.0 = master clock.</text>
+  <text x="150" y="163" font-size="2.1" fill="#777" font-style="italic">TRANSPOSE is linear −24 … +24 with knob-centre = 0 (hardware detente).</text>
+  <text x="150" y="167" font-size="2.1" fill="#777" font-style="italic">MUTE: press toggles; lit ring = audible, dark = silenced.  Cursor keeps advancing.</text>
+  <text x="150" y="171" font-size="2.1" fill="#777" font-style="italic">Sample cell values are the FugueMachine session defaults.</text>
+  <text x="150" y="175" font-size="2.1" fill="#777" font-style="italic">Press L-top again → return to whichever rotary bank was last active.</text>
+
+  <!-- ======== FOOTER ====================================================== -->
+  <line x1="15" y1="195" x2="282" y2="195" stroke="#111" stroke-width="0.2"/>
+  <text x="15"  y="201" font-size="2.1" fill="#777" font-style="italic">Bus key: knob writes set-control odonus.&lt;param&gt;&lt;cellIdx&gt; on ws://localhost:3012/ws.</text>
+  <text x="282" y="201" font-size="2.1" fill="#777" font-style="italic" text-anchor="end">purerl-tidal · Calypso · Slabs 6.0 — 6.6d</text>
+  <text x="15"  y="205" font-size="2.1" fill="#777" font-style="italic">Per-cell defaults seeded from the session's liveXxxArrayOr fallbacks at subscribe time.</text>
+</svg>
