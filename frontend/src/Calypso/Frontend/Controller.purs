@@ -203,10 +203,11 @@ type PressToggle =
 -- | side-button again exits back to the previous rotary bank, identical
 -- | to Binary-bank exit semantics.
 newtype DashboardBank = DashboardBank
-  { label        :: String
-  , color        :: Int                   -- LED hue for the 16 rings
-  , knobs        :: Map Int KnobBinding   -- continuous-turn per knob
-  , pressToggles :: Map Int PressToggle   -- knob idx → boolean toggle
+  { label         :: String
+  , color         :: Int                   -- LED hue for the 16 rings
+  , knobs         :: Map Int KnobBinding   -- continuous-turn per knob
+  , pressToggles  :: Map Int PressToggle   -- knob idx → boolean toggle
+  , pressCommands :: Map Int String        -- knob idx → one-shot WS verb
   }
 
 -- | The (side-button → Dashboard-bank) table.  Sparse.  A given side-
@@ -620,29 +621,41 @@ dashboardKnobPress
   -> Int
   -> Effect Unit
 dashboardKnobPress ws mOutput (DashboardBank db) busState idx =
-  case Map.lookup idx db.pressToggles of
-    Nothing ->
+  case Map.lookup idx db.pressCommands of
+    Just verb -> do
+      -- One-shot WS verb: send the literal string (e.g. "hush",
+      -- "phase-resync") and flash the ring bright as visual feedback.
+      -- No bus state to track; the next bank repaint settles the ring
+      -- back to its baseline fill.
       Console.log $
         "Twister Dashboard '" <> db.label <> "', knob " <> show idx
-          <> " press (no-op)"
-    Just pt -> do
-      bus <- Ref.read busState
-      let current = fromMaybe 0.0 (Map.lookup pt.busKey bus)
-          newVal  = if current > 0.5 then 0.0 else 1.0
-          frame   = "set-control " <> pt.busKey <> " " <> show newVal
-          -- LED paint follows the inversion: bus-true paints dark when
-          -- inverted, full otherwise.
-          isOn    = newVal > 0.5
-          fill    = if isOn /= pt.inverted then 127 else 0
-      Console.log $
-        "Twister Dashboard '" <> db.label <> "', knob " <> show idx
-          <> " toggle → " <> frame
-      WsClient.send ws frame
-      Ref.modify_ (Map.insert pt.busKey newVal) busState
+          <> " command → " <> verb
+      WsClient.send ws verb
       case mOutput of
         Nothing -> pure unit
         Just output ->
-          MIDI.sendMessage output [ 0xB0, idx, fill ]
+          MIDI.sendMessage output [ 0xB0, idx, 127 ]
+    Nothing -> case Map.lookup idx db.pressToggles of
+      Nothing ->
+        Console.log $
+          "Twister Dashboard '" <> db.label <> "', knob " <> show idx
+            <> " press (no-op)"
+      Just pt -> do
+        bus <- Ref.read busState
+        let current = fromMaybe 0.0 (Map.lookup pt.busKey bus)
+            newVal  = if current > 0.5 then 0.0 else 1.0
+            frame   = "set-control " <> pt.busKey <> " " <> show newVal
+            isOn    = newVal > 0.5
+            fill    = if isOn /= pt.inverted then 127 else 0
+        Console.log $
+          "Twister Dashboard '" <> db.label <> "', knob " <> show idx
+            <> " toggle → " <> frame
+        WsClient.send ws frame
+        Ref.modify_ (Map.insert pt.busKey newVal) busState
+        case mOutput of
+          Nothing -> pure unit
+          Just output ->
+            MIDI.sendMessage output [ 0xB0, idx, fill ]
 
 -- | Paint all 16 rings for a Dashboard-bank.  Tint to the bank's
 -- | colour; fills come from the bus values — continuous knobs reverse-
@@ -669,7 +682,13 @@ paintDashboardBank mOutput (DashboardBank db) busState = case mOutput of
               let v    = fromMaybe 0.0 (Map.lookup pt.busKey bus)
                   isOn = v > 0.5
               in if isOn /= pt.inverted then 127 else 0
-            Nothing -> 0
+            Nothing -> case Map.lookup idx db.pressCommands of
+              -- Command cells paint at a dim baseline (40/127) so
+              -- they're visibly present without reading as "active".
+              -- The press handler flashes to 127; this paint comes
+              -- back through on bank re-entry.
+              Just _  -> 40
+              Nothing -> 0
     MIDI.sendMessage output [ 0xB1, idx, db.color ]
     MIDI.sendMessage output [ 0xB0, idx, fill ]
 

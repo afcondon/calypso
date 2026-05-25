@@ -271,14 +271,17 @@ binaryBindings = Map.fromFoldable
 
 dashboardBindings :: DashboardBindings
 dashboardBindings = Map.fromFoldable
-  [ Tuple LTop fugueDashboard ]
+  [ Tuple LTop fugueDashboard
+  , Tuple LMid lMidGlobals
+  ]
 
 fugueDashboard :: DashboardBank
 fugueDashboard = DashboardBank
-  { label:        "Fugue"
-  , color:        56    -- lime
-  , knobs:        Map.fromFoldable (rowDirection <> rowSpeed <> rowTransp)
-  , pressToggles: Map.fromFoldable rowMute
+  { label:         "Fugue"
+  , color:         56    -- lime
+  , knobs:         Map.fromFoldable (rowDirection <> rowSpeed <> rowTransp)
+  , pressToggles:  Map.fromFoldable rowMute
+  , pressCommands: Map.empty
   }
   where
   -- Row 0 — mute press-toggles for columns 0..3.  Inverted: bus
@@ -339,3 +342,40 @@ type KnobBinding' =
   , defaultValue :: Number
   , scaleMode    :: KnobScale
   }
+
+-- ---------------------------------------------------------------------------
+-- L-mid Globals — master-control dashboard (Slab 6.7a)
+-- ---------------------------------------------------------------------------
+-- Bottom row of heavy resets, addressable from the Twister L-mid side
+-- button.  Rows 0-1 + row 3 will fill out in 6.7b-e (master transpose /
+-- master speed / scale select / nav-mode / Marbles triad / mod shred);
+-- for now they paint dark because they have no knobs / toggles / commands
+-- registered.
+--
+-- Row 2 holds the four jam-recovery buttons.  All four send literal WS
+-- verbs that already exist on the BEAM side (hush, clear-scale) or are
+-- added in this slab (clear-controls, phase-resync).  Press one to fire;
+-- the ring flashes bright as visual feedback, then settles back to dim
+-- on the next bank entry.
+
+lMidGlobals :: DashboardBank
+lMidGlobals = DashboardBank
+  { label:         "Globals"
+  , color:         80    -- cyan-ish, distinct from fugue's lime (56)
+  , knobs:         Map.empty
+  , pressToggles:  Map.empty
+  , pressCommands: Map.fromFoldable rowReset
+  }
+  where
+  -- Row 2 (indices 8..11): heavy resets from least → most disruptive.
+  --   8  phase-resync    — Odonus playheads → cursor 0, accumulator 0
+  --   9  clear-controls  — empty live-control bus, knobs back to defaults
+  --  10  clear-scale     — drop active scale, back to binding's cfg.scale
+  --  11  hush            — silence every voice (panic / show-stopper)
+  rowReset :: Array (Tuple Int String)
+  rowReset =
+    [ Tuple 8  "phase-resync"
+    , Tuple 9  "clear-controls"
+    , Tuple 10 "clear-scale"
+    , Tuple 11 "hush"
+    ]
