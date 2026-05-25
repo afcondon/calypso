@@ -28,6 +28,7 @@ module Calypso.Frontend.Controller
   , DashboardBank(..)
   , DashboardBindings
   , PressToggle
+  , KnobStepBank
   , midiController
   , knob
   , knobExp
@@ -202,12 +203,23 @@ type PressToggle =
 -- | playheads and rows are per-playhead parameters.  Pressing the same
 -- | side-button again exits back to the previous rotary bank, identical
 -- | to Binary-bank exit semantics.
+-- | One knob's stepped-rotate behaviour inside a Dashboard-bank.  N
+-- | positions map to N WS verbs (e.g. 7 scale-selector positions →
+-- | clear-scale + 6 set-scale verbs).  `trackKey` is a busState slot
+-- | used only to detect position-change crossings — it isn't read by
+-- | any voice on the BEAM side.
+type KnobStepBank =
+  { trackKey :: String
+  , verbs    :: Array String
+  }
+
 newtype DashboardBank = DashboardBank
   { label         :: String
   , color         :: Int                   -- LED hue for the 16 rings
   , knobs         :: Map Int KnobBinding   -- continuous-turn per knob
   , pressToggles  :: Map Int PressToggle   -- knob idx → boolean toggle
   , pressCommands :: Map Int String        -- knob idx → one-shot WS verb
+  , knobSteps     :: Map Int KnobStepBank  -- knob idx → stepped WS verb
   }
 
 -- | The (side-button → Dashboard-bank) table.  Sparse.  A given side-
@@ -492,7 +504,7 @@ handleBytes ws mOutput rotaryBindings binaryBindings dashboardBindings
       Nothing -> case dashboard of
         Just sb -> case Map.lookup sb dashboardBindings of
           Nothing -> pure unit
-          Just db -> dashboardKnobTurn ws db busState cc val
+          Just db -> dashboardKnobTurn ws mOutput db busState cc val
         Nothing -> do
           bank <- Ref.read currentBank
           case Array.index rotaryBindings bank of
@@ -584,30 +596,62 @@ logDashboardLayout dashboardBindings = traverse_ describe pairs
   describe (Tuple sb (DashboardBank d)) = Console.log $
     "  Side-button " <> show sb <> " → Dashboard '" <> d.label <> "'"
 
--- | Knob-turn inside a Dashboard-bank: look up the knob's continuous
--- | binding (if any), scale + write to bus.  Knobs with no entry in
--- | `knobs` are no-ops on turn (the press-only mute toggles).
+-- | Knob-turn inside a Dashboard-bank.  Dispatch order: stepped knob
+-- | (`knobSteps`) wins, then continuous knob (`knobs`).  A knob can
+-- | live in both — the stepped binding takes priority for the rotation,
+-- | while `pressCommands` / `pressToggles` still handle press separately.
+-- | Knobs with no entry anywhere are no-ops on turn.
 dashboardKnobTurn
   :: WebSocket
+  -> Maybe MIDI.MIDIOutput
   -> DashboardBank
   -> Ref (Map String Number)
   -> Int
   -> Int
   -> Effect Unit
-dashboardKnobTurn ws (DashboardBank db) busState cc val =
-  case Map.lookup cc db.knobs of
-    Nothing ->
-      Console.log $
-        "Twister Dashboard '" <> db.label <> "', knob " <> show cc
-          <> " turn ignored (val=" <> show val <> ")"
-    Just k -> do
-      let scaled = scaleValueMode k.scaleMode k.outMin k.outMax val
-          frame  = "set-control " <> k.controlName <> " " <> show scaled
-      Console.log $
-        "Twister Dashboard '" <> db.label <> "', knob " <> show cc
-          <> " → " <> frame
-      WsClient.send ws frame
-      Ref.modify_ (Map.insert k.controlName scaled) busState
+dashboardKnobTurn ws mOutput (DashboardBank db) busState cc val =
+  case Map.lookup cc db.knobSteps of
+    Just sb -> do
+      bus <- Ref.read busState
+      let n        = Array.length sb.verbs
+          newSlot  = clampSlot n ((val * n) / 128)
+          oldSlot  = case Map.lookup sb.trackKey bus of
+                       Just v -> round v
+                       Nothing -> -1
+      when (newSlot /= oldSlot) do
+        case Array.index sb.verbs newSlot of
+          Nothing -> pure unit
+          Just verb -> do
+            Console.log $
+              "Twister Dashboard '" <> db.label <> "', knob "
+                <> show cc <> " step " <> show newSlot
+                <> " → " <> verb
+            WsClient.send ws verb
+            Ref.modify_ (Map.insert sb.trackKey (toNumber newSlot))
+                         busState
+            let fill = if n > 1
+                         then (newSlot * 127) / (n - 1)
+                         else 0
+            case mOutput of
+              Nothing -> pure unit
+              Just output ->
+                MIDI.sendMessage output [ 0xB0, cc, fill ]
+    Nothing -> case Map.lookup cc db.knobs of
+      Nothing ->
+        Console.log $
+          "Twister Dashboard '" <> db.label <> "', knob " <> show cc
+            <> " turn ignored (val=" <> show val <> ")"
+      Just k -> do
+        let scaled = scaleValueMode k.scaleMode k.outMin k.outMax val
+            frame  = "set-control " <> k.controlName <> " " <> show scaled
+        Console.log $
+          "Twister Dashboard '" <> db.label <> "', knob " <> show cc
+            <> " → " <> frame
+        WsClient.send ws frame
+        Ref.modify_ (Map.insert k.controlName scaled) busState
+  where
+  clampSlot :: Int -> Int -> Int
+  clampSlot n i = max 0 (min (n - 1) i)
 
 -- | Knob-press inside a Dashboard-bank: if the knob has a press-toggle
 -- | binding, flip the boolean at that bus key and repaint the ring's
@@ -673,22 +717,27 @@ paintDashboardBank mOutput (DashboardBank db) busState = case mOutput of
     traverse_ (paintCell output bus) (Array.range 0 15)
   where
   paintCell output bus idx = do
-    let fill = case Map.lookup idx db.knobs of
-          Just k ->
-            let stored = fromMaybe k.outMin (Map.lookup k.controlName bus)
-            in inverseScaleMode k.scaleMode k.outMin k.outMax stored
-          Nothing -> case Map.lookup idx db.pressToggles of
-            Just pt ->
-              let v    = fromMaybe 0.0 (Map.lookup pt.busKey bus)
-                  isOn = v > 0.5
-              in if isOn /= pt.inverted then 127 else 0
-            Nothing -> case Map.lookup idx db.pressCommands of
-              -- Command cells paint at a dim baseline (40/127) so
-              -- they're visibly present without reading as "active".
-              -- The press handler flashes to 127; this paint comes
-              -- back through on bank re-entry.
-              Just _  -> 40
-              Nothing -> 0
+    let fill = case Map.lookup idx db.knobSteps of
+          Just sb ->
+            let n    = Array.length sb.verbs
+                slot = case Map.lookup sb.trackKey bus of
+                         Just v -> max 0 (min (n - 1) (round v))
+                         Nothing -> 0
+            in if n > 1 then (slot * 127) / (n - 1) else 0
+          Nothing -> case Map.lookup idx db.knobs of
+            Just k ->
+              let stored = fromMaybe k.outMin (Map.lookup k.controlName bus)
+              in inverseScaleMode k.scaleMode k.outMin k.outMax stored
+            Nothing -> case Map.lookup idx db.pressToggles of
+              Just pt ->
+                let v    = fromMaybe 0.0 (Map.lookup pt.busKey bus)
+                    isOn = v > 0.5
+                in if isOn /= pt.inverted then 127 else 0
+              Nothing -> case Map.lookup idx db.pressCommands of
+                -- Command cells paint at a dim baseline so they're
+                -- visibly present without reading as "active".
+                Just _  -> 40
+                Nothing -> 0
     MIDI.sendMessage output [ 0xB1, idx, db.color ]
     MIDI.sendMessage output [ 0xB0, idx, fill ]
 

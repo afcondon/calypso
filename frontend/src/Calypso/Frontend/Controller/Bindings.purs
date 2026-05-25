@@ -48,7 +48,7 @@ import Data.Tuple (Tuple(..))
 
 import Calypso.Frontend.Controller
   ( BinaryBank(..), BinaryBindings
-  , DashboardBank(..), DashboardBindings, PressToggle
+  , DashboardBank(..), DashboardBindings, PressToggle, KnobStepBank
   , Controller, ControllerMeta
   , KnobScale(..)
   , knob, midiController, sweepCells
@@ -282,6 +282,7 @@ fugueDashboard = DashboardBank
   , knobs:         Map.fromFoldable (rowDirection <> rowSpeed <> rowTransp)
   , pressToggles:  Map.fromFoldable rowMute
   , pressCommands: Map.empty
+  , knobSteps:     Map.empty
   }
   where
   -- Row 0 — mute press-toggles for columns 0..3.  Inverted: bus
@@ -362,16 +363,57 @@ lMidGlobals :: DashboardBank
 lMidGlobals = DashboardBank
   { label:         "Globals"
   , color:         80    -- cyan-ish, distinct from fugue's lime (56)
-  , knobs:         Map.empty
+  , knobs:         Map.fromFoldable (rowMasters <> rowShred)
   , pressToggles:  Map.empty
-  , pressCommands: Map.fromFoldable rowReset
+  , pressCommands: Map.fromFoldable (rowReset <> rowShredPress)
+  , knobSteps:     Map.fromFoldable [ scaleSelectKnob ]
   }
   where
+  -- Row 0 (indices 0..3): master knobs.  Wired into Odonus's evaluator
+  -- via the live-control bus — masterTransp adds uniformly to every
+  -- playhead's transp[K], masterSpeed multiplies every speed[K], so a
+  -- single turn shifts/slows the whole fugue in lockstep.
+  --   0  masterTransp  Linear -12..+12 scale-degrees, centre 0
+  --   1  masterSpeed   Exp 1/4..4, centre 1.0 (one octave slower → faster)
+  --   2  swing         deferred (placeholder, stays dark)
+  --   3  scale select  stepped 7-position knob (in knobSteps below)
+  rowMasters :: Array (Tuple Int KnobBinding')
+  rowMasters =
+    [ Tuple 0
+        { controlName:  "odonus.masterTransp"
+        , outMin:       (-12.0)
+        , outMax:       12.0
+        , defaultValue: 0.0
+        , scaleMode:    Linear
+        }
+    , Tuple 1
+        { controlName:  "odonus.masterSpeed"
+        , outMin:       0.25
+        , outMax:       4.0
+        , defaultValue: 1.0
+        , scaleMode:    Exponential
+        }
+    ]
+
+  -- Row 0 col 3: stepped scale selector.  Knob position 0 sends
+  -- `clear-scale` (return to binding's static cfg.scale); 1..6 send
+  -- `set-scale <name>` for the curated pop-scale list.  All C-rooted —
+  -- the user-perceived behaviour is "stay in key, switch mode".
+  scaleSelectKnob :: Tuple Int KnobStepBank
+  scaleSelectKnob = Tuple 3
+    { trackKey: "lmid.scaleSlot"
+    , verbs:
+        [ "clear-scale"
+        , "set-scale c-major"
+        , "set-scale c-minor"
+        , "set-scale c-major-pentatonic"
+        , "set-scale c-harmonic-minor"
+        , "set-scale c-messiaen-3"
+        , "set-scale c-phrygian-dominant"
+        ]
+    }
+
   -- Row 2 (indices 8..11): heavy resets from least → most disruptive.
-  --   8  phase-resync    — Odonus playheads → cursor 0, accumulator 0
-  --   9  clear-controls  — empty live-control bus, knobs back to defaults
-  --  10  clear-scale     — drop active scale, back to binding's cfg.scale
-  --  11  hush            — silence every voice (panic / show-stopper)
   rowReset :: Array (Tuple Int String)
   rowReset =
     [ Tuple 8  "phase-resync"
@@ -379,3 +421,24 @@ lMidGlobals = DashboardBank
     , Tuple 10 "clear-scale"
     , Tuple 11 "hush"
     ]
+
+  -- Row 3 (indices 12..15): mod shred — continuous knob sets the shred
+  -- rate (0..1, default 1.0 = full Mimetic reroll), press fires the
+  -- `shred-mod N` WS verb which reads the rate from the bus and rolls
+  -- a uniform die per cell; cells that roll <= rate get fresh random
+  -- 0..127 written back to the bus.  Voices pick up new values on the
+  -- next tick.  Turn down for partial reroll; turn to 0 for "lock".
+  rowShred :: Array (Tuple Int KnobBinding')
+  rowShred = map (\k -> Tuple (12 + k)
+                          { controlName:  "odonus.shredRate" <> show (k + 1)
+                          , outMin:       0.0
+                          , outMax:       1.0
+                          , defaultValue: 1.0
+                          , scaleMode:    Linear
+                          })
+                 (range 0 3)
+
+  rowShredPress :: Array (Tuple Int String)
+  rowShredPress = map (\k -> Tuple (12 + k)
+                              ("shred-mod " <> show (k + 1)))
+                      (range 0 3)
