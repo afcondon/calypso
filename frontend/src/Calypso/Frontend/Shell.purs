@@ -76,7 +76,8 @@ import Calypso.Frontend.Studio as Studio
 import Calypso.Frontend.Vocabulary as Vocabulary
 import Calypso.Frontend.WsClient as WsClient
 import Calypso.Frontend.Controller (subscribeTwister)
-import Calypso.Frontend.Controller.Bindings (allBindings, binaryBindings) as ControllerBindings
+import Calypso.Frontend.Controller.Bindings
+  (allBindings, binaryBindings, dashboardBindings) as ControllerBindings
 import Calypso.Composition as Comp
 import Calypso.Composition.Parser as Comp
 import Calypso.Composition.Serializer as CompS
@@ -591,6 +592,7 @@ handleAction = case _ of
     _ <- H.fork $ H.liftAff $ subscribeTwister
            ControllerBindings.allBindings
            ControllerBindings.binaryBindings
+           ControllerBindings.dashboardBindings
     pure unit
   WsIncoming raw -> handleIncomingBroadcast raw
   WsClosed _ _ -> H.modify_ _ { ws = Nothing }

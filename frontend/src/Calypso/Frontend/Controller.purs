@@ -21,11 +21,16 @@ module Calypso.Frontend.Controller
   ( Controller(..)
   , KnobBinding
   , KnobEntry
+  , KnobScale(..)
   , ControllerMeta
   , BinaryBank(..)
   , BinaryBindings
+  , DashboardBank(..)
+  , DashboardBindings
+  , PressToggle
   , midiController
   , knob
+  , knobExp
   , sweepCells
   , subscribeTwister
   ) where
@@ -43,6 +48,7 @@ import Data.Int (round, toNumber)
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Number (log, pow) as Math
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Aff (Aff)
@@ -77,17 +83,32 @@ type ControllerMeta =
   , color        :: Int
   }
 
+-- | How a knob's raw 0..127 CC value maps to the bus value.
+-- |
+-- |   * `Linear` — affine over `[outMin, outMax]` (the original
+-- |     behaviour).  Knob centre = midpoint of the range, knob full-
+-- |     CCW = outMin, full-CW = outMax.  Use for transposition, ratchet,
+-- |     velocity, mod, range-start/end, direction floor-encoding.
+-- |   * `Exponential` — geometric over `[outMin, outMax]` (both must
+-- |     be positive).  Knob centre = geometric mean √(outMin·outMax),
+-- |     so e.g. outMin=1/32 / outMax=32 puts knob centre at 1.0 with
+-- |     equal travel for "slower" and "faster".  Musical-rate idiom.
+data KnobScale = Linear | Exponential
+
+derive instance eqKnobScale :: Eq KnobScale
+
 -- | What one knob does: writes to `controlName` on the live-control
--- | bus, scaling the raw 0..127 CC value linearly into `outMin..outMax`.
--- | `defaultValue` is the value the substrate seeds local bus state with
--- | at subscribe time — it should match the session's `liveXxxArrayOr`
--- | read-side fallback so the rings paint with each parameter's
--- | audible default on first bank entry.
+-- | bus, scaling the raw 0..127 CC value into `outMin..outMax` per
+-- | `scaleMode`.  `defaultValue` is the value the substrate seeds
+-- | local bus state with at subscribe time — it should match the
+-- | session's `liveXxxArrayOr` read-side fallback so the rings paint
+-- | with each parameter's audible default on first bank entry.
 type KnobBinding =
   { controlName  :: String
   , outMin       :: Number
   , outMax       :: Number
   , defaultValue :: Number
+  , scaleMode    :: KnobScale
   }
 
 -- | The shape returned by the `knob` smart constructor — captures the
@@ -100,6 +121,7 @@ type KnobEntry =
   , outMin       :: Number
   , outMax       :: Number
   , defaultValue :: Number
+  , scaleMode    :: KnobScale
   }
 
 -- | One knob binding for use inside a `midiController` declaration.
@@ -116,7 +138,16 @@ type KnobEntry =
 -- | reversible.
 knob :: Int -> String -> Number -> Number -> Number -> KnobEntry
 knob idx name outMin outMax defaultValue =
-  { idx, name, outMin, outMax, defaultValue }
+  { idx, name, outMin, outMax, defaultValue, scaleMode: Linear }
+
+-- | Exponential-mapped knob.  Same signature as `knob` but the
+-- | 0..127 → outMin..outMax mapping is geometric.  Both bounds must
+-- | be strictly positive — Exponential is undefined for zero / negative.
+-- | Best for clock-relative rates (speed multipliers) where you want
+-- | equal-feeling travel for "half-time" and "double-time".
+knobExp :: Int -> String -> Number -> Number -> Number -> KnobEntry
+knobExp idx name outMin outMax defaultValue =
+  { idx, name, outMin, outMax, defaultValue, scaleMode: Exponential }
 
 -- | A side-button-bank (spec §10 "Binary-bank archetype") — entered
 -- | by pressing a side-button rather than a knob.  In Binary-bank
@@ -143,6 +174,46 @@ newtype BinaryBank = BinaryBank
 -- | returns `Nothing` for side-buttons without an assigned bank.
 type BinaryBindings = Map SideBtn BinaryBank
 
+-- | One knob's press-to-toggle behaviour inside a Dashboard-bank.
+-- |   * `busKey` — the full bus key to flip (e.g. "odonus.mute2").
+-- |   * `inverted` — when `true`, the LED paint flips: bus value > 0.5
+-- |     paints dark and ≤ 0.5 paints full.  Useful for params that are
+-- |     stored as "muted = true" but should *display* as "active = full".
+type PressToggle =
+  { busKey   :: String
+  , inverted :: Boolean
+  }
+
+-- | A side-button-bank that exposes a 4×4 dashboard of mixed-mode knobs
+-- | (spec §10 "Dashboard-bank" archetype, Slab 6.6c).  Unlike Binary-
+-- | banks where every knob does the same thing, each knob in a
+-- | Dashboard-bank can have its own continuous turn-binding *and/or*
+-- | press-toggle behaviour:
+-- |
+-- |   * Knobs with an entry in `knobs` dispatch their turn through the
+-- |     KnobBinding (continuous CC writes to the bus, same shape as
+-- |     a rotary Cell-bank knob).
+-- |   * Knobs with an entry in `pressToggles` flip the boolean at
+-- |     `<prefix>` (already includes the cell idx — the toggle target
+-- |     is the full bus key, not a prefix).
+-- |   * Knobs not present in either map are no-ops on turn / press.
+-- |
+-- | Used for the Four-voice Fugue mode (L-top) where columns are
+-- | playheads and rows are per-playhead parameters.  Pressing the same
+-- | side-button again exits back to the previous rotary bank, identical
+-- | to Binary-bank exit semantics.
+newtype DashboardBank = DashboardBank
+  { label        :: String
+  , color        :: Int                   -- LED hue for the 16 rings
+  , knobs        :: Map Int KnobBinding   -- continuous-turn per knob
+  , pressToggles :: Map Int PressToggle   -- knob idx → boolean toggle
+  }
+
+-- | The (side-button → Dashboard-bank) table.  Sparse.  A given side-
+-- | button can be in either `BinaryBindings` or `DashboardBindings`,
+-- | not both — the dispatch resolves binary first, then dashboard.
+type DashboardBindings = Map SideBtn DashboardBank
+
 -- | Macro for the common case: a 4×4 grid of knobs sweeping the cells
 -- | of a single 16-element array on the live-control bus.  Generates
 -- | 16 KnobEntries named `<prefix>0`..`<prefix>15`, matching the
@@ -167,6 +238,16 @@ sweepCells prefix outMin outMax defaultValue =
   map (\i -> knob i (prefix <> show i) outMin outMax defaultValue)
       (Array.range 0 15)
 
+-- | Update midiController to thread scaleMode through.
+mkKnobBinding :: KnobEntry -> KnobBinding
+mkKnobBinding e =
+  { controlName:  e.name
+  , outMin:       e.outMin
+  , outMax:       e.outMax
+  , defaultValue: e.defaultValue
+  , scaleMode:    e.scaleMode
+  }
+
 -- | Build a `Controller` from a metadata record + a flat array of knob
 -- | entries.  The device name must match exactly what WebMIDI reports
 -- | for the hardware (e.g. `"Midi Fighter Twister"`, spaces and all).
@@ -185,13 +266,7 @@ midiController meta entries = Controller
   , label:            meta.label
   , color:            meta.color
   , knobs: Map.fromFoldable
-      (map (\e -> Tuple e.idx
-                    { controlName:  e.name
-                    , outMin:       e.outMin
-                    , outMax:       e.outMax
-                    , defaultValue: e.defaultValue
-                    })
-           entries)
+      (map (\e -> Tuple e.idx (mkKnobBinding e)) entries)
   }
 
 -- | Where to send the `set-control` frames.  Hardcoded to localhost
@@ -235,8 +310,10 @@ beamWsUrl = "ws://localhost:3012/ws"
 subscribeTwister
   :: Array (Maybe Controller)
   -> BinaryBindings
+  -> DashboardBindings
   -> Aff Unit
-subscribeTwister rotaryBindings binaryBindings = case firstBank rotaryBindings of
+subscribeTwister rotaryBindings binaryBindings dashboardBindings =
+  case firstBank rotaryBindings of
   Nothing -> liftEffect $ Console.warn
     "Controller: no banks declared, pump is a no-op"
   Just (Tuple initialIdx (Controller initial)) -> do
@@ -271,10 +348,12 @@ subscribeTwister rotaryBindings binaryBindings = case firstBank rotaryBindings o
               <> "' not found.  Visible inputs: "
               <> show (map _.name ports)
         Just input -> do
-          currentBank   <- Ref.new initialIdx
-          currentBinary <- Ref.new (Nothing :: Maybe SideBtn)
-          busState      <- Ref.new
-                             (seedBusState rotaryBindings binaryBindings)
+          currentBank      <- Ref.new initialIdx
+          currentBinary    <- Ref.new (Nothing :: Maybe SideBtn)
+          currentDashboard <- Ref.new (Nothing :: Maybe SideBtn)
+          busState         <- Ref.new
+                                (seedBusState rotaryBindings binaryBindings
+                                              dashboardBindings)
           Console.log $
             "Controller: subscribed to '" <> initial.deviceName <> "'."
           Console.log $
@@ -282,31 +361,41 @@ subscribeTwister rotaryBindings binaryBindings = case firstBank rotaryBindings o
               <> " ('" <> initial.label <> "')"
           logBankLayout rotaryBindings
           logBinaryLayout binaryBindings
+          logDashboardLayout dashboardBindings
           -- Paint the initial bank's rings from the empty state — every
           -- ring will be dark until knobs are touched.  Establishes the
           -- "the rings are mine" handshake with the Twister firmware.
           paintBank mOutput rotaryBindings busState initialIdx
           _ <- MIDI.onMessage input
-                 (handleBytes ws mOutput rotaryBindings binaryBindings
-                              currentBank currentBinary busState)
+                 (handleBytes ws mOutput
+                              rotaryBindings binaryBindings dashboardBindings
+                              currentBank currentBinary currentDashboard
+                              busState)
           pure unit
 
 -- | Seed `busState` from each bank's declared defaults so the rings
 -- | paint accurately before any knob has been touched.  Rotary defaults
 -- | come from each `KnobBinding.defaultValue`; binary defaults sweep
--- | the prefix's 16 cells with 1.0 (if `defaultOn`) or 0.0.  Each
--- | declared default should match the session's `liveXxxArrayOr` read-
--- | side fallback for the same bus key — Bindings.purs owns that
--- | coupling.
+-- | the prefix's 16 cells with 1.0 (if `defaultOn`) or 0.0; dashboard
+-- | defaults come from each knob's continuous default (rotary-style)
+-- | and each press-toggle defaults to 0 (off) — sessions wanting a
+-- | non-zero seed for a dashboard toggle should declare it in their
+-- | reader-side fallback (the substrate doesn't know default mute
+-- | states the way it knows continuous defaults).  Each declared
+-- | default should match the session's `liveXxxArrayOr` read-side
+-- | fallback for the same bus key — Bindings.purs owns that coupling.
 seedBusState
   :: Array (Maybe Controller)
   -> BinaryBindings
+  -> DashboardBindings
   -> Map String Number
-seedBusState rotaryBindings binaryBindings =
+seedBusState rotaryBindings binaryBindings dashboardBindings =
   Map.fromFoldable
     (Array.concatMap rotaryEntries rotaryBindings
        <> Array.concatMap binaryEntries
-            (Map.values binaryBindings # Array.fromFoldable))
+            (Map.values binaryBindings # Array.fromFoldable)
+       <> Array.concatMap dashboardEntries
+            (Map.values dashboardBindings # Array.fromFoldable))
   where
   rotaryEntries :: Maybe Controller -> Array (Tuple String Number)
   rotaryEntries = case _ of
@@ -320,6 +409,11 @@ seedBusState rotaryBindings binaryBindings =
     let v = if bb.defaultOn then 1.0 else 0.0
     in map (\i -> Tuple (bb.controlPrefix <> show i) v)
            (Array.range 0 15)
+
+  dashboardEntries :: DashboardBank -> Array (Tuple String Number)
+  dashboardEntries (DashboardBank db) =
+       map (\(Tuple _ kb) -> Tuple kb.controlName kb.defaultValue)
+           (Map.toUnfoldable db.knobs :: Array (Tuple Int KnobBinding))
 
 -- | The first slot in `bindings` that holds a Controller, paired with
 -- | its index.  Used to pick the initial bank and to read the shared
@@ -349,42 +443,44 @@ handleBytes
   -> Maybe MIDI.MIDIOutput
   -> Array (Maybe Controller)
   -> BinaryBindings
+  -> DashboardBindings
   -> Ref Int
+  -> Ref (Maybe SideBtn)
   -> Ref (Maybe SideBtn)
   -> Ref (Map String Number)
   -> Array Int
   -> Effect Unit
-handleBytes ws mOutput rotaryBindings binaryBindings
-            currentBank currentBinary busState bytes =
+handleBytes ws mOutput rotaryBindings binaryBindings dashboardBindings
+            currentBank currentBinary currentDashboard busState bytes =
   case parseTwisterMsg bytes of
   Nothing -> Console.log $
     "Twister: unrecognised MIDI frame " <> show bytes
 
-  -- Knob-press: in Binary-bank mode → toggle cell; otherwise → bank switch.
   Just (EncoderPress idx) -> do
-    binary <- Ref.read currentBinary
+    binary    <- Ref.read currentBinary
+    dashboard <- Ref.read currentDashboard
     case binary of
       Just sb -> case Map.lookup sb binaryBindings of
-        Nothing -> pure unit  -- shouldn't happen — we entered via a valid binding
+        Nothing -> pure unit
         Just bb -> toggleBinaryCell ws mOutput bb busState idx
-      Nothing -> case Array.index rotaryBindings idx of
-        Just (Just (Controller cfg)) -> do
-          Ref.write idx currentBank
-          Console.log $
-            "Twister: bank → " <> show idx <> " ('" <> cfg.label <> "')"
-          -- Repaint all 16 rings from the bus values we've written so
-          -- far.  The Twister firmware doesn't keep cross-bank state;
-          -- without this the rings would still show the previous
-          -- bank's positions.
-          paintBank mOutput rotaryBindings busState idx
-        _ ->
-          Console.log $
-            "Twister: knob " <> show idx
-              <> " pressed but no bank declared at that slot; staying put."
+      Nothing -> case dashboard of
+        Just sb -> case Map.lookup sb dashboardBindings of
+          Nothing -> pure unit
+          Just db -> dashboardKnobPress ws mOutput db busState idx
+        Nothing -> case Array.index rotaryBindings idx of
+          Just (Just (Controller cfg)) -> do
+            Ref.write idx currentBank
+            Console.log $
+              "Twister: bank → " <> show idx <> " ('" <> cfg.label <> "')"
+            paintBank mOutput rotaryBindings busState idx
+          _ ->
+            Console.log $
+              "Twister: knob " <> show idx
+                <> " pressed but no bank declared at that slot; staying put."
 
-  -- Knob-turn: in Binary-bank mode → ignored; otherwise → forward to bus.
   Just (EncoderTurn cc val) -> do
-    binary <- Ref.read currentBinary
+    binary    <- Ref.read currentBinary
+    dashboard <- Ref.read currentDashboard
     case binary of
       Just sb -> case Map.lookup sb binaryBindings of
         Nothing -> pure unit
@@ -392,56 +488,78 @@ handleBytes ws mOutput rotaryBindings binaryBindings
           Console.log $
             "Twister Binary " <> bb.label <> ", knob " <> show cc
               <> " turn ignored (val=" <> show val <> ")"
-      Nothing -> do
-        bank <- Ref.read currentBank
-        case Array.index rotaryBindings bank of
-          Just (Just (Controller cfg)) -> case Map.lookup cc cfg.knobs of
+      Nothing -> case dashboard of
+        Just sb -> case Map.lookup sb dashboardBindings of
+          Nothing -> pure unit
+          Just db -> dashboardKnobTurn ws db busState cc val
+        Nothing -> do
+          bank <- Ref.read currentBank
+          case Array.index rotaryBindings bank of
+            Just (Just (Controller cfg)) -> case Map.lookup cc cfg.knobs of
+              Nothing ->
+                Console.log $
+                  "Twister Bank " <> show bank <> " ('" <> cfg.label
+                    <> "'), knob " <> show cc
+                    <> " (unbound, val=" <> show val <> ")"
+              Just k -> do
+                let scaled = scaleValueMode k.scaleMode k.outMin k.outMax val
+                    frame  = "set-control " <> k.controlName <> " " <> show scaled
+                Console.log $
+                  "Twister Bank " <> show bank <> " ('" <> cfg.label
+                    <> "'), knob " <> show cc <> " → " <> frame
+                WsClient.send ws frame
+                Ref.modify_ (Map.insert k.controlName scaled) busState
+            _ ->
+              Console.log $
+                "Twister: knob " <> show cc
+                  <> " turned but current bank " <> show bank
+                  <> " is empty (val=" <> show val <> ")"
+
+  -- Side-button-press: resolve binary first, then dashboard; the same
+  -- side-button currently active exits back to rotary.
+  Just (SideButtonPress sb) -> do
+    binary    <- Ref.read currentBinary
+    dashboard <- Ref.read currentDashboard
+    case binary of
+      Just activeSb | activeSb == sb -> do
+        -- Exit binary mode → return to rotary bank.
+        Ref.write Nothing currentBinary
+        rotIdx <- Ref.read currentBank
+        case Map.lookup sb binaryBindings of
+          Just (BinaryBank b) ->
+            Console.log $
+              "Twister: exit binary " <> b.label
+                <> " → rotary bank " <> show rotIdx
+          _ -> pure unit
+        paintBank mOutput rotaryBindings busState rotIdx
+      _ -> case dashboard of
+        Just activeSb | activeSb == sb -> do
+          -- Exit dashboard → return to rotary.
+          Ref.write Nothing currentDashboard
+          rotIdx <- Ref.read currentBank
+          case Map.lookup sb dashboardBindings of
+            Just (DashboardBank d) ->
+              Console.log $
+                "Twister: exit dashboard " <> d.label
+                  <> " → rotary bank " <> show rotIdx
+            _ -> pure unit
+          paintBank mOutput rotaryBindings busState rotIdx
+        _ -> case Map.lookup sb binaryBindings of
+          Just bb@(BinaryBank b) -> do
+            -- Switch from rotary / other binary / other dashboard → binary.
+            Ref.write (Just sb) currentBinary
+            Ref.write Nothing currentDashboard
+            Console.log $ "Twister: binary bank → " <> b.label
+            paintBinaryBank mOutput bb busState
+          Nothing -> case Map.lookup sb dashboardBindings of
+            Just db@(DashboardBank d) -> do
+              Ref.write (Just sb) currentDashboard
+              Ref.write Nothing currentBinary
+              Console.log $ "Twister: dashboard → " <> d.label
+              paintDashboardBank mOutput db busState
             Nothing ->
               Console.log $
-                "Twister Bank " <> show bank <> " ('" <> cfg.label
-                  <> "'), knob " <> show cc
-                  <> " (unbound, val=" <> show val <> ")"
-            Just k -> do
-              let scaled = scaleValue k.outMin k.outMax val
-                  frame  = "set-control " <> k.controlName <> " " <> show scaled
-              Console.log $
-                "Twister Bank " <> show bank <> " ('" <> cfg.label
-                  <> "'), knob " <> show cc <> " → " <> frame
-              WsClient.send ws frame
-              -- Mirror the just-written value into local state.  The
-              -- Twister firmware self-paints the ring at the turned
-              -- knob's own position, so we don't repaint here — only
-              -- on bank switch.  Storing the value lets the next
-              -- paintBank produce the right fill if the user comes
-              -- back to this bank later.
-              Ref.modify_ (Map.insert k.controlName scaled) busState
-          _ ->
-            Console.log $
-              "Twister: knob " <> show cc
-                <> " turned but current bank " <> show bank
-                <> " is empty (val=" <> show val <> ")"
-
-  -- Side-button-press: enter / exit / switch Binary-bank mode.
-  Just (SideButtonPress sb) -> case Map.lookup sb binaryBindings of
-    Nothing ->
-      Console.log $
-        "Twister: side-button " <> show sb <> " not assigned"
-    Just bb@(BinaryBank b) -> do
-      current <- Ref.read currentBinary
-      case current of
-        Just sameSb | sameSb == sb -> do
-          -- Same side-button → exit, restore rotary bank.
-          Ref.write Nothing currentBinary
-          rotIdx <- Ref.read currentBank
-          Console.log $
-            "Twister: exit binary " <> b.label
-              <> " → rotary bank " <> show rotIdx
-          paintBank mOutput rotaryBindings busState rotIdx
-        _ -> do
-          -- Different side-button (or coming from rotary) → enter / switch.
-          Ref.write (Just sb) currentBinary
-          Console.log $ "Twister: binary bank → " <> b.label
-          paintBinaryBank mOutput bb busState
+                "Twister: side-button " <> show sb <> " not assigned"
 
   Just _ -> pure unit  -- encoder/side-button releases unused
 
@@ -455,6 +573,105 @@ logBinaryLayout binaryBindings = traverse_ describe pairs
   describe (Tuple sb (BinaryBank b)) = Console.log $
     "  Side-button " <> show sb <> " → Binary '" <> b.label
       <> "' (prefix " <> b.controlPrefix <> ")"
+
+-- | Print the (side-button → Dashboard-bank) layout at subscribe time.
+logDashboardLayout :: DashboardBindings -> Effect Unit
+logDashboardLayout dashboardBindings = traverse_ describe pairs
+  where
+  pairs :: Array (Tuple SideBtn DashboardBank)
+  pairs = Map.toUnfoldable dashboardBindings
+  describe (Tuple sb (DashboardBank d)) = Console.log $
+    "  Side-button " <> show sb <> " → Dashboard '" <> d.label <> "'"
+
+-- | Knob-turn inside a Dashboard-bank: look up the knob's continuous
+-- | binding (if any), scale + write to bus.  Knobs with no entry in
+-- | `knobs` are no-ops on turn (the press-only mute toggles).
+dashboardKnobTurn
+  :: WebSocket
+  -> DashboardBank
+  -> Ref (Map String Number)
+  -> Int
+  -> Int
+  -> Effect Unit
+dashboardKnobTurn ws (DashboardBank db) busState cc val =
+  case Map.lookup cc db.knobs of
+    Nothing ->
+      Console.log $
+        "Twister Dashboard '" <> db.label <> "', knob " <> show cc
+          <> " turn ignored (val=" <> show val <> ")"
+    Just k -> do
+      let scaled = scaleValueMode k.scaleMode k.outMin k.outMax val
+          frame  = "set-control " <> k.controlName <> " " <> show scaled
+      Console.log $
+        "Twister Dashboard '" <> db.label <> "', knob " <> show cc
+          <> " → " <> frame
+      WsClient.send ws frame
+      Ref.modify_ (Map.insert k.controlName scaled) busState
+
+-- | Knob-press inside a Dashboard-bank: if the knob has a press-toggle
+-- | binding, flip the boolean at that bus key and repaint the ring's
+-- | fill.  Otherwise no-op (only specific knobs — the enable row in
+-- | fugue mode — toggle on press).
+dashboardKnobPress
+  :: WebSocket
+  -> Maybe MIDI.MIDIOutput
+  -> DashboardBank
+  -> Ref (Map String Number)
+  -> Int
+  -> Effect Unit
+dashboardKnobPress ws mOutput (DashboardBank db) busState idx =
+  case Map.lookup idx db.pressToggles of
+    Nothing ->
+      Console.log $
+        "Twister Dashboard '" <> db.label <> "', knob " <> show idx
+          <> " press (no-op)"
+    Just pt -> do
+      bus <- Ref.read busState
+      let current = fromMaybe 0.0 (Map.lookup pt.busKey bus)
+          newVal  = if current > 0.5 then 0.0 else 1.0
+          frame   = "set-control " <> pt.busKey <> " " <> show newVal
+          -- LED paint follows the inversion: bus-true paints dark when
+          -- inverted, full otherwise.
+          isOn    = newVal > 0.5
+          fill    = if isOn /= pt.inverted then 127 else 0
+      Console.log $
+        "Twister Dashboard '" <> db.label <> "', knob " <> show idx
+          <> " toggle → " <> frame
+      WsClient.send ws frame
+      Ref.modify_ (Map.insert pt.busKey newVal) busState
+      case mOutput of
+        Nothing -> pure unit
+        Just output ->
+          MIDI.sendMessage output [ 0xB0, idx, fill ]
+
+-- | Paint all 16 rings for a Dashboard-bank.  Tint to the bank's
+-- | colour; fills come from the bus values — continuous knobs reverse-
+-- | scale through their KnobBinding, toggle knobs render 0 or 127 from
+-- | the bus's stored boolean.  Knobs not in either map paint dark.
+paintDashboardBank
+  :: Maybe MIDI.MIDIOutput
+  -> DashboardBank
+  -> Ref (Map String Number)
+  -> Effect Unit
+paintDashboardBank mOutput (DashboardBank db) busState = case mOutput of
+  Nothing -> pure unit
+  Just output -> do
+    bus <- Ref.read busState
+    traverse_ (paintCell output bus) (Array.range 0 15)
+  where
+  paintCell output bus idx = do
+    let fill = case Map.lookup idx db.knobs of
+          Just k ->
+            let stored = fromMaybe k.outMin (Map.lookup k.controlName bus)
+            in inverseScaleMode k.scaleMode k.outMin k.outMax stored
+          Nothing -> case Map.lookup idx db.pressToggles of
+            Just pt ->
+              let v    = fromMaybe 0.0 (Map.lookup pt.busKey bus)
+                  isOn = v > 0.5
+              in if isOn /= pt.inverted then 127 else 0
+            Nothing -> 0
+    MIDI.sendMessage output [ 0xB1, idx, db.color ]
+    MIDI.sendMessage output [ 0xB0, idx, fill ]
 
 -- | Toggle one cell of a Binary-bank.  Reads the current value of
 -- | `<prefix><idx>` from local bus state, writes its boolean inverse
@@ -551,25 +768,53 @@ paintBank mOutput bindings busState bankIdx = case mOutput of
           Nothing -> 0  -- unbound knob in this bank → dark
           Just k ->
             let stored = fromMaybe k.outMin (Map.lookup k.controlName bus)
-            in inverseScale k.outMin k.outMax stored
+            in inverseScaleMode k.scaleMode k.outMin k.outMax stored
     MIDI.sendMessage output [ 0xB1, knobIdx, color ]
     MIDI.sendMessage output [ 0xB0, knobIdx, fill ]
 
--- | Linear 0..127 → outMin..outMax.  Values outside the input range
--- | (which shouldn't happen on real hardware) are passed through with
--- | the same affine map — no clamping.
-scaleValue :: Number -> Number -> Int -> Number
-scaleValue outMin outMax val =
+-- | 0..127 → outMin..outMax under the given KnobScale.
+-- |
+-- |   * Linear: affine map (the original behaviour).
+-- |   * Exponential: geometric map outMin * (outMax/outMin)^(val/127).
+-- |     Knob centre (val=64) lands near √(outMin·outMax) — for
+-- |     outMin=1/32, outMax=32 that's ≈ 1.0.
+scaleValueMode :: KnobScale -> Number -> Number -> Int -> Number
+scaleValueMode Linear outMin outMax val =
   outMin + (outMax - outMin) * (toNumber val / 127.0)
+scaleValueMode Exponential outMin outMax val =
+  let t = toNumber val / 127.0
+  in outMin * Math.pow (outMax / outMin) t
 
--- | Inverse of `scaleValue` — outMin..outMax → 0..127 byte for ring
--- | fill.  Clamps to 0..127 because off-range stored values (a future
--- | external bus write outside the knob's declared range) shouldn't
--- | crash the paint.  When outMin equals outMax the knob is degenerate
--- | and we paint at the floor.
-inverseScale :: Number -> Number -> Number -> Int
-inverseScale outMin outMax value
+-- | Convenience wrapper for callers that don't have a KnobScale handy
+-- | (legacy default — Linear).  New call sites should plumb scaleMode
+-- | from the KnobBinding.
+scaleValue :: Number -> Number -> Int -> Number
+scaleValue = scaleValueMode Linear
+
+-- | Inverse of `scaleValueMode` — outMin..outMax → 0..127 byte for
+-- | ring fill.  Clamps to 0..127 because off-range stored values (a
+-- | future external bus write outside the knob's declared range)
+-- | shouldn't crash the paint.
+inverseScaleMode :: KnobScale -> Number -> Number -> Number -> Int
+inverseScaleMode Linear outMin outMax value
   | outMax == outMin = 0
   | otherwise =
       let raw = round ((value - outMin) / (outMax - outMin) * 127.0)
-      in if raw < 0 then 0 else if raw > 127 then 127 else raw
+      in clamp01_127 raw
+inverseScaleMode Exponential outMin outMax value
+  | outMax == outMin = 0
+  | otherwise =
+      let ratio = value / outMin
+          t = Math.log ratio / Math.log (outMax / outMin)
+          raw = round (t * 127.0)
+      in clamp01_127 raw
+
+clamp01_127 :: Int -> Int
+clamp01_127 raw
+  | raw < 0   = 0
+  | raw > 127 = 127
+  | otherwise = raw
+
+-- | Legacy Linear-only inverse (kept for any remaining callers).
+inverseScale :: Number -> Number -> Number -> Int
+inverseScale = inverseScaleMode Linear

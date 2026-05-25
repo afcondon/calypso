@@ -37,16 +37,20 @@
 module Calypso.Frontend.Controller.Bindings
   ( allBindings
   , binaryBindings
+  , dashboardBindings
   ) where
 
-import Prelude ((<>), negate)
+import Prelude ((<>), (+), map, negate, show)
+import Data.Array (range)
 import Data.Map as Map
 import Data.Maybe (Maybe(..))
 import Data.Tuple (Tuple(..))
 
 import Calypso.Frontend.Controller
   ( BinaryBank(..), BinaryBindings
+  , DashboardBank(..), DashboardBindings, PressToggle
   , Controller, ControllerMeta
+  , KnobScale(..)
   , knob, midiController, sweepCells
   )
 import Calypso.Frontend.Controller.Twister (SideBtn(..))
@@ -241,3 +245,97 @@ binaryBindings = Map.fromFoldable
       , defaultOn:     false -- additive: rings start dark, press to add glide
       })
   ]
+
+-- ---------------------------------------------------------------------------
+-- L-top Four-voice Fugue dashboard (Slab 6.6c).
+--
+-- 4×4 layout — columns are playheads K=0..3, rows are per-playhead
+-- parameters:
+--
+--   Row 0 (knobs  0- 3): mute/enable.  Knob-press toggles
+--                        `odonus.mute<K>` (subtractive: rings start full,
+--                        press to silence that playhead).  Knob-turn
+--                        is ignored.
+--   Row 1 (knobs  4- 7): direction (0=fwd, 1=back, 2=pend).  Writes
+--                        `odonus.direction<K>` over 0..2.  Engine
+--                        floor-decodes.
+--   Row 2 (knobs  8-11): speed (0.25..4.0).  Writes
+--                        `odonus.speed<K>` continuous.
+--   Row 3 (knobs 12-15): transposition (-24..24 semitones).  Writes
+--                        `odonus.transp<K>` continuous.
+--
+-- Tint: lime — visually distinct from any rotary bank or other side-
+-- button-bank.  Pressing L-top again exits back to whatever rotary
+-- bank was last active.
+-- ---------------------------------------------------------------------------
+
+dashboardBindings :: DashboardBindings
+dashboardBindings = Map.fromFoldable
+  [ Tuple LTop fugueDashboard ]
+
+fugueDashboard :: DashboardBank
+fugueDashboard = DashboardBank
+  { label:        "Fugue"
+  , color:        56    -- lime
+  , knobs:        Map.fromFoldable (rowDirection <> rowSpeed <> rowTransp)
+  , pressToggles: Map.fromFoldable rowMute
+  }
+  where
+  -- Row 0 — mute press-toggles for columns 0..3.  Inverted: bus
+  -- stores mute=true (1.0) but the LED paints "active = full ring"
+  -- so a lit knob is an audible playhead, a dark knob is silenced.
+  rowMute :: Array (Tuple Int PressToggle)
+  rowMute = map (\k -> Tuple k
+                  { busKey:   voicePrefix <> ".mute" <> show k
+                  , inverted: true
+                  })
+                (range 0 3)
+
+  -- Row 1 — direction (knobs 4..7).  Continuous over 0..2 with engine
+  -- floor-decoding to fwd / back / pend.  Default 0 (fwd).
+  rowDirection :: Array (Tuple Int KnobBinding')
+  rowDirection = map (\k -> Tuple (4 + k)
+                              { controlName:  voicePrefix <> ".direction" <> show k
+                              , outMin:       0.0
+                              , outMax:       2.0
+                              , defaultValue: 0.0
+                              , scaleMode:    Linear
+                              })
+                     (range 0 3)
+
+  -- Row 2 — speed (knobs 8..11).  Exponential 1/32..32 so knob centre
+  -- (CC=64) lands at 1.0 = master clock, with equal travel for slower
+  -- and faster.  Default 1.0.  CCW = down to 1/32 (very slow), CW =
+  -- up to 32x (very fast cell-stride).
+  rowSpeed :: Array (Tuple Int KnobBinding')
+  rowSpeed = map (\k -> Tuple (8 + k)
+                          { controlName:  voicePrefix <> ".speed" <> show k
+                          , outMin:       0.03125    -- 1/32
+                          , outMax:       32.0
+                          , defaultValue: 1.0
+                          , scaleMode:    Exponential
+                          })
+                 (range 0 3)
+
+  -- Row 3 — transposition (knobs 12..15).  Linear -24..24, default 0
+  -- (the MFT hardware has a centre detente at CC=64 so the knob feels
+  -- centre-zero).
+  rowTransp :: Array (Tuple Int KnobBinding')
+  rowTransp = map (\k -> Tuple (12 + k)
+                           { controlName:  voicePrefix <> ".transp" <> show k
+                           , outMin:       (-24.0)
+                           , outMax:       24.0
+                           , defaultValue: 0.0
+                           , scaleMode:    Linear
+                           })
+                  (range 0 3)
+
+-- Local alias for the `KnobBinding` row-type so the fugueDashboard
+-- where-clause helpers don't need to import the full record name.
+type KnobBinding' =
+  { controlName  :: String
+  , outMin       :: Number
+  , outMax       :: Number
+  , defaultValue :: Number
+  , scaleMode    :: KnobScale
+  }
