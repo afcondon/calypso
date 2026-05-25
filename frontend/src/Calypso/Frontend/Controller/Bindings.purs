@@ -366,7 +366,7 @@ lMidGlobals = DashboardBank
   , knobs:         Map.fromFoldable (rowMasters <> rowShred)
   , pressToggles:  Map.empty
   , pressCommands: Map.fromFoldable (rowReset <> rowShredPress)
-  , knobSteps:     Map.fromFoldable [ scaleSelectKnob ]
+  , knobSteps:     Map.fromFoldable [ scaleSelectKnob, navModeKnob ]
   }
   where
   -- Row 0 (indices 0..3): master knobs.  Wired into Odonus's evaluator
@@ -377,6 +377,10 @@ lMidGlobals = DashboardBank
   --   1  masterSpeed   Exp 1/4..4, centre 1.0 (one octave slower → faster)
   --   2  swing         deferred (placeholder, stays dark)
   --   3  scale select  stepped 7-position knob (in knobSteps below)
+  -- Row 1 (indices 4..7): traversal-shape selectors.  Slab 6.7d added
+  -- the nav-mode stepped knob; cols 5..7 stay dark pending mutation
+  -- triad design.
+  --   4  nav-mode      stepped 3-position knob (cartesian/forward/reverse)
   rowMasters :: Array (Tuple Int KnobBinding')
   rowMasters =
     [ Tuple 0
@@ -410,6 +414,25 @@ lMidGlobals = DashboardBank
         , "set-scale c-harmonic-minor"
         , "set-scale c-messiaen-3"
         , "set-scale c-phrygian-dominant"
+        ]
+    }
+
+  -- Row 1 col 0 (knob 4): nav-mode stepped knob.  Three positions cycle
+  -- every Odonus voice's traversal mode via the `set-nav-mode` WS verb,
+  -- which reuses the engine's existing set_config path (validates the
+  -- atom against odonus_engine:nav_modes/0).  Cartesian is the default
+  -- — it's the René-ish mode where direction[K] picks each playhead's
+  -- X-step direction independently; forward forces all heads forward,
+  -- reverse forces all heads back.  Position 0 = cartesian (the
+  -- session's typical starting state) makes a turn-back-to-zero a
+  -- predictable "return to default" gesture.
+  navModeKnob :: Tuple Int KnobStepBank
+  navModeKnob = Tuple 4
+    { trackKey: "lmid.navMode"
+    , verbs:
+        [ "set-nav-mode cartesian"
+        , "set-nav-mode forward"
+        , "set-nav-mode reverse"
         ]
     }
 
