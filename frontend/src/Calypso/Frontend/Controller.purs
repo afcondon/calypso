@@ -50,6 +50,8 @@ import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Number (log, pow) as Math
+import Data.String (Pattern(..)) as String
+import Data.String (indexOf) as String
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Aff (Aff)
@@ -681,16 +683,27 @@ dashboardKnobPress ws mOutput rotaryBindings binaryBindings dashboardBindings
         "Twister Dashboard '" <> db.label <> "', knob " <> show idx
           <> " command → " <> verb
       WsClient.send ws verb
-      -- clear-controls mirrors the BEAM-side ETS clear locally: empty
+      -- clear-controls mirrors the BEAM-side bus clear locally: empty
       -- the busState then re-seed bindings' defaults, so when the user
       -- enters Skip / Gate / Notes / etc. the LEDs reflect the freshly
       -- reset state rather than the stale pre-clear values.  Then
       -- repaint the current dashboard so its rings update immediately.
+      --
+      -- Preserve `odonus.mute*` keys (matches the BEAM-side preserve
+      -- list).  Mute is a deliberate audible-performance gesture, not
+      -- knob improv — un-muting a playhead and then pressing clear
+      -- shouldn't re-silence it.
       when (verb == "clear-controls") do
+        current <- Ref.read busState
         let seeded = seedBusState rotaryBindings
                                   binaryBindings
                                   dashboardBindings
-        Ref.write seeded busState
+            isMuteKey k = String.indexOf (String.Pattern "odonus.mute") k
+                            == Just 0
+            preservedMutes = Map.filterWithKey (\k _ -> isMuteKey k) current
+            nonMute = Map.filterWithKey (\k _ -> not (isMuteKey k)) seeded
+            combined = Map.union preservedMutes nonMute
+        Ref.write combined busState
         paintDashboardBank mOutput (DashboardBank db) busState
       case mOutput of
         Nothing -> pure unit
