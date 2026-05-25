@@ -414,11 +414,15 @@ lMidGlobals = DashboardBank
     }
 
   -- Row 2 (indices 8..11): heavy resets from least → most disruptive.
+  -- Knob 10 paired with knob 11: hush silences every Odonus voice,
+  -- unhush brings them back.  clear-scale was here originally but
+  -- scale-select knob 3 position 0 already does that work — unhush
+  -- earns the slot.
   rowReset :: Array (Tuple Int String)
   rowReset =
     [ Tuple 8  "phase-resync"
     , Tuple 9  "clear-controls"
-    , Tuple 10 "clear-scale"
+    , Tuple 10 "unhush"
     , Tuple 11 "hush"
     ]
 
