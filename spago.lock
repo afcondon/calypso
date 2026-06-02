@@ -21,11 +21,13 @@
             "foreign",
             "halogen",
             "http-methods",
+            "integers",
             "maybe",
             "nullable",
             "numbers",
             "ordered-collections",
             "prelude",
+            "random",
             "strings",
             "transformers",
             "tuples",
@@ -1951,6 +1953,16 @@
         "newtype",
         "prelude",
         "tuples"
+      ]
+    },
+    "random": {
+      "type": "registry",
+      "version": "6.0.0",
+      "integrity": "sha256-7sZRo6P9UIiXDZ9s2QL9T8h3wlIwLdQrR4+oZKOijQw=",
+      "dependencies": [
+        "effect",
+        "integers",
+        "prelude"
       ]
     },
     "record": {

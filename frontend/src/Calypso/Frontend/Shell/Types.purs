@@ -31,6 +31,7 @@ import Calypso.Pen (PenState, SubscriberId)
 import Calypso.Proposal (Proposal, ProposalId)
 import Calypso.Session (Cell(..), CellRange, CompileError)
 import Calypso.Vocabulary (Vocabulary)
+import Manifest.Build (Draw)
 
 -- | Local cell shape. Mirrors the wire `Cell` minus the `form` field
 -- | (carried as `false` on the wire for back-compat until the wire shape
@@ -722,6 +723,7 @@ data ColumnKey
   | KeyConfig
   | KeyVoiceCells
   | KeyStudio
+  | KeyTarot
 
 derive instance Eq ColumnKey
 
@@ -735,6 +737,7 @@ allColumnKeys =
   , KeyConfig
   , KeyVoiceCells
   , KeyStudio
+  , KeyTarot
   ]
 
 type ColumnVisibility =
@@ -746,6 +749,7 @@ type ColumnVisibility =
   , showConfig :: Boolean
   , showVoiceCells :: Boolean
   , showStudio :: Boolean
+  , showTarot :: Boolean
   }
 
 allVisible :: ColumnVisibility
@@ -758,6 +762,7 @@ allVisible =
   , showConfig: true
   , showVoiceCells: true
   , showStudio: true
+  , showTarot: true
   }
 
 defaultVisibility :: ColumnVisibility
@@ -770,6 +775,7 @@ defaultVisibility =
   , showConfig: false
   , showVoiceCells: false
   , showStudio: false
+  , showTarot: true
   }
 
 isVisible :: ColumnKey -> ColumnVisibility -> Boolean
@@ -782,6 +788,7 @@ isVisible = case _ of
   KeyConfig -> _.showConfig
   KeyVoiceCells -> _.showVoiceCells
   KeyStudio -> _.showStudio
+  KeyTarot -> _.showTarot
 
 toggleKey :: ColumnKey -> ColumnVisibility -> ColumnVisibility
 toggleKey k v = case k of
@@ -793,6 +800,7 @@ toggleKey k v = case k of
   KeyConfig -> v { showConfig = not v.showConfig }
   KeyVoiceCells -> v { showVoiceCells = not v.showVoiceCells }
   KeyStudio -> v { showStudio = not v.showStudio }
+  KeyTarot -> v { showTarot = not v.showTarot }
 
 columnKeyLabel :: ColumnKey -> String
 columnKeyLabel = case _ of
@@ -804,6 +812,7 @@ columnKeyLabel = case _ of
   KeyConfig -> "Config"
   KeyVoiceCells -> "Voice Cells"
   KeyStudio -> "Studio"
+  KeyTarot -> "Tarot"
 
 columnKeyToken :: ColumnKey -> String
 columnKeyToken = case _ of
@@ -815,6 +824,7 @@ columnKeyToken = case _ of
   KeyConfig -> "config"
   KeyVoiceCells -> "voice-cells"
   KeyStudio -> "studio"
+  KeyTarot -> "tarot"
 
 -- | Decode the `?hide=` query value into a `ColumnVisibility`.
 visibilityFromHide :: String -> ColumnVisibility
@@ -830,6 +840,7 @@ visibilityFromHide hide =
     , showConfig: has "config"
     , showVoiceCells: has "voice-cells" || has "voicecells"
     , showStudio: has "studio"
+    , showTarot: not (has "tarot")
     }
 
 hideFromVisibility :: ColumnVisibility -> String
@@ -979,6 +990,8 @@ type State =
   -- | Last result of a POST /studio-source — total ms on success,
   -- | an error string on failure; Nothing = no save attempted yet.
   , studioFireStatus :: Maybe (Either String { reply :: String, totalMs :: Int })
+  , tarotDraw :: Maybe Draw
+  , tarotLocks :: Set String
   }
 
 type Slots =
@@ -1051,6 +1064,11 @@ data Action
   | DismissPenBanner
   | DismissClkReminder
   | ToggleColumn ColumnKey
+  | TarotDeal
+  | TarotRedraw String
+  | TarotToggleLock String
+  | TarotRedrawAll
+  | TarotHush
   | HeaderClick String
   | OpenEditor String
   | CloseEditor

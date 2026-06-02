@@ -60,6 +60,9 @@ import Calypso.Frontend.Panes.Hylograph (renderHylographColumn)
 import Calypso.Frontend.Panes.MiniNotation (renderMiniNotationColumn)
 import Calypso.Frontend.Panes.Replies (renderRepliesColumn)
 import Calypso.Frontend.Panes.Studio (renderStudioColumn)
+import Calypso.Frontend.Panes.Tarot (randomFullDraw, redrawSlot, redrawUnlocked, renderTarotColumn)
+import Generate.Session (dimensionsFromDraw, generateModule)
+import Manifest.Build (Draw)
 import Calypso.Frontend.Panes.Vocabulary (renderVocabularyColumn)
 import Calypso.Frontend.Panes.VoiceCells
   ( clkReminderText
@@ -204,6 +207,8 @@ initialState _ =
   , studio: Nothing
   , studioBuffer: Nothing
   , studioFireStatus: Nothing
+  , tarotDraw: Nothing
+  , tarotLocks: Set.empty
   }
 
 debounceMs :: Milliseconds
@@ -577,6 +582,39 @@ handleAction = case _ of
     H.modify_ \s -> s { visibility = toggleKey key s.visibility }
     s <- H.get
     H.liftEffect $ writeHideParam (hideFromVisibility s.visibility)
+  TarotDeal -> do
+    draw <- H.liftEffect randomFullDraw
+    H.modify_ _ { tarotDraw = Just draw, tarotLocks = Set.empty }
+    regenerateAndFire draw
+  TarotRedraw key -> do
+    s <- H.get
+    case s.tarotDraw of
+      Nothing -> pure unit
+      Just d -> do
+        d' <- H.liftEffect (redrawSlot key d)
+        H.modify_ _ { tarotDraw = Just d' }
+        regenerateAndFire d'
+  TarotToggleLock key ->
+    H.modify_ \s -> s
+      { tarotLocks =
+          if Set.member key s.tarotLocks then Set.delete key s.tarotLocks
+          else Set.insert key s.tarotLocks
+      }
+  TarotRedrawAll -> do
+    s <- H.get
+    case s.tarotDraw of
+      Nothing -> do
+        draw <- H.liftEffect randomFullDraw
+        H.modify_ _ { tarotDraw = Just draw }
+        regenerateAndFire draw
+      Just d -> do
+        d' <- H.liftEffect (redrawUnlocked s.tarotLocks d)
+        H.modify_ _ { tarotDraw = Just d' }
+        regenerateAndFire d'
+  TarotHush -> do
+    _ <- evalSource "stop-piece"
+    _ <- evalSource "hush"
+    H.modify_ _ { compositionStatus = Just "tarot: hush" }
   WsOpened -> do
     -- Controller layer: subscribe to Midifighter Twister via WebMIDI
     -- and forward encoder turns to the BEAM live-control bus as
@@ -1282,6 +1320,36 @@ maybeShowClkReminder src = do
       , clkReminderShown = true
       }
 
+-- | Generate a Calypso session from a tarot draw, build+load it (▶ run path),
+-- | then play it. The frontend holds the Pen, so the build POST is authorised.
+regenerateAndFire
+  :: forall o m
+   . MonadAff m
+  => Draw
+  -> H.HalogenM State Action Slots o m Unit
+regenerateAndFire draw = do
+  let src = generateModule draw
+  -- Surface the generated voices as editable cells in the Voice Cells pane
+  -- (same derivation ModuleChanged uses), and stash the source as the module.
+  H.modify_ \s ->
+    let
+      s' = s
+        { moduleSource = src
+        , cells = mergeCueCellsCompositionWins s.cells (extractCuesAsCellRecs src)
+        , compositionStatus = Just "tarot: building…"
+        }
+    in
+      s' { tvoiceTypes = recomputeTvoiceTypes s' }
+  result <- buildSessionRequest src
+  case result of
+    Left err ->
+      H.modify_ _ { transportError = Just err, compositionStatus = Just "tarot: build failed" }
+    Right r -> do
+      H.modify_ _ { lastBuiltModule = src, compositionStatus = Just ("tarot: " <> r.reply) }
+      _ <- evalSource ("bpm " <> show (dimensionsFromDraw draw).bpm)
+      _ <- evalSource "play-piece piece"
+      pure unit
+
 -- | POST `{source, imports: []}` to /eval.  Returns the daemon's
 -- | reply line on success, a human transport error on failure.  The
 -- | server's EvalResponse wraps the reply text as `value`; an
@@ -1914,6 +1982,7 @@ render state =
             <> (if state.visibility.showConfig then [ renderConfigColumn state ] else [])
             <> (if state.visibility.showVoiceCells then [ renderVoiceCellsColumn state ] else [])
             <> (if state.visibility.showStudio then [ renderStudioColumn state ] else [])
+            <> (if state.visibility.showTarot then [ renderTarotColumn state ] else [])
         )
     , renderErrorPanel state
     , renderEditingModal state
