@@ -1325,12 +1325,19 @@ maybeShowClkReminder src = do
 
 -- | Generate a Calypso session from a tarot draw, build+load it (▶ run path),
 -- | then play it. The frontend holds the Pen, so the build POST is authorised.
+-- |
+-- | Every deal/re-deal hushes first (stop-piece + hush), so the previous
+-- | reading is silenced before the new one fires rather than stacking on top
+-- | of it. The build latency that follows gives a clean cut between genres.
 regenerateAndFire
   :: forall o m
    . MonadAff m
   => Draw
   -> H.HalogenM State Action Slots o m Unit
-regenerateAndFire draw = playGenreSeed (genreForDraw draw) (seedFromDraw draw)
+regenerateAndFire draw = do
+  _ <- evalSource "stop-piece"
+  _ <- evalSource "hush"
+  playGenreSeed (genreForDraw draw) (seedFromDraw draw)
 
 -- | The single play path: sample a genre prior at a seed, stash the reading for
 -- | the pane, and play it. A card draw reaches here via the significator

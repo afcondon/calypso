@@ -36,6 +36,13 @@ import Data.FullBloom (Card(..), OracleSuit(..), Suit(..))
 import Generate.Genre (Genre, summarise)
 import Generate.Genres.DubTechno (dubTechno)
 import Generate.Genres.Part (part)
+import Generate.Genres.House (house)
+import Generate.Genres.DnB (dnb)
+import Generate.Genres.Goa (goa)
+import Generate.Genres.Dembow (dembow)
+import Generate.Genres.Glass (glass)
+import Generate.Genres.Miles (miles)
+import Generate.Genres.Webern (webern)
 import Manifest.Build (Draw)
 
 -- ---------------------------------------------------------------------------
@@ -343,11 +350,36 @@ oracleGlyph = case _ of
   NectarRobbers -> "✸"
   SeedCarriers -> "❉"
 
--- | Significator → genre. STUB: only two priors exist so far, so the Major
--- | arcana is bucketed by parity; replace with a genre registry as more priors
--- | are authored (the staged plan).
+-- | Significator → genre. The significator (the chosen Major arcana) selects
+-- | the genre region; the rest of the draw only seeds within it. The mapping is
+-- | thematic — each card's character points at a genre's mood (the Tower's
+-- | sudden rupture → Webern's pointillism; the Moon's nocturnal depth → dub
+-- | techno; the Sun's brightness → house). All nine authored priors appear.
 genreForMajor :: Int -> Genre
-genreForMajor n = if n `mod` 2 == 0 then dubTechno else part
+genreForMajor = case _ of
+  0 -> house         -- The Fool — bright, open, the dance floor's first step
+  1 -> goa           -- The Magician — focused will, hypnotic ritual
+  2 -> dubTechno     -- The High Priestess — mystery, cavernous depth
+  3 -> glass         -- The Empress — abundance, generative bloom
+  4 -> webern        -- The Emperor — order, serial rigour
+  5 -> part          -- The Hierophant — sacred, liturgical
+  6 -> dembow        -- The Lovers — sensual, the body's dance
+  7 -> dnb           -- The Chariot — drive, speed, momentum
+  8 -> dembow        -- Strength — physical, grounded groove
+  9 -> miles         -- The Hermit — introspective, the solo voice
+  10 -> goa          -- Wheel of Fortune — cyclic, relentless turning
+  11 -> miles        -- Justice — balance, swing, measured
+  12 -> miles        -- The Hanged Man — suspended, modal stasis
+  13 -> dnb          -- Death — intense, breakbeat transformation
+  14 -> part          -- Temperance — balance, sacred restraint
+  15 -> goa          -- The Devil — relentless, dark trance
+  16 -> webern       -- The Tower — sudden, fractured rupture
+  17 -> glass        -- The Star — hope, flowing motion
+  18 -> dubTechno    -- The Moon — nocturnal, subterranean
+  19 -> house        -- The Sun — joyful, radiant
+  20 -> part          -- Judgement — transcendent, choral
+  21 -> glass        -- The World — completion, cyclical wholeness
+  _ -> dubTechno     -- out of range: the deep default
 
 genreForDraw :: Draw -> Genre
 genreForDraw d = genreForMajor (maybe 7 _.num d.major)
