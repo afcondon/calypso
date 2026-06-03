@@ -11,6 +11,11 @@ dist/
 # Generated frontend bundle — regenerate via `make bundle`.
 frontend/public/bundle.js
 
+# BOTANICA: Full Bloom card scans (extracted from the owned deck PDF). Served
+# locally for the Tarot pane but NOT distributable — never commit reproductions.
+# The eventual home is the Mac Mini over Tailscale; other builders supply their own.
+frontend/public/cards/
+
 # Ephemeral /eval sandbox. Materialised at boot by the server from the
 # main-workspace template, rewritten on every /eval call — not worth
 # tracking as source.

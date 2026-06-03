@@ -2089,3 +2089,180 @@ body::before {
   font-size: 1rem;
   padding: 0.5rem 1.1rem;
 }
+
+/* ── Tarot pane ──────────────────────────────────────────────────────── */
+.pane-tarot {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.5rem;
+  overflow-y: auto;
+}
+
+.tarot-toolbar { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.tarot-btn {
+  background: transparent;
+  border: 1px solid var(--fg-rule);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  padding: 0.2rem 0.6rem;
+  cursor: pointer;
+}
+.tarot-btn:hover { border-color: var(--fg-bright); color: var(--fg-bright); }
+
+.tarot-empty { color: var(--fg-dim); font-family: var(--mono); font-size: 0.85rem; }
+
+/* the dealt spread: significator row, minors row, oracle row */
+.tarot-spread { display: flex; flex-direction: column; gap: 0.9rem; align-items: center; }
+.tarot-row { display: flex; flex-wrap: wrap; gap: 0.6rem; justify-content: center; }
+
+/* a single framed card — dark Matrix matting, full-colour-scan-ready */
+.tarot-card {
+  position: relative;
+  width: 104px;
+  aspect-ratio: 3 / 4;
+  background-color: var(--bg-deep);
+  background-image:
+    radial-gradient(1px 1px at 18% 22%, rgba(65, 255, 124, 0.35), transparent 60%),
+    radial-gradient(1px 1px at 72% 34%, rgba(65, 255, 124, 0.25), transparent 60%),
+    radial-gradient(1px 1px at 40% 68%, rgba(65, 255, 124, 0.30), transparent 60%),
+    radial-gradient(1px 1px at 84% 80%, rgba(65, 255, 124, 0.20), transparent 60%),
+    radial-gradient(1px 1px at 28% 88%, rgba(65, 255, 124, 0.20), transparent 60%);
+  border: 1px solid var(--fg-dim);
+  border-radius: 4px;
+  box-shadow:
+    inset 0 0 0 3px var(--bg),
+    inset 0 0 0 4px var(--fg-rule),
+    0 1px 6px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
+}
+.tarot-card:hover { transform: translateY(-2px); border-color: var(--fg); }
+
+/* significator: larger and glowing */
+.tarot-row-sig .tarot-card {
+  width: 132px;
+  border-color: var(--fg);
+  box-shadow:
+    inset 0 0 0 3px var(--bg),
+    inset 0 0 0 4px var(--fg-rule),
+    var(--glow);
+}
+
+/* locked: amber frame */
+.tarot-card.locked {
+  border-color: var(--amber);
+  box-shadow:
+    inset 0 0 0 3px var(--bg),
+    inset 0 0 0 4px rgba(255, 184, 74, 0.25),
+    0 0 6px rgba(255, 184, 74, 0.4);
+}
+
+/* corner ticks */
+.tarot-card::before,
+.tarot-card::after {
+  content: "";
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--fg);
+  z-index: 3;
+  pointer-events: none;
+}
+.tarot-card::before { top: 5px; left: 5px; border-right: 0; border-bottom: 0; }
+.tarot-card::after { bottom: 5px; right: 5px; border-left: 0; border-top: 0; }
+
+/* full-colour scan (when present) over the typographic face */
+.tarot-card-img {
+  position: absolute;
+  inset: 7px;
+  width: calc(100% - 14px);
+  height: calc(100% - 14px);
+  object-fit: cover;
+  border-radius: 2px;
+}
+
+/* typographic face / fallback */
+.tarot-face {
+  position: absolute;
+  inset: 9px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  text-align: center;
+  font-family: var(--mono);
+  color: var(--fg);
+}
+.tarot-face-glyph { font-size: 1.5rem; color: var(--cyan); line-height: 1; }
+.tarot-face-numeral {
+  font-size: 1.4rem;
+  color: var(--fg-bright);
+  text-shadow: var(--glow);
+  letter-spacing: 0.04em;
+}
+.tarot-face-name { font-size: 0.62rem; color: var(--fg); opacity: 0.9; line-height: 1.15; }
+.tarot-face-kind {
+  font-size: 0.5rem;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.tarot-row-sig .tarot-face-numeral { font-size: 1.9rem; }
+
+/* role tag (significator / oracle) */
+.tarot-card-tag {
+  position: absolute;
+  top: 4px;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 0.48rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--cyan);
+}
+
+/* per-card controls, revealed on hover */
+.tarot-card-controls {
+  position: absolute;
+  bottom: 3px;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  justify-content: center;
+  gap: 0.3rem;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.tarot-card:hover .tarot-card-controls { opacity: 1; }
+.tarot-card-controls button {
+  background: rgba(0, 0, 0, 0.8);
+  border: 1px solid var(--fg-dim);
+  color: var(--fg);
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 1px 5px;
+  cursor: pointer;
+  border-radius: 2px;
+}
+.tarot-card-controls button:hover { border-color: var(--fg-bright); color: var(--fg-bright); }
+
+/* the genre reading */
+.tarot-genre {
+  font-family: var(--mono-code);
+  font-size: 0.72rem;
+  color: var(--fg);
+  background: var(--bg-panel);
+  border: 1px solid var(--fg-rule);
+  border-left: 2px solid var(--fg-dim);
+  padding: 0.5rem 0.6rem;
+  margin: 0;
+  white-space: pre;
+  overflow-x: auto;
+}
