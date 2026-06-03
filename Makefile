@@ -37,6 +37,7 @@ build:
 
 bundle:
 	spago bundle -p calypso-frontend
+	@printf '\nconsole.log("CALYPSO bundle built %s");\n' "$$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> frontend/public/bundle.js
 
 start: bootstrap
 	@echo "Starting backend on :$(BACKEND_PORT) and frontend on :$(FRONTEND_PORT)"

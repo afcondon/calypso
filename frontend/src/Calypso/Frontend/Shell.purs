@@ -60,8 +60,10 @@ import Calypso.Frontend.Panes.Hylograph (renderHylographColumn)
 import Calypso.Frontend.Panes.MiniNotation (renderMiniNotationColumn)
 import Calypso.Frontend.Panes.Replies (renderRepliesColumn)
 import Calypso.Frontend.Panes.Studio (renderStudioColumn)
-import Calypso.Frontend.Panes.Tarot (randomFullDraw, redrawSlot, redrawUnlocked, renderTarotColumn)
-import Generate.Session (dimensionsFromDraw, generateModule)
+import Calypso.Frontend.Panes.Tarot (genreForDraw, randomFullDraw, redrawSlot, redrawUnlocked, renderTarotColumn, seedFromDraw)
+import Generate.Genre (Genre, sampleGenre)
+import Calypso.Frontend.Tarot.Lower (manifestToModule)
+import Data.JamManifest (JamManifest)
 import Manifest.Build (Draw)
 import Calypso.Frontend.Panes.Vocabulary (renderVocabularyColumn)
 import Calypso.Frontend.Panes.VoiceCells
@@ -209,6 +211,7 @@ initialState _ =
   , studioFireStatus: Nothing
   , tarotDraw: Nothing
   , tarotLocks: Set.empty
+  , tarotManifest: Nothing
   }
 
 debounceMs :: Milliseconds
@@ -1327,26 +1330,49 @@ regenerateAndFire
    . MonadAff m
   => Draw
   -> H.HalogenM State Action Slots o m Unit
-regenerateAndFire draw = do
-  let src = generateModule draw
-  -- Surface the generated voices as editable cells in the Voice Cells pane
-  -- (same derivation ModuleChanged uses), and stash the source as the module.
+regenerateAndFire draw = playGenreSeed (genreForDraw draw) (seedFromDraw draw)
+
+-- | The single play path: sample a genre prior at a seed, stash the reading for
+-- | the pane, and play it. A card draw reaches here via the significator
+-- | (genre = the Major) and a draw-derived seed; a genre button reaches here
+-- | with a chosen genre and the current draw's seed.
+playGenreSeed
+  :: forall o m
+   . MonadAff m
+  => Genre
+  -> Int
+  -> H.HalogenM State Action Slots o m Unit
+playGenreSeed genre seed = do
+  let m = sampleGenre genre seed
+  H.modify_ _ { tarotManifest = Just m }
+  playManifest m
+
+-- | Play a sampled Genre manifest: lower it to a Calypso session module, build/
+-- | load it, set the manifest's tempo, and play. Mirrors regenerateAndFire but
+-- | takes a JamManifest from Arcana's genre engine rather than a card Draw.
+playManifest
+  :: forall o m
+   . MonadAff m
+  => JamManifest
+  -> H.HalogenM State Action Slots o m Unit
+playManifest m = do
+  let src = manifestToModule m
   H.modify_ \s ->
     let
       s' = s
         { moduleSource = src
         , cells = mergeCueCellsCompositionWins s.cells (extractCuesAsCellRecs src)
-        , compositionStatus = Just "tarot: building…"
+        , compositionStatus = Just "genre: building…"
         }
     in
       s' { tvoiceTypes = recomputeTvoiceTypes s' }
   result <- buildSessionRequest src
   case result of
     Left err ->
-      H.modify_ _ { transportError = Just err, compositionStatus = Just "tarot: build failed" }
+      H.modify_ _ { transportError = Just err, compositionStatus = Just "genre: build failed" }
     Right r -> do
-      H.modify_ _ { lastBuiltModule = src, compositionStatus = Just ("tarot: " <> r.reply) }
-      _ <- evalSource ("bpm " <> show (dimensionsFromDraw draw).bpm)
+      H.modify_ _ { lastBuiltModule = src, compositionStatus = Just ("genre: " <> r.reply) }
+      _ <- evalSource ("bpm " <> show m.tempo.bpm)
       _ <- evalSource "play-piece piece"
       pure unit
 

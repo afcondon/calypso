@@ -8,6 +8,8 @@ module Calypso.Frontend.Panes.Tarot
   , randomFullDraw
   , redrawSlot
   , redrawUnlocked
+  , genreForDraw
+  , seedFromDraw
   ) where
 
 import Prelude
@@ -28,9 +30,12 @@ import Halogen.HTML.Events as HE
 import Halogen.HTML.Properties as HP
 
 import Calypso.Frontend.Shell.Types (Action(..), Slots, State)
-import Data.Cards (Rank(..))
+import Data.Cards (Rank(..), rankToInt)
+import Data.Foldable (sum)
 import Data.FullBloom (Card(..), OracleSuit(..), Suit(..), label)
-import Generate.Session (dimensionsFromDraw)
+import Generate.Genre (Genre, summarise)
+import Generate.Genres.DubTechno (dubTechno)
+import Generate.Genres.Part (part)
 import Manifest.Build (Draw)
 
 -- ---------------------------------------------------------------------------
@@ -158,7 +163,7 @@ renderTarotColumn state =
                        Nothing -> []
                    )
             )
-    , renderDims state
+    , renderGenre state
     ]
   where
   btn lbl act =
@@ -189,17 +194,29 @@ renderCard state key lbl =
           ]
       ]
 
-renderDims :: forall m. State -> H.ComponentHTML Action Slots m
-renderDims state = case state.tarotDraw of
+-- | Significator → genre. STUB: only two priors exist so far, so the Major
+-- | arcana is bucketed by parity; replace with a genre registry as more priors
+-- | are authored (the staged plan).
+genreForMajor :: Int -> Genre
+genreForMajor n = if n `mod` 2 == 0 then dubTechno else part
+
+genreForDraw :: Draw -> Genre
+genreForDraw d = genreForMajor (maybe 7 _.num d.major)
+
+-- | The rest of the draw supplies the deterministic sample seed, so the same
+-- | cards always yield the same music — "the deck is the entropy source".
+seedFromDraw :: Draw -> Int
+seedFromDraw d =
+  maybe 0 _.num d.major
+    + sum (map (rankToInt <<< _.rank) d.minors)
+    + sum (map _.rank d.oracles)
+
+-- | The reading produced by a genre button: source line + the manifest summary
+-- | (bpm, key, sections, and each voice's pattern). Distinct from the card draw
+-- | above — genres aren't card-based yet (the significator wiring is stage 2).
+renderGenre :: forall m. State -> H.ComponentHTML Action Slots m
+renderGenre state = case state.tarotManifest of
   Nothing -> HH.text ""
-  Just d ->
-    let dims = dimensionsFromDraw d
-    in
-      HH.div [ HP.class_ (H.ClassName "tarot-dims") ]
-        [ HH.text $
-            "scale " <> dims.scaleVal
-              <> "  ·  " <> show dims.bpm <> " bpm"
-              <> "  ·  " <> show dims.voiceCount <> " voices"
-              <> "  ·  density " <> show dims.density
-              <> "  ·  entropy " <> show dims.entropy
-        ]
+  Just m ->
+    HH.pre [ HP.class_ (H.ClassName "tarot-genre") ]
+      [ HH.text (m.meta.source <> "\n" <> summarise m) ]

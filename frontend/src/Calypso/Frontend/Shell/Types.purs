@@ -32,6 +32,7 @@ import Calypso.Proposal (Proposal, ProposalId)
 import Calypso.Session (Cell(..), CellRange, CompileError)
 import Calypso.Vocabulary (Vocabulary)
 import Manifest.Build (Draw)
+import Data.JamManifest (JamManifest)
 
 -- | Local cell shape. Mirrors the wire `Cell` minus the `form` field
 -- | (carried as `false` on the wire for back-compat until the wire shape
@@ -992,6 +993,8 @@ type State =
   , studioFireStatus :: Maybe (Either String { reply :: String, totalMs :: Int })
   , tarotDraw :: Maybe Draw
   , tarotLocks :: Set String
+  -- Last sampled genre manifest (the genre buttons' "reading"), shown in the pane.
+  , tarotManifest :: Maybe JamManifest
   }
 
 type Slots =
