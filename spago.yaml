@@ -2,6 +2,8 @@ workspace:
   packageSet:
     registry: 73.3.0
   extraPackages:
+    tarot-music:
+      path: ../../tarot-music
     httpurple:
       path: ../../../purescript-httpurple-ws
     hylograph-graph:

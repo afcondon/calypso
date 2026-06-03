@@ -29,6 +29,7 @@
             "prelude",
             "random",
             "strings",
+            "tarot-music",
             "transformers",
             "tuples",
             "web-dom",
@@ -724,6 +725,9 @@
       },
       "hylograph-transitions": {
         "path": "../../../purescript-hylograph-libs/purescript-hylograph-transitions"
+      },
+      "tarot-music": {
+        "path": "../../tarot-music"
       }
     }
   },
@@ -1318,6 +1322,38 @@
         "web-html",
         "web-touchevents",
         "web-uievents"
+      ]
+    },
+    "halogen-hooks": {
+      "type": "registry",
+      "version": "0.6.3",
+      "integrity": "sha256-r5d32RCzNykEr7JsCGu23jHkJDz0awO5VbzKY7ah0qI=",
+      "dependencies": [
+        "aff",
+        "arrays",
+        "bifunctors",
+        "effect",
+        "exceptions",
+        "foldable-traversable",
+        "foreign-object",
+        "free",
+        "freeap",
+        "halogen",
+        "halogen-subscriptions",
+        "maybe",
+        "newtype",
+        "ordered-collections",
+        "parallel",
+        "partial",
+        "prelude",
+        "refs",
+        "tailrec",
+        "transformers",
+        "tuples",
+        "unsafe-coerce",
+        "unsafe-reference",
+        "web-dom",
+        "web-html"
       ]
     },
     "halogen-subscriptions": {
@@ -2108,6 +2144,26 @@
         "partial",
         "prelude",
         "refs"
+      ]
+    },
+    "tarot-music": {
+      "type": "local",
+      "path": "../../tarot-music",
+      "dependencies": [
+        "aff",
+        "arrays",
+        "console",
+        "effect",
+        "foldable-traversable",
+        "halogen",
+        "halogen-hooks",
+        "integers",
+        "maybe",
+        "ordered-collections",
+        "prelude",
+        "random",
+        "strings",
+        "tuples"
       ]
     },
     "transformers": {

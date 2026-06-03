@@ -27,6 +27,7 @@ package:
     - numbers
     - ordered-collections
     - calypso-shared
+    - tarot-music
     - prelude
     - random
     - strings
