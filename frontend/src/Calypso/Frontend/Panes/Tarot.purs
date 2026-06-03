@@ -37,12 +37,15 @@ import Generate.Genre (Genre, summarise)
 import Generate.Genres.DubTechno (dubTechno)
 import Generate.Genres.Part (part)
 import Generate.Genres.House (house)
-import Generate.Genres.DnB (dnb)
 import Generate.Genres.Goa (goa)
 import Generate.Genres.Dembow (dembow)
 import Generate.Genres.Glass (glass)
 import Generate.Genres.Miles (miles)
 import Generate.Genres.Webern (webern)
+import Generate.Genres.DeepTechHouse (deepTechHouse)
+import Generate.Genres.RawDnB (rawDnB)
+import Generate.Genres.IncessantDnB (incessantDnB)
+import Generate.Genres.SubzeroTechno (subzeroTechno)
 import Manifest.Build (Draw)
 
 -- ---------------------------------------------------------------------------
@@ -364,15 +367,15 @@ genreForMajor = case _ of
   4 -> webern        -- The Emperor — order, serial rigour
   5 -> part          -- The Hierophant — sacred, liturgical
   6 -> dembow        -- The Lovers — sensual, the body's dance
-  7 -> dnb           -- The Chariot — drive, speed, momentum
-  8 -> dembow        -- Strength — physical, grounded groove
+  7 -> rawDnB        -- The Chariot — drive, speed, momentum
+  8 -> deepTechHouse -- Strength — powerful, steady tech-house groove
   9 -> miles         -- The Hermit — introspective, the solo voice
   10 -> goa          -- Wheel of Fortune — cyclic, relentless turning
   11 -> miles        -- Justice — balance, swing, measured
   12 -> miles        -- The Hanged Man — suspended, modal stasis
-  13 -> dnb          -- Death — intense, breakbeat transformation
+  13 -> incessantDnB -- Death — intense, breakbeat transformation
   14 -> part          -- Temperance — balance, sacred restraint
-  15 -> goa          -- The Devil — relentless, dark trance
+  15 -> subzeroTechno -- The Devil — relentless, dark minimal techno
   16 -> webern       -- The Tower — sudden, fractured rupture
   17 -> glass        -- The Star — hope, flowing motion
   18 -> dubTechno    -- The Moon — nocturnal, subterranean
