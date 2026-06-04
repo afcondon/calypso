@@ -82,6 +82,16 @@ drumKitDecl =
     <> "  , hit \"ht\" 50 100 40\n"
     <> "  , hit \"cr\" 49 90 80\n"
     <> "  , hit \"rd\" 51 80 60\n"
+    -- AfroLatin percussion, dropped 2 octaves (-24) from the GM numbers
+    -- (Maracas 70, High Timbale 65, Cowbell 56, Open/Low Conga 63/64) to
+    -- land in the rig's AfroCuban instrument's range — GM put them ~2
+    -- octaves too high. Velocity here is only the no-accent default;
+    -- per-step `# gain` overrides it.
+    <> "  , hit \"maracas\" 46 90 25\n"
+    <> "  , hit \"timbale\" 41 100 40\n"
+    <> "  , hit \"cowbell\" 32 100 40\n"
+    <> "  , hit \"congahi\" 39 100 40\n"
+    <> "  , hit \"congalo\" 40 100 40\n"
     <> "  ]\n"
 
 -- | Per-part supervision names from Tidal.Voices (cycled if >4 pitched parts).

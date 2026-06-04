@@ -46,6 +46,7 @@ import Generate.Genres.DeepTechHouse (deepTechHouse)
 import Generate.Genres.RawDnB (rawDnB)
 import Generate.Genres.IncessantDnB (incessantDnB)
 import Generate.Genres.SubzeroTechno (subzeroTechno)
+import Generate.Genres.Makuta (makuta)
 import Manifest.Build (Draw)
 
 -- ---------------------------------------------------------------------------
@@ -370,7 +371,7 @@ genreForMajor = case _ of
   7 -> rawDnB        -- The Chariot — drive, speed, momentum
   8 -> deepTechHouse -- Strength — powerful, steady tech-house groove
   9 -> miles         -- The Hermit — introspective, the solo voice
-  10 -> goa          -- Wheel of Fortune — cyclic, relentless turning
+  10 -> makuta       -- Wheel of Fortune — cyclic, ancestral turning (AfroCuban)
   11 -> miles        -- Justice — balance, swing, measured
   12 -> miles        -- The Hanged Man — suspended, modal stasis
   13 -> incessantDnB -- Death — intense, breakbeat transformation
