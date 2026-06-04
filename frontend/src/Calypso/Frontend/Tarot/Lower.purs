@@ -109,7 +109,11 @@ channelOf v = case v.target of
 innerExpr :: String -> Voice -> String
 innerExpr cScale v = case v.space of
   Degree -> "inKey " <> cScale <> " (degree \"" <> v.pattern <> "\")"
-  _ -> "mini \"" <> v.pattern <> "\""
+  -- Non-Degree pitched voices are Chromatic note-names / MIDI numbers →
+  -- `pitch` (the engine's `PitchedNote12` chromatic parser). (Was `mini`,
+  -- which the engine prelude doesn't export — that fell out with the
+  -- typed-`Sound` realignment; `pitch` is the right pitched parser here.)
+  _ -> "pitch \"" <> v.pattern <> "\""
 
 applyTransforms :: Array String -> String -> String
 applyTransforms ts body = Array.foldr (\t acc -> t <> " (" <> acc <> ")") body ts
@@ -151,7 +155,7 @@ manifestToModule m =
         vn = fromMaybe "vBass" (voiceNames !! (i `mod` 4))
         inst = instrumentForChannel (channelOf v)
       in
-        pPartName i <> " :: PitchedPart PitchedNote12\n"
+        pPartName i <> " :: PitchedPart\n"
           <> pPartName i <> " = on " <> vn <> " " <> inst <> " (" <> exprFor swing swingN cScale v <> ")\n"
     pDecls = mapWithIndex pDecl pitched
     pNames = mapWithIndex (\i _ -> pPartName i) pitched
@@ -160,7 +164,13 @@ manifestToModule m =
     drums = filter isDrum m.voices
     hasDrums = not (null drums)
     drumSwung = any _.swung drums
-    drumLayer v = "toPattern (drum \"" <> v.pattern <> "\")"
+    -- Each drum layer carries its own per-step accents: `# gain "…"` from the
+    -- voice's `gains` (the StepProfile strengths, aligned 1:1 with `pattern`),
+    -- which the engine renders as MIDI velocity. Voices without accent intent
+    -- (`gains = Nothing`) lower to the bare drum pattern (kit default velocity).
+    drumLayer v = case v.gains of
+      Just g -> "(toPattern (drum \"" <> v.pattern <> "\") # gain \"" <> g <> "\")"
+      Nothing -> "toPattern (drum \"" <> v.pattern <> "\")"
     -- One physical line: the voice-cell extractor pairs `partN ::` with a single
     -- `partN = …` line, so a multi-line RHS would truncate in the editable cell.
     drumBody = "stack [ " <> joinWith ", " (map drumLayer drums) <> " ]"
