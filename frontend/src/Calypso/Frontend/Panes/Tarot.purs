@@ -47,6 +47,11 @@ import Generate.Genres.RawDnB (rawDnB)
 import Generate.Genres.IncessantDnB (incessantDnB)
 import Generate.Genres.SubzeroTechno (subzeroTechno)
 import Generate.Genres.Makuta (makuta)
+import Generate.Genres.Gaga (gaga)
+import Generate.Genres.Son23 (son23)
+import Generate.Genres.SonKick23 (sonKick23)
+import Generate.Genres.Guaguanco1 (guaguanco1)
+import Generate.Genres.Bembe4 (bembe4)
 import Manifest.Build (Draw)
 
 -- ---------------------------------------------------------------------------
@@ -366,14 +371,14 @@ genreForMajor = case _ of
   2 -> dubTechno     -- The High Priestess — mystery, cavernous depth
   3 -> glass         -- The Empress — abundance, generative bloom
   4 -> webern        -- The Emperor — order, serial rigour
-  5 -> part          -- The Hierophant — sacred, liturgical
+  5 -> bembe4        -- The Hierophant — sacred rite (Bembé, for the orishas)
   6 -> dembow        -- The Lovers — sensual, the body's dance
   7 -> rawDnB        -- The Chariot — drive, speed, momentum
   8 -> deepTechHouse -- Strength — powerful, steady tech-house groove
   9 -> miles         -- The Hermit — introspective, the solo voice
   10 -> makuta       -- Wheel of Fortune — cyclic, ancestral turning (AfroCuban)
-  11 -> miles        -- Justice — balance, swing, measured
-  12 -> miles        -- The Hanged Man — suspended, modal stasis
+  11 -> son23        -- Justice — balance, the clave's measured 2-3 (Son)
+  12 -> sonKick23     -- The Hanged Man — son with a grounding kick (Son Kick 2-3)
   13 -> incessantDnB -- Death — intense, breakbeat transformation
   14 -> part          -- Temperance — balance, sacred restraint
   15 -> subzeroTechno -- The Devil — relentless, dark minimal techno
@@ -381,8 +386,8 @@ genreForMajor = case _ of
   17 -> glass        -- The Star — hope, flowing motion
   18 -> dubTechno    -- The Moon — nocturnal, subterranean
   19 -> house        -- The Sun — joyful, radiant
-  20 -> part          -- Judgement — transcendent, choral
-  21 -> glass        -- The World — completion, cyclical wholeness
+  20 -> gaga         -- Judgement — ecstatic procession, communal ritual (Gagá)
+  21 -> guaguanco1   -- The World — communal, cyclical rumba (Guaguanco)
   _ -> dubTechno     -- out of range: the deep default
 
 genreForDraw :: Draw -> Genre

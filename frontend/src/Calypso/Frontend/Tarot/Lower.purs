@@ -82,16 +82,21 @@ drumKitDecl =
     <> "  , hit \"ht\" 50 100 40\n"
     <> "  , hit \"cr\" 49 90 80\n"
     <> "  , hit \"rd\" 51 80 60\n"
-    -- AfroLatin percussion, dropped 2 octaves (-24) from the GM numbers
-    -- (Maracas 70, High Timbale 65, Cowbell 56, Open/Low Conga 63/64) to
-    -- land in the rig's AfroCuban instrument's range — GM put them ~2
-    -- octaves too high. Velocity here is only the no-accent default;
-    -- per-step `# gain` overrides it.
-    <> "  , hit \"maracas\" 46 90 25\n"
-    <> "  , hit \"timbale\" 41 100 40\n"
-    <> "  , hit \"cowbell\" 32 100 40\n"
-    <> "  , hit \"congahi\" 39 100 40\n"
-    <> "  , hit \"congalo\" 40 100 40\n"
+    -- AfroLatin percussion, note-mapped to the rig's AfroCuban drum rack's
+    -- named pads (read off the rack: Bass Drum = C1 = 36, ascending). Tokens
+    -- without a matching pad fall back to the nearest (timbale→Hi Tom,
+    -- shekere→Maracas, block→Rim Shot). Velocity here is only the no-accent
+    -- default; per-step `# gain` overrides it. A proper named drum-mapping
+    -- system is deferred (see purerl-tidal/docs/genre-perturbation-model.md).
+    <> "  , hit \"maracas\" 48 90 25\n"   -- Maracas pad
+    <> "  , hit \"timbale\" 47 100 40\n"  -- Hi Tom (no timbale pad)
+    <> "  , hit \"cowbell\" 50 100 40\n"  -- Cow Bell pad
+    <> "  , hit \"congahi\" 43 100 40\n"  -- Hi Conga (quinto)
+    <> "  , hit \"congalo\" 40 100 40\n"  -- Low Conga
+    <> "  , hit \"clave\" 51 100 30\n"    -- Claves pad
+    <> "  , hit \"shekere\" 48 90 25\n"   -- Maracas pad (no shekere)
+    <> "  , hit \"block\" 37 100 30\n"    -- Rim Shot (no wood-block)
+    <> "  , hit \"agogo\" 50 100 30\n"    -- Cow Bell pad (no agogo; shares it)
     <> "  ]\n"
 
 -- | Per-part supervision names from Tidal.Voices (cycled if >4 pitched parts).

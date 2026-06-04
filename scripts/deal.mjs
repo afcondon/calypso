@@ -30,10 +30,16 @@ import { incessantDnB } from '../output/Generate.Genres.IncessantDnB/index.js'
 import { subzeroTechno } from '../output/Generate.Genres.SubzeroTechno/index.js'
 import { miles } from '../output/Generate.Genres.Miles/index.js'
 import { makuta } from '../output/Generate.Genres.Makuta/index.js'
+import { gaga } from '../output/Generate.Genres.Gaga/index.js'
+import { son23 } from '../output/Generate.Genres.Son23/index.js'
+import { sonKick23 } from '../output/Generate.Genres.SonKick23/index.js'
+import { guaguanco1 } from '../output/Generate.Genres.Guaguanco1/index.js'
+import { bembe4 } from '../output/Generate.Genres.Bembe4/index.js'
 
 const REGISTRY = {
   house, goa, dubTechno, glass, webern, part, dembow,
-  rawDnB, deepTechHouse, incessantDnB, subzeroTechno, miles, makuta,
+  rawDnB, deepTechHouse, incessantDnB, subzeroTechno, miles,
+  makuta, gaga, son23, sonKick23, guaguanco1, bembe4,
 }
 
 const BACKEND = process.env.CALYPSO_BACKEND || 'http://localhost:3060'
