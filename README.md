@@ -1,5 +1,13 @@
 # Calypso
 
+> **Retired (2026-10-01).** Calypso was the live-coding webapp for purerl-tidal:
+> a typed PureScript session compiled and hot-loaded per cell. Not a wrong
+> direction, and it may come back, but the Atlantis suite (Triggerfish's
+> machines and dashboard) serves the rig better. Its plain-Tidal role passed to
+> [Limulus](https://github.com/afcondon/limulus), which keeps its Matrix look;
+> its Tarot pane (`Tarot/Perturb.purs`, `Tarot/Lower.purs`) is to seed a small
+> Oblique Strategies-style app. It no longer runs in the Atlantis group.
+
 Live-coding webapp for purerl-tidal. Workshop on water — a three-pane editor
 for composing music with the modular rig:
 
