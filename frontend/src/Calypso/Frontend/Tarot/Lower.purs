@@ -21,7 +21,7 @@
 -- |
 -- | The key is snapped to a c-rooted scale because the engine's scale registry
 -- | only reliably carries c-rooted root/mode combos.
-module Calypso.Frontend.Tarot.Lower (manifestToModule) where
+module Calypso.Frontend.Tarot.Lower (manifestToModule, orphanVoiceNames) where
 
 import Prelude
 
@@ -102,6 +102,38 @@ drumKitDecl =
 -- | Per-part supervision names from Tidal.Voices (cycled if >4 pitched parts).
 voiceNames :: Array String
 voiceNames = [ "vBass", "vFugue", "vUpper", "vHeld1" ]
+
+-- | The full set of supervised-voice keys a lowered manifest can ever arm.
+-- |
+-- | IMPORTANT: a voice is keyed in `tidal_voice_sup` by its **instrument
+-- | binding name** — the alias the session walker registers by enumerating the
+-- | generated module's exports (`SessionWalker.pickInstrument`, `{name: alias}`)
+-- | — NOT by the `mvoice` descriptor (`vBass`/`vDrums`), which the conductor
+-- | only uses for a debug line. The studio always declares exactly bass1..bass4
+-- | and drums lower to the single `drumsKit`, so that is the whole roster.
+voiceRoster :: Array String
+voiceRoster = [ "bass1", "bass2", "bass3", "bass4", "drumsKit" ]
+
+-- | The instrument keys this manifest actually arms once lowered: the
+-- | `bass<channel>` slot each pitched voice routes to — by MIDI channel,
+-- | exactly as `pDecl` assigns its `inst` — plus `drumsKit` when the draw has
+-- | drums. Re-deal silences `voiceRoster` minus this set.
+usedVoiceNames :: JamManifest -> Array String
+usedVoiceNames m =
+  let
+    pitchedKeys =
+      Array.nub (map (\v -> instrumentForChannel (channelOf v)) (filter isPitched m.voices))
+    drumKeys = if any isDrum m.voices then [ "drumsKit" ] else []
+  in
+    pitchedKeys <> drumKeys
+
+-- | Voices a previous reading may have left playing that this draw won't re-arm:
+-- | the full roster minus what this manifest uses. Silencing exactly these on
+-- | re-deal lets the surviving voices morph seamlessly (the conductor swaps
+-- | their pattern in place) instead of a global `hush` cutting everything — the
+-- | drone-orphan a shrinking draw used to leave behind.
+orphanVoiceNames :: JamManifest -> Array String
+orphanVoiceNames m = Array.difference voiceRoster (usedVoiceNames m)
 
 instrumentForChannel :: Int -> String
 instrumentForChannel ch = "bass" <> show (clamp 1 4 ch)

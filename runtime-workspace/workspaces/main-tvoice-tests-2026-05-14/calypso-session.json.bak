@@ -1,0 +1,123 @@
+{
+  "module": {
+    "source": "# ============================================================\n# Calypso tvoice test workspace\n# ============================================================\n# Exercises every routing-grammar verb the backend speaks today,\n# plus placeholder cells for the gap items that don't have a\n# dispatch path yet (MIDI LFO, FH-2 free-run envelope, ES-9 LFO,\n# ESX-8CV V/oct, ESX-8CV LFO).\n#\n# Convention:\n#   Working bindings have a dispatching cell.\n#   Gap cells are silent (`silence`) and untvoiced; they sit in\n#   their own column as a visible reminder until the gap closes.\n#\n# ------------------------------------------------------------\n# Devices\n# ------------------------------------------------------------\n\nmidi  iac    \"IAC Bus 1\"\nmidi  fh2    \"FH-2\"\nyarns yarns  \"Yarns\"\n\nes9      es9  \"ES-9\"\nes5      es5  on es9\nesx-8cv  esx  on es9\nfhx-8gt  fhx  on fh2\n\n# osc sd host=127.0.0.1 port=57120\n\n# ------------------------------------------------------------\n# FH-2 voice -> MIDI-channel routing\n# ------------------------------------------------------------\n# fh2-config writes the FH-2 SysEx so its internal voice<N>\n# listens on the named channel and routes to the named output.\n# Subsequent `gate <fh2-alias> <voice>` resolves voice -> ch via\n# the recorded mapping.\n\nfh2-config fh2:envelope voice=1 out=1     ch=11\nfh2-config fh2:gate     voice=2 out=2     ch=12\nfh2-config fh2:gate     voice=3 out=fhx:1 ch=13\n\n# ------------------------------------------------------------\n# Bindings (tvoices)\n# ------------------------------------------------------------\n#\n#  1. MIDI note -> IAC ch 1 (bass synth in Ableton)\nmidi-note    bass     iac 1 36 100 200\n#\n#  2. MIDI CC continuous -> IAC ch 1 CC 1 (modulation knob)\nmidi-cc-cont mod      iac 1 1\n#\n#  4. ES-9 V/oct CV on bus 8 (panel jack 1) - lead pitch\ncv           leadCv   es9 8  voct\n#\n#  6. ES-9 cv-trig on bus 8 (panel jack 1) - kick drum\ngate         kick     es9 8\n#\n#  7. ES-9 note = trigger + V/oct (two tvoices, mvoice 'synth1').\n#     The same mvoice column groups them in the UI; firing the pair\n#     gives a melodic voice on a modular oscillator.\n#  7a. trigger half (gate on bus 9, panel jack 2)\ngate         synth1g  es9 9\n#  7b. V/oct half (CV on bus 10, panel jack 3)\ncv           synth1p  es9 10 voct\n#\n#  8. Second ES-9 V/oct line (bus 11, panel jack 4) - bass pitch\ncv           bassP    es9 11 voct\n#\n#  9. Second ES-9 drum trigger (bus 12, panel jack 5) - snare\ngate         snare    es9 12\n#\n# 11. ES-5 gate on panel gate 1 (clock pulse)\ngate         clock    es5 0\n#\n# FH-2 envelope-mode trigger (voice 1 -> ch 11, output 1)\ngate         fh2env   fh2 1\n# FH-2 gate-mode trigger    (voice 2 -> ch 12, output 2)\ngate         fh2gate  fh2 2\n# FH-2 gate via FHX-8GT slot 1 (voice 3 -> ch 13)\ngate         fhxgate  fh2 3\n#\n# ------------------------------------------------------------\n# Gap items (no working dispatch path yet)\n# ------------------------------------------------------------\n#  3.  MIDI LFO         -- needs LFO-as-CC stream design\n#  5.  LFO from FH-2    -- needs free-run envelope mode\n# 10.  LFO from ES-9    -- needs sustained-CV-with-internal-mod path\n# 12.  ESX-8CV V/oct    -- legacy `esx` action is literal-only\n# 13.  ESX-8CV LFO      -- same as 12, plus continuous-mod gap\n"
+  },
+  "cells": [
+    {
+      "id": "c1",
+      "kind": "expr",
+      "source": "mini \"c2 ~ c2 ~ d#2 ~ c2 c2\"",
+      "mvoice": "bass",
+      "tvoice": "bass"
+    },
+    {
+      "id": "c2",
+      "kind": "expr",
+      "source": "mini \"0.0 0.25 0.5 0.75 1.0 0.75 0.5 0.25\"",
+      "mvoice": "bass",
+      "tvoice": "mod"
+    },
+    {
+      "id": "c3",
+      "kind": "expr",
+      "source": "silence",
+      "mvoice": "TODO #3 MIDI LFO"
+    },
+    {
+      "id": "c4",
+      "kind": "expr",
+      "source": "mini \"c4 e4 g4 a4\"",
+      "mvoice": "lead",
+      "tvoice": "leadCv"
+    },
+    {
+      "id": "c5",
+      "kind": "expr",
+      "source": "silence",
+      "mvoice": "TODO #5 FH-2 LFO"
+    },
+    {
+      "id": "c6",
+      "kind": "expr",
+      "source": "mini \"x ~ ~ ~ x ~ ~ ~\"",
+      "mvoice": "drums",
+      "tvoice": "kick"
+    },
+    {
+      "id": "c7",
+      "kind": "expr",
+      "source": "mini \"c4 e4 g4 b4 a4 g4 e4 c4\"",
+      "mvoice": "synth1",
+      "tvoice": "synth1g"
+    },
+    {
+      "id": "c8",
+      "kind": "expr",
+      "source": "mini \"c4 e4 g4 b4 a4 g4 e4 c4\"",
+      "mvoice": "synth1",
+      "tvoice": "synth1p"
+    },
+    {
+      "id": "c9",
+      "kind": "expr",
+      "source": "mini \"c2 c2 d#2 d#2 g2 g2 a#2 a#2\"",
+      "mvoice": "bass-cv",
+      "tvoice": "bassP"
+    },
+    {
+      "id": "c10",
+      "kind": "expr",
+      "source": "mini \"~ ~ x ~ ~ ~ x ~\"",
+      "mvoice": "drums",
+      "tvoice": "snare"
+    },
+    {
+      "id": "c11",
+      "kind": "expr",
+      "source": "silence",
+      "mvoice": "TODO #10 ES-9 LFO"
+    },
+    {
+      "id": "c12",
+      "kind": "expr",
+      "source": "mini \"x x x x x x x x\"",
+      "mvoice": "clock",
+      "tvoice": "clock"
+    },
+    {
+      "id": "c13",
+      "kind": "expr",
+      "source": "silence",
+      "mvoice": "TODO #12 ESX V/oct"
+    },
+    {
+      "id": "c14",
+      "kind": "expr",
+      "source": "silence",
+      "mvoice": "TODO #13 ESX LFO"
+    },
+    {
+      "id": "c15",
+      "kind": "expr",
+      "source": "mini \"c4 ~ c4 ~ e4 ~ c4 ~\"",
+      "mvoice": "fh2",
+      "tvoice": "fh2env"
+    },
+    {
+      "id": "c16",
+      "kind": "expr",
+      "source": "mini \"x ~ x x ~ x ~ x\"",
+      "mvoice": "fh2",
+      "tvoice": "fh2gate"
+    },
+    {
+      "id": "c17",
+      "kind": "expr",
+      "source": "mini \"~ x ~ x x ~ x ~\"",
+      "mvoice": "fh2",
+      "tvoice": "fhxgate"
+    }
+  ],
+  "runtime": "purerl-tidal-ws",
+  "nextCellId": 18
+}

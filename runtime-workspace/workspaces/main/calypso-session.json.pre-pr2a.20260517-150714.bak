@@ -1,0 +1,342 @@
+{
+  "cells": [
+    {
+      "id": "cell-001",
+      "kind": "expr",
+      "mvoice": "setup",
+      "source": "fh2-gate 4 69 14"
+    },
+    {
+      "id": "cell-002",
+      "kind": "expr",
+      "mvoice": "setup",
+      "source": "fh2-gate 5 70 15"
+    },
+    {
+      "id": "cell-003",
+      "kind": "expr",
+      "mvoice": "setup",
+      "source": "fh2-gate 6 71 16"
+    },
+    {
+      "id": "cell-004",
+      "kind": "expr",
+      "mvoice": "setup",
+      "source": "fh2-gate 7 72 17"
+    },
+    {
+      "id": "qd1:a",
+      "kind": "expr",
+      "mvoice": "drums",
+      "source": "mini \"x ~ ~ ~ x ~ x ~\"",
+      "tvoice": "qd1"
+    },
+    {
+      "id": "qd2",
+      "kind": "expr",
+      "mvoice": "drums",
+      "source": "every 4 (fast 2) (mini \"~ ~ x ~ ~ ~ x ~\")",
+      "tvoice": "qd2"
+    },
+    {
+      "id": "qd3",
+      "kind": "expr",
+      "mvoice": "drums",
+      "source": "fast 2 (mini \"x*8\")",
+      "tvoice": "qd3"
+    },
+    {
+      "id": "qd4",
+      "kind": "expr",
+      "mvoice": "drums",
+      "source": "mini \"~ ~ ~ ~ x(3,8)\"",
+      "tvoice": "qd4"
+    },
+    {
+      "id": "qd1:b",
+      "kind": "expr",
+      "mvoice": "drums",
+      "source": "every 8 rev (mini \"x ~ x x x ~ ~ x\")",
+      "tvoice": "qd1"
+    },
+    {
+      "id": "cip-pitch:a",
+      "kind": "expr",
+      "mvoice": "bass1A",
+      "source": "mini \"c2 e2 g2 ~ b2 ~ g2 e2\"",
+      "tvoice": "cip-pitch"
+    },
+    {
+      "id": "cip-pitch:b",
+      "kind": "expr",
+      "mvoice": "bass",
+      "source": "every 4 rev (slow 2 (mini \"c2 g2 e2 c3\"))",
+      "tvoice": "cip-pitch"
+    },
+    {
+      "id": "cip-gate",
+      "kind": "expr",
+      "mvoice": "bass",
+      "source": "mini \"x ~ x ~ x x ~ x\"",
+      "tvoice": "cip-gate"
+    },
+    {
+      "id": "cip-damp",
+      "kind": "expr",
+      "mvoice": "bass",
+      "source": "mini \"0.2 0.3 0.5 0.7 0.8 0.7 0.5 0.3\"",
+      "tvoice": "cip-damp"
+    },
+    {
+      "id": "cip-fold",
+      "kind": "expr",
+      "mvoice": "bass",
+      "source": "every 3 (fast 2) (mini \"0.1 0.1 0.1 0.6\")",
+      "tvoice": "cip-fold"
+    },
+    {
+      "id": "cip-fm",
+      "kind": "expr",
+      "mvoice": "bass",
+      "source": "mini \"0.0 0.0 0.4 0.0 0.0 0.8 0.0 0.2\"",
+      "tvoice": "cip-fm"
+    },
+    {
+      "id": "cip-bias",
+      "kind": "expr",
+      "mvoice": "bass",
+      "source": "slow 4 (mini \"0.4 0.5 0.6 0.5\")",
+      "tvoice": "cip-bias"
+    },
+    {
+      "id": "cip-vol",
+      "kind": "expr",
+      "mvoice": "bass",
+      "source": "mini \"1.0 0.6 1.0 0.6 1.0 0.8 0.6 1.0\"",
+      "tvoice": "cip-vol"
+    },
+    {
+      "id": "pad:a",
+      "kind": "expr",
+      "mvoice": "pad",
+      "source": "slow 4 (mini \"c3'min7 f3'min7 g3'maj7 c3'min7\")",
+      "tvoice": "pad"
+    },
+    {
+      "id": "pad:b",
+      "kind": "expr",
+      "mvoice": "pad",
+      "source": "slow 4 (rev (mini \"c3'min7 f3'min7 g3'maj7 c3'min7\"))",
+      "tvoice": "pad"
+    },
+    {
+      "id": "pad:c",
+      "kind": "expr",
+      "mvoice": "pad",
+      "source": "slow 2 (mini \"c3'min7 ~ f3'maj7 g3'sus4\")",
+      "tvoice": "pad"
+    },
+    {
+      "id": "lap:a",
+      "kind": "expr",
+      "mvoice": "lead",
+      "source": "mini \"c4 e4 g4 ~ b4 ~ a4 e4\"",
+      "tvoice": "lap"
+    },
+    {
+      "id": "lap:b",
+      "kind": "expr",
+      "mvoice": "lead",
+      "source": "mini \"c5 e5 g5 ~ b5 ~ a5 e5\"",
+      "tvoice": "lap"
+    },
+    {
+      "id": "lap-cutoff",
+      "kind": "expr",
+      "mvoice": "lead",
+      "source": "slow 4 (mini \"0.3 0.5 0.7 0.5\")",
+      "tvoice": "lap-cutoff"
+    },
+    {
+      "id": "lap-reso",
+      "kind": "expr",
+      "mvoice": "lead",
+      "source": "mini \"0.2 0.4 0.6 0.4\"",
+      "tvoice": "lap-reso"
+    },
+    {
+      "id": "lap-drive",
+      "kind": "expr",
+      "mvoice": "lead",
+      "source": "every 4 (fast 2) (mini \"0.1 0.1 0.1 0.6\")",
+      "tvoice": "lap-drive"
+    },
+    {
+      "id": "lap-mod",
+      "kind": "expr",
+      "mvoice": "lead",
+      "source": "slow 8 (mini \"0.0 0.3 0.7 1.0 0.7 0.3 0.0 0.0\")",
+      "tvoice": "lap-mod"
+    },
+    {
+      "id": "bass-amp",
+      "kind": "expr",
+      "mvoice": "ctrl",
+      "source": "set-control bass-amp 0.85",
+      "tvoice": "bass-amp"
+    },
+    {
+      "id": "filter-mod",
+      "kind": "expr",
+      "mvoice": "ctrl",
+      "source": "set-control filter-mod 0.6",
+      "tvoice": "filter-mod"
+    },
+    {
+      "id": "cip-vol",
+      "kind": "expr",
+      "mvoice": "bass",
+      "source": "mini \"1.0 0.6 1.0 0.6 1.0 0.8 0.6 1.0\"",
+      "tvoice": "cip-vol"
+    },
+    {
+      "id": "lap-cutoff",
+      "kind": "expr",
+      "mvoice": "lead",
+      "source": "slow 4 (mini \"0.3 0.5 0.7 0.5\")",
+      "tvoice": "lap-cutoff"
+    },
+    {
+      "id": "test1",
+      "kind": "expr",
+      "mvoice": "drums",
+      "source": "mini \"x ~ x ~ ~ ~ ~\"",
+      "tvoice": "qd7"
+    },
+    {
+      "id": "test2",
+      "kind": "expr",
+      "mvoice": "drums",
+      "source": "mini \"x x x x\"",
+      "tvoice": "qd2"
+    },
+    {
+      "id": "qd1A",
+      "kind": "expr",
+      "mvoice": "drums",
+      "source": "on \"drums\" qd1 (mini \"bd bd ~ ~ bd ~ bd ~\")",
+      "tvoice": "qd1"
+    },
+    {
+      "id": "qd1B",
+      "kind": "expr",
+      "mvoice": "drums",
+      "source": "on \"drums\" qd1 (every 8 rev (mini \"bd ~ bd bd bd ~ ~ bd\"))",
+      "tvoice": "qd1"
+    },
+    {
+      "id": "qd2A",
+      "kind": "expr",
+      "mvoice": "drums",
+      "source": "on \"drums\" qd2 (mini \"~ ~ sn ~ ~ ~ sn ~\")",
+      "tvoice": "qd2"
+    },
+    {
+      "id": "bass1A",
+      "kind": "expr",
+      "mvoice": "bass",
+      "source": "on \"bass\" bass1 (mini \"c2 e2 g2 ~ b2 ~ g2 e2\")",
+      "tvoice": "bass1"
+    },
+    {
+      "id": "bass1B",
+      "kind": "expr",
+      "mvoice": "bass",
+      "source": "on \"bass\" bass1 (mini \"c4 c4 ~ g4 ~ c3 e3 ~\")",
+      "tvoice": "bass1"
+    },
+    {
+      "id": "c1",
+      "kind": "expr",
+      "mvoice": "bass",
+      "source": "silence",
+      "tvoice": "bass1"
+    },
+    {
+      "id": "bass1Deg",
+      "kind": "expr",
+      "mvoice": "bass",
+      "source": "on \"bass\" bass1 (inKey aHarmonicMinor (d \"1 5 3 5 1 3 5 -1\"))",
+      "tvoice": "bass1"
+    },
+    {
+      "id": "bass1Mix",
+      "kind": "expr",
+      "mvoice": "bass",
+      "source": "on \"bass\" bass1 (inKey dDorian (d \"5 5 5 3 3 7 -1\"))",
+      "tvoice": "bass1"
+    },
+    {
+      "id": "melodyM",
+      "kind": "expr",
+      "mvoice": "bass",
+      "source": "on \"bass\" bass1 mPart",
+      "tvoice": "bass1"
+    },
+    {
+      "id": "melodyT",
+      "kind": "expr",
+      "mvoice": "bass",
+      "source": "on \"bass\" bass2 (tintinnabuli aMinT above1 mPart)",
+      "tvoice": "bass2"
+    },
+    {
+      "id": "fugue1",
+      "kind": "expr",
+      "mvoice": "fugue",
+      "source": "on \"fugue\" bass1 (fugueVoice defaultVoice subject)",
+      "tvoice": "bass1"
+    },
+    {
+      "id": "fugue2",
+      "kind": "expr",
+      "mvoice": "fugue",
+      "source": "on \"fugue\" bass2 (fugueVoice (defaultVoice { transpose = 7 }) subject)",
+      "tvoice": "bass2"
+    },
+    {
+      "id": "fugue3",
+      "kind": "expr",
+      "mvoice": "fugue",
+      "source": "on \"fugue\" bass3 (fugueVoice (defaultVoice { transpose = 7, speed = doubleSpeed }) subject)",
+      "tvoice": "bass3"
+    },
+    {
+      "id": "fugue4",
+      "kind": "expr",
+      "mvoice": "fugue",
+      "source": "on \"fugue\" bass4 (fugueVoice (defaultVoice { transpose = -3, retrograde = true, speed = halfSpeed }) subject)",
+      "tvoice": "bass4"
+    },
+    {
+      "id": "c2",
+      "kind": "expr",
+      "source": "set-scale d-dorian"
+    },
+    {
+      "id": "c3",
+      "kind": "expr",
+      "source": "set-scale aHarmonicMinor"
+    },
+    {
+      "id": "c4",
+      "kind": "expr",
+      "source": "set-scale a-harmonic-minor"
+    }
+  ],
+  "module": {
+    "source": "-- | The current session \u2014 what's playing right now.\n-- |\n-- | Devices + instruments are factored out into Studio (the rig\n-- | declaration).  Edit Studio.purs when the rig changes; edit\n-- | this file every time you change which notes go where.\nmodule Calypso.Generated.Session where\n\nimport Calypso.Prelude\nimport Studio (fh2, fh2qd, iac, qd1, qd2, bass1, bass2, bass3, bass4)\nimport Tidal.Fugue\n  ( Voice, defaultVoice, fugueVoice\n  , doubleSpeed, halfSpeed, quarterSpeed\n  )\n\n-- ---------------------------------------------------------------------------\n-- Parts\n-- ---------------------------------------------------------------------------\n\nqd1A :: PitchedPart\nqd1A = on \"drums\" qd1 (mini \"bd bd ~ ~ bd ~ bd ~\")\n\nqd1B :: PitchedPart\nqd1B = on \"drums\" qd1 (every 8 rev (mini \"bd ~ bd bd bd ~ ~ bd\"))\n\nqd2A :: PitchedPart\nqd2A = on \"drums\" qd2 (mini \"~ ~ sn ~ ~ ~ sn ~\")\n\nbass1A :: PitchedPart\nbass1A = on \"bass\" bass1 (mini \"c2 e2 g2 ~ b2 ~ g2 e2\")\n\nbass1B :: PitchedPart\nbass1B = on \"bass\" bass1 (mini \"c4 c4 ~ g4 ~ c3 e3 ~\")\n\nbass1Deg :: PitchedPart\nbass1Deg = on \"bass\" bass1 (inKey aHarmonicMinor (d \"1 5 3 5 1 3 5 -1\"))\n\nbass1Mix :: PitchedPart\nbass1Mix = on \"bass\" bass1 (inKey dDorian (d \"5 5 5 3 3 7 -1\"))\n\n-- ---------------------------------------------------------------------------\n-- MVP-3 Tintinnabuli demo: M-voice + parallel T-voice on A-minor.\n-- ---------------------------------------------------------------------------\n\nmPart :: Pattern Pitch\nmPart = mini \"a4 b4 c5 d5 e5 d5 c5 b4\"\n\nmelodyM :: PitchedPart\nmelodyM = on \"bass\" bass1 mPart\n\nmelodyT :: PitchedPart\nmelodyT = on \"bass\" bass2 (tintinnabuli aMinT above1 mPart)\n\n-- ---------------------------------------------------------------------------\n-- MVP-4 Fugue Machine demo: 4 playheads on a shared subject.\n-- ---------------------------------------------------------------------------\n\n-- Subject in RAW DEGREES (no `inKey` wrap) so the global scale bus\n-- governs rendering and diatonic transpose can operate.  Fire\n-- `set-scale aHarmonicMinor` once at boot; `set-scale dDorian` etc.\n-- to modulate the whole fugue live.\nsubject :: Pattern Pitch\nsubject = d \"1 5 3 5 1 3 5 -1\"\n\nfugue1 :: PitchedPart\nfugue1 = on \"fugue\" bass1 (fugueVoice defaultVoice subject)\n\nfugue2 :: PitchedPart\nfugue2 = on \"fugue\" bass2 (fugueVoice (defaultVoice { transpose = 7 }) subject)\n\nfugue3 :: PitchedPart\nfugue3 = on \"fugue\" bass3 (fugueVoice (defaultVoice { transpose = 7, speed = doubleSpeed }) subject)\n\nfugue4 :: PitchedPart\nfugue4 = on \"fugue\" bass4 (fugueVoice (defaultVoice { transpose = -3, retrograde = true, speed = halfSpeed }) subject)\n\nintro :: Section\nintro = slow (r 8) (cat [armPart bass1A, armPart bass1B])\n\n\n-- ---------------------------------------------------------------------------\n-- The Session value\n-- ---------------------------------------------------------------------------\n--\n-- After PR 1: a single `map erase` over a homogeneous Part array.\n-- The phantom-mvoice per-element `anyCue` wrapping is gone.\nsession :: Session\nsession = Session\n  { devices:     [fh2, fh2qd, iac]\n  , instruments: [qd1, qd2, bass1, bass2, bass3, bass4]\n  , parts: eraseAll\n      [ qd1A, qd1B, qd2A\n      , bass1A, bass1B\n      , bass1Deg, bass1Mix\n      , melodyM, melodyT\n      , fugue1, fugue2, fugue3, fugue4\n      ]\n  }\n"
+  },
+  "nextCellId": 5,
+  "runtime": "purerl-tidal-ws"
+}

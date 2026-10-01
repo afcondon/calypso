@@ -60,9 +60,10 @@ import Calypso.Frontend.Panes.Hylograph (renderHylographColumn)
 import Calypso.Frontend.Panes.MiniNotation (renderMiniNotationColumn)
 import Calypso.Frontend.Panes.Replies (renderRepliesColumn)
 import Calypso.Frontend.Panes.Studio (renderStudioColumn)
-import Calypso.Frontend.Panes.Tarot (genreForDraw, randomFullDraw, redrawSlot, redrawUnlocked, renderTarotColumn, seedFromDraw)
+import Calypso.Frontend.Panes.Tarot (genreForDraw, randomFullDraw, randomStaff, redrawSlot, redrawStaffSlot, redrawUnlocked, redrawUnlockedStaff, renderTarotColumn, reverseStaffSlot, seedFromDraw, staffLockKey)
+import Calypso.Frontend.Tarot.Perturb (applyStaffPipeline, defaultPerturbConfig)
 import Generate.Genre (Genre, sampleGenre)
-import Calypso.Frontend.Tarot.Lower (manifestToModule)
+import Calypso.Frontend.Tarot.Lower (manifestToModule, orphanVoiceNames)
 import Data.JamManifest (JamManifest)
 import Manifest.Build (Draw)
 import Calypso.Frontend.Panes.Vocabulary (renderVocabularyColumn)
@@ -211,6 +212,7 @@ initialState _ =
   , studioFireStatus: Nothing
   , tarotDraw: Nothing
   , tarotLocks: Set.empty
+  , tarotStaff: []
   , tarotManifest: Nothing
   }
 
@@ -587,8 +589,9 @@ handleAction = case _ of
     H.liftEffect $ writeHideParam (hideFromVisibility s.visibility)
   TarotDeal -> do
     draw <- H.liftEffect randomFullDraw
-    H.modify_ _ { tarotDraw = Just draw, tarotLocks = Set.empty }
-    regenerateAndFire draw
+    staff <- H.liftEffect randomStaff
+    H.modify_ _ { tarotDraw = Just draw, tarotStaff = staff, tarotLocks = Set.empty }
+    regenerateFromState
   TarotRedraw key -> do
     s <- H.get
     case s.tarotDraw of
@@ -596,7 +599,7 @@ handleAction = case _ of
       Just d -> do
         d' <- H.liftEffect (redrawSlot key d)
         H.modify_ _ { tarotDraw = Just d' }
-        regenerateAndFire d'
+        regenerateFromState
   TarotToggleLock key ->
     H.modify_ \s -> s
       { tarotLocks =
@@ -608,12 +611,30 @@ handleAction = case _ of
     case s.tarotDraw of
       Nothing -> do
         draw <- H.liftEffect randomFullDraw
-        H.modify_ _ { tarotDraw = Just draw }
-        regenerateAndFire draw
+        staff <- H.liftEffect randomStaff
+        H.modify_ _ { tarotDraw = Just draw, tarotStaff = staff }
+        regenerateFromState
       Just d -> do
         d' <- H.liftEffect (redrawUnlocked s.tarotLocks d)
-        H.modify_ _ { tarotDraw = Just d' }
-        regenerateAndFire d'
+        staff' <- H.liftEffect (redrawUnlockedStaff s.tarotLocks s.tarotStaff)
+        H.modify_ _ { tarotDraw = Just d', tarotStaff = staff' }
+        regenerateFromState
+  TarotStaffRedraw i -> do
+    s <- H.get
+    staff' <- H.liftEffect (redrawStaffSlot i s.tarotStaff)
+    H.modify_ _ { tarotStaff = staff' }
+    regenerateFromState
+  TarotStaffReverse i -> do
+    H.modify_ \s -> s { tarotStaff = reverseStaffSlot i s.tarotStaff }
+    regenerateFromState
+  TarotStaffLock i ->
+    H.modify_ \s ->
+      let key = staffLockKey i
+      in s
+        { tarotLocks =
+            if Set.member key s.tarotLocks then Set.delete key s.tarotLocks
+            else Set.insert key s.tarotLocks
+        }
   TarotHush -> do
     _ <- evalSource "stop-piece"
     _ <- evalSource "hush"
@@ -1326,33 +1347,32 @@ maybeShowClkReminder src = do
 -- | Generate a Calypso session from a tarot draw, build+load it (▶ run path),
 -- | then play it. The frontend holds the Pen, so the build POST is authorised.
 -- |
--- | Every deal/re-deal hushes first (stop-piece + hush), so the previous
--- | reading is silenced before the new one fires rather than stacking on top
--- | of it. The build latency that follows gives a clean cut between genres.
-regenerateAndFire
+-- | Re-deal seamlessly: no global `hush`. The old reading keeps playing through
+-- | the compile, then `playManifest` swaps each surviving voice's pattern in
+-- | place on the next cycle (the conductor's `set_voice_pat` is phase-preserving,
+-- | just like a Tidal re-eval) and silences only the *orphan* voices — those a
+-- | larger previous draw left armed that this one won't re-arm. That replaces
+-- | the old `stop-piece` + `hush` cut-to-silence, whose only real job was
+-- | killing those orphan drones (at the cost of cutting everything else).
+-- | Re-derive and play from the current Tarot state (cross + staff). The cross
+-- | sets the combinatoric centre — significator → genre, whole draw → seed —
+-- | which `sampleGenre` realises; the staff then perturbs one axis each of that
+-- | manifest (`applyStaffPipeline`), post-hoc, before lowering. Reads state so
+-- | every handler (deal, cross-redraw, staff-redraw/reverse) shares one path.
+regenerateFromState
   :: forall o m
    . MonadAff m
-  => Draw
-  -> H.HalogenM State Action Slots o m Unit
-regenerateAndFire draw = do
-  _ <- evalSource "stop-piece"
-  _ <- evalSource "hush"
-  playGenreSeed (genreForDraw draw) (seedFromDraw draw)
-
--- | The single play path: sample a genre prior at a seed, stash the reading for
--- | the pane, and play it. A card draw reaches here via the significator
--- | (genre = the Major) and a draw-derived seed; a genre button reaches here
--- | with a chosen genre and the current draw's seed.
-playGenreSeed
-  :: forall o m
-   . MonadAff m
-  => Genre
-  -> Int
-  -> H.HalogenM State Action Slots o m Unit
-playGenreSeed genre seed = do
-  let m = sampleGenre genre seed
-  H.modify_ _ { tarotManifest = Just m }
-  playManifest m
+  => H.HalogenM State Action Slots o m Unit
+regenerateFromState = do
+  s <- H.get
+  case s.tarotDraw of
+    Nothing -> pure unit
+    Just draw -> do
+      let
+        base = sampleGenre (genreForDraw draw) (seedFromDraw draw)
+        m = applyStaffPipeline defaultPerturbConfig s.tarotStaff base
+      H.modify_ _ { tarotManifest = Just m }
+      playManifest m
 
 -- | Play a sampled Genre manifest: lower it to a Calypso session module, build/
 -- | load it, set the manifest's tempo, and play. Mirrors regenerateAndFire but
@@ -1381,6 +1401,13 @@ playManifest m = do
       H.modify_ _ { lastBuiltModule = src, compositionStatus = Just ("genre: " <> r.reply) }
       _ <- evalSource ("bpm " <> show m.tempo.bpm)
       _ <- evalSource "play-piece piece"
+      -- Seamless re-deal: surviving voices morph in place (the conductor's
+      -- arms swap their pattern phase-preserving). Silence only the orphans —
+      -- roster voices a larger previous draw left armed that this manifest does
+      -- not re-arm — so a shrinking draw doesn't leave drones, without the
+      -- global `hush` that would also cut the voices about to morph.
+      for_ (orphanVoiceNames m) \vn ->
+        evalSource ("silence " <> vn)
       pure unit
 
 -- | POST `{source, imports: []}` to /eval.  Returns the daemon's

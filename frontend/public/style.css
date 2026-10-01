@@ -2113,9 +2113,21 @@ body::before {
 
 .tarot-empty { color: var(--fg-dim); font-family: var(--mono); font-size: 0.85rem; }
 
+/* the full table: cross (the spread) on the left, staff column on the right —
+   the Botanica layout (cross 1–6, staff 7–10) */
+.tarot-table { display: flex; flex-wrap: wrap; gap: 1.6rem; align-items: flex-start; justify-content: center; }
+
 /* the dealt spread: significator row, minors row, oracle row */
 .tarot-spread { display: flex; flex-direction: column; gap: 0.9rem; align-items: center; }
 .tarot-row { display: flex; flex-wrap: wrap; gap: 0.6rem; justify-content: center; }
+
+/* the staff column: perturbation cards, stacked, deterministic single-axis tweaks */
+.tarot-staff { display: flex; flex-direction: column; gap: 0.6rem; align-items: center; align-self: center; }
+.tarot-staff-card { width: 132px; aspect-ratio: auto; min-height: 64px; }
+.tarot-staff-card .tarot-face-name { font-size: 0.66rem; }
+/* reversed: magenta frame (legible-first; the ⟲ marker in the face shows polarity).
+   A literal 180° flip is the eventual flourish, deferred so tuning stays readable. */
+.tarot-card.reversed { border-color: var(--magenta, #d36); box-shadow: inset 0 0 0 3px var(--bg), inset 0 0 0 4px rgba(221, 51, 102, 0.25), 0 0 6px rgba(221, 51, 102, 0.4); }
 
 /* a single framed card — dark Matrix matting, full-colour-scan-ready */
 .tarot-card {

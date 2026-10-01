@@ -32,6 +32,7 @@ import Calypso.Proposal (Proposal, ProposalId)
 import Calypso.Session (Cell(..), CellRange, CompileError)
 import Calypso.Vocabulary (Vocabulary)
 import Manifest.Build (Draw)
+import Calypso.Frontend.Tarot.Perturb (StaffCard)
 import Data.JamManifest (JamManifest)
 
 -- | Local cell shape. Mirrors the wire `Cell` minus the `form` field
@@ -993,6 +994,10 @@ type State =
   , studioFireStatus :: Maybe (Either String { reply :: String, totalMs :: Int })
   , tarotDraw :: Maybe Draw
   , tarotLocks :: Set String
+  -- The Botanica "staff" — perturbation cards (positions 7–10) applied post-hoc
+  -- to the sampled manifest. Lock keys for staff slots live in tarotLocks as
+  -- "s0".."sN". Empty until the first Deal.
+  , tarotStaff :: Array StaffCard
   -- Last sampled genre manifest (the genre buttons' "reading"), shown in the pane.
   , tarotManifest :: Maybe JamManifest
   }
@@ -1072,6 +1077,9 @@ data Action
   | TarotToggleLock String
   | TarotRedrawAll
   | TarotHush
+  | TarotStaffRedraw Int
+  | TarotStaffReverse Int
+  | TarotStaffLock Int
   | HeaderClick String
   | OpenEditor String
   | CloseEditor

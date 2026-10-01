@@ -10,11 +10,16 @@ module Calypso.Frontend.Panes.Tarot
   , redrawUnlocked
   , genreForDraw
   , seedFromDraw
+  , randomStaff
+  , redrawStaffSlot
+  , redrawUnlockedStaff
+  , reverseStaffSlot
+  , staffLockKey
   ) where
 
 import Prelude
 
-import Data.Array (mapWithIndex, modifyAt, uncons, (!!))
+import Data.Array (length, mapWithIndex, modifyAt, uncons, (!!))
 import Data.Int (fromString)
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Set (Set)
@@ -53,6 +58,8 @@ import Generate.Genres.SonKick23 (sonKick23)
 import Generate.Genres.Guaguanco1 (guaguanco1)
 import Generate.Genres.Bembe4 (bembe4)
 import Manifest.Build (Draw)
+import Calypso.Frontend.Tarot.Perturb
+  ( StaffAxis, StaffCard, staffAxes, axisGlyph, describeStaff, defaultPerturbConfig )
 
 -- ---------------------------------------------------------------------------
 -- Draw model — a fixed spread: 1 Major + 4 Minors (one per suit) + 1 Oracle.
@@ -169,7 +176,8 @@ renderTarotColumn state =
           HH.p [ HP.class_ (H.ClassName "tarot-empty") ]
             [ HH.text "Draw a reading — it generates a Calypso session and plays it." ]
         Just d ->
-          HH.div [ HP.class_ (H.ClassName "tarot-spread") ]
+          HH.div [ HP.class_ (H.ClassName "tarot-table") ]
+            [ HH.div [ HP.class_ (H.ClassName "tarot-spread") ]
             ( ( case d.major of
                   Just mj ->
                     [ HH.div [ HP.class_ (H.ClassName "tarot-row tarot-row-sig") ]
@@ -195,6 +203,8 @@ renderTarotColumn state =
                       Nothing -> []
                   )
             )
+            , renderStaff state
+            ]
     , renderGenre state
     ]
   where
@@ -242,6 +252,79 @@ renderCard state key card mTag =
                 ]
             ]
       )
+
+-- ---------------------------------------------------------------------------
+-- Staff column — the Botanica perturbation cards (positions 7–10).
+-- ---------------------------------------------------------------------------
+
+-- | The staff column: one card per perturbation axis, each showing what it
+-- | currently resolves to, with redraw / reverse / lock controls.
+renderStaff :: forall m. State -> H.ComponentHTML Action Slots m
+renderStaff state =
+  HH.div [ HP.class_ (H.ClassName "tarot-staff") ]
+    (mapWithIndex (renderStaffCard state) state.tarotStaff)
+
+renderStaffCard :: forall m. State -> Int -> StaffCard -> H.ComponentHTML Action Slots m
+renderStaffCard state i card =
+  let
+    locked = Set.member (staffLockKey i) state.tarotLocks
+    cls = "tarot-card tarot-staff-card"
+      <> (if locked then " locked" else "")
+      <> (if card.reversed then " reversed" else "")
+  in
+    HH.div [ HP.class_ (H.ClassName cls) ]
+      [ HH.div [ HP.class_ (H.ClassName "tarot-card-tag") ] [ HH.text "staff" ]
+      , HH.div [ HP.class_ (H.ClassName "tarot-face tarot-face-staff") ]
+          [ HH.div [ HP.class_ (H.ClassName "tarot-face-glyph") ] [ HH.text (axisGlyph card.axis) ]
+          , HH.div [ HP.class_ (H.ClassName "tarot-face-name") ]
+              [ HH.text (describeStaff defaultPerturbConfig card) ]
+          ]
+      , HH.div [ HP.class_ (H.ClassName "tarot-card-controls") ]
+          [ HH.button
+              [ HP.title "redraw this card", HE.onClick \_ -> TarotStaffRedraw i ] [ HH.text "↻" ]
+          , HH.button
+              [ HP.title "reverse (invert this axis)", HE.onClick \_ -> TarotStaffReverse i ] [ HH.text "⟲" ]
+          , HH.button
+              [ HP.title (if locked then "unlock" else "lock"), HE.onClick \_ -> TarotStaffLock i ]
+              [ HH.text (if locked then "🔒" else "🔓") ]
+          ]
+      ]
+
+-- | Lock-set key for staff slot i (shares `tarotLocks` with the cross cards).
+staffLockKey :: Int -> String
+staffLockKey i = "s" <> show i
+
+-- | Deal a fresh staff — one card per axis, ~1-in-4 reversed.
+randomStaff :: Effect (Array StaffCard)
+randomStaff = traverse randomStaffCard staffAxes
+
+randomStaffCard :: StaffAxis -> Effect StaffCard
+randomStaffCard axis = do
+  v <- randomInt 0 21
+  r <- randomInt 0 3
+  pure { axis, value: v, reversed: r == 0 }
+
+-- | Re-roll one staff slot's value (axis + reversed preserved).
+redrawStaffSlot :: Int -> Array StaffCard -> Effect (Array StaffCard)
+redrawStaffSlot i staff = do
+  v <- randomInt 0 21
+  pure (fromMaybe staff (modifyAt i (\c -> c { value = v }) staff))
+
+-- | Re-roll the value of every staff slot not in the lock set.
+redrawUnlockedStaff :: Set String -> Array StaffCard -> Effect (Array StaffCard)
+redrawUnlockedStaff locks staff = go 0 staff
+  where
+  go i acc
+    | i >= length acc = pure acc
+    | Set.member (staffLockKey i) locks = go (i + 1) acc
+    | otherwise = do
+        acc' <- redrawStaffSlot i acc
+        go (i + 1) acc'
+
+-- | Flip one staff slot's reversed flag (pure — the toggle is deterministic).
+reverseStaffSlot :: Int -> Array StaffCard -> Array StaffCard
+reverseStaffSlot i staff =
+  fromMaybe staff (modifyAt i (\c -> c { reversed = not c.reversed }) staff)
 
 -- | Full-colour deck scan for a card: cards/card-NNN.jpg. These are a gitignored
 -- | local extraction of the owned BOTANICA: Full Bloom deck (eventual home: the
